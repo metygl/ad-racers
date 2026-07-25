@@ -272,18 +272,52 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
 }
 
 /**
- * Keeps a racer inside the world. Walled edges bounce immediately; open edges
- * allow a long, slow excursion before an outer barrier stops them.
+ * Keeps a racer inside the world.
+ *
+ * Walled edges bounce immediately — that is what a wall is for, and on the
+ * narrow courses bouncing along a barrier is a legitimate (slow) way round.
+ *
+ * Open edges do *not* get a hard wall. An invisible barrier out in the grass
+ * traps a car that arrives pointing at it: every step cancels the velocity
+ * component into the barrier, so a player holding the throttle simply sits
+ * there at walking pace with no idea why. Instead the ground beyond the limit
+ * behaves like a banked run-off — a steady inward acceleration that grows with
+ * how far out you are — so a car always finds its own way back to the course.
  */
 function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
   const projection = ctx.track.project(racer.pos, racer.path);
-  const limit =
-    projection.edge === 'wall' ? projection.halfWidth : projection.halfWidth + PHYSICS.offTrackMargin;
+  const walled = projection.edge === 'wall';
+  const limit = walled ? projection.halfWidth : projection.halfWidth + PHYSICS.offTrackMargin;
   const over = Math.abs(projection.lateral) - limit;
   if (over <= 0) return;
 
   const side = Math.sign(projection.lateral);
   const normal = projection.normal;
+
+  if (!walled) {
+    const inwardX = -normal.x * side;
+    const inwardZ = -normal.z * side;
+    const push =
+      PHYSICS.runOffReturn * Math.min(1, over / PHYSICS.runOffFullReturn) +
+      Math.max(0, over - PHYSICS.runOffFullReturn) * PHYSICS.runOffHardGain;
+    racer.velocity = {
+      x: racer.velocity.x + inwardX * push * ctx.dt,
+      z: racer.velocity.z + inwardZ * push * ctx.dt,
+    };
+    // Extra drag out here, so wandering off is always slower than staying on.
+    const drag = Math.exp(-PHYSICS.runOffDrag * ctx.dt);
+    racer.velocity = { x: racer.velocity.x * drag, z: racer.velocity.z * drag };
+
+    // A far outer clamp still exists so nothing can leave the world entirely,
+    // but it sits well beyond where the return force has already taken over.
+    const hardLimit = limit + PHYSICS.runOffMaxOvershoot;
+    const beyond = Math.abs(projection.lateral) - hardLimit;
+    if (beyond > 0) {
+      racer.pos = { x: racer.pos.x + inwardX * beyond, z: racer.pos.z + inwardZ * beyond };
+    }
+    return;
+  }
+
   // Push back to the limit along the track normal.
   racer.pos = {
     x: racer.pos.x - normal.x * side * over,

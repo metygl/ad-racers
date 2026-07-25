@@ -112,9 +112,9 @@ export const OVERGROWN_INTERCHANGE: TrackDefinition = {
   ],
   theme: {
     skyTop: 0x2f5f93,
-    skyHorizon: 0xcfe0d8,
+    skyHorizon: 0xa8c8cf,
     fogColor: 0xbcd2c6,
-    fogDensity: 0.0022,
+    fogDensity: 0.0016,
     sunColor: 0xfff2d0,
     sunIntensity: 2.1,
     sunElevation: 0.55,

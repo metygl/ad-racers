@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0f14" />
+    <title>AD Racers</title>
+    <meta
+      name="description"
+      content="AD Racers — an original browser racing game. Salvage crews race two-seat skiffs across reclaimed motorways, salt flats and quarries, with a companion riding the outrigger pod."
+    />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f14'/%3E%3Cpath d='M5 21h22M9 21l4-11h6l4 11' stroke='%238dff9e' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    
+  </head>
+  <body>
+    <a class="skip-link" href="#game">Skip to the game</a>
+
+    <div id="app" class="app">
+      <canvas id="scene" class="scene" aria-label="Race view" role="img"></canvas>
+    </div>
+
+    <noscript>
+      <div class="noscript">
+        <h1>AD Racers needs JavaScript</h1>
+        <p>
+          The game is entirely client-side — there is no server, no account and no tracking — but it does need JavaScript
+          and WebGL to run. Enable JavaScript for this page and reload.
+        </p>
+      </div>
+    </noscript>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

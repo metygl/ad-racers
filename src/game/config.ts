@@ -85,6 +85,24 @@ export const PHYSICS = {
    * is survivable, tight enough that nobody can drive to the horizon.
    */
   offTrackMargin: 13,
+  /**
+   * Inward acceleration applied out in the run-off, in m/s². Enough to pull a
+   * car back across the grass in a couple of seconds, gentle enough that it
+   * never fights a driver who is deliberately running wide.
+   */
+  runOffReturn: 11,
+  /** Distance past the limit at which the return force reaches full strength. */
+  runOffFullReturn: 8,
+  /** Extra drag out in the run-off, per second. */
+  runOffDrag: 1.6,
+  /**
+   * Beyond `runOffFullReturn` the inward pull climbs steeply. It has to end up
+   * stronger than the engine, or a car pointed at the horizon with the throttle
+   * open simply drives away from the course forever.
+   */
+  runOffHardGain: 5,
+  /** Absolute outer clamp, measured past the run-off limit. */
+  runOffMaxOvershoot: 30,
   /** Steering authority retained while airborne. */
   airborneSteering: 0.22,
   /** Speed scrubbed off per unit of lateral slide, so a drift costs something. */

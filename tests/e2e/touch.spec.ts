@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { openGame, playerSnapshot, startSeededRace, waitForGreenLight, waitForSteps } from './support';
 
 /**
@@ -127,7 +128,7 @@ test.describe('touch controls', () => {
  * a key their device does not have. A touch player could not finish.
  */
 test.describe('touch journey', () => {
-  const inputState = async (page: import('@playwright/test').Page) =>
+  const inputState = async (page: Page) =>
     page.evaluate(() => window.adRacers?.input() as { throttle: number; brake: boolean } | undefined);
 
   test('restart preserves the automatic throttle', async ({ page }) => {

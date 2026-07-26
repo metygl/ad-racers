@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import {
   currentScreen,
   goToSetup,
@@ -251,7 +252,7 @@ test.describe('performance', () => {
  * the screen said "race" the whole time it was broken.
  */
 test.describe('race surface transitions', () => {
-  const surface = async (page: import('@playwright/test').Page) =>
+  const surface = async (page: Page) =>
     page.evaluate(() => ({
       screen: window.adRacers?.screen(),
       hudHidden: document.querySelector<HTMLElement>('.hud')?.hidden ?? true,
@@ -320,8 +321,8 @@ test.describe('race surface transitions', () => {
     // to change and the started race ignored it.
     await page.getByRole('radio', { name: /Thornline/i }).first().focus();
     await page.keyboard.press('ArrowRight');
-    const chosen = await page.evaluate(() =>
-      (document.querySelector('input[name="racer"]:checked') as HTMLInputElement | null)?.id ?? '',
+    const chosen = await page.evaluate(
+      () => document.querySelector<HTMLInputElement>('input[name="racer"]:checked')?.id ?? '',
     );
     expect(chosen).not.toBe('racer-thornline');
 

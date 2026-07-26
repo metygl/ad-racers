@@ -37,8 +37,6 @@ export const PHYSICS = {
   steeringHighSpeedFalloff: 0.42,
   /** How quickly the steering input follows the raw control input. */
   steerResponse: 9.5,
-  /** Lateral velocity bleed-off rate on reference tarmac. */
-  lateralGrip: 11.0,
   /**
    * Converts a skiff's grip stat into the peak lateral acceleration it can
    * actually hold, which in turn caps yaw rate at speed.
@@ -204,8 +202,6 @@ export const COLLISION = {
   restitution: 0.35,
   /** Extra separation applied per second while overlapping, to unstick pairs. */
   separationRate: 14,
-  /** Speed lost by both parties in a hard side-swipe. */
-  swipeSpeedLoss: 0.94,
 } as const;
 
 export const RACE = {

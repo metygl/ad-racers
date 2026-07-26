@@ -195,6 +195,8 @@ test.describe('accessibility', () => {
 
   test('rolls back a quality setting when context creation fails', async ({ page }) => {
     await openGame(page);
+    await startSeededRace(page);
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Settings' }).click();
     await page.locator('label[for="seg-graphics-quality-medium"]').click();
     await page.evaluate(() => {
@@ -217,6 +219,9 @@ test.describe('accessibility', () => {
     await page.locator('label[for="seg-graphics-quality-low"]').click();
     await expect(page.getByRole('radio', { name: 'Low' })).toBeChecked();
     expect(await page.evaluate(() => window.adRacers?.settings().quality)).toBe('low');
+    await page.getByRole('button', { name: 'Back' }).click();
+    await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
+    expect(await currentScreen(page)).toBe('pause');
   });
 
   test('cancels key capture when settings returns to pause', async ({ page }) => {

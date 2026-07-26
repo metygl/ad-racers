@@ -191,7 +191,7 @@ export class App {
       try {
         this.renderer.setQuality(tier, active);
       } catch {
-        this.showSettings();
+        this.renderSettings();
         return;
       }
       this.adaptive.reset(tier);
@@ -314,6 +314,10 @@ export class App {
   private showSettings(): void {
     const returnTo = this.screen === 'race' ? 'race' : this.screen;
     this.previousScreen = returnTo === 'settings' ? 'title' : returnTo;
+    this.renderSettings();
+  }
+
+  private renderSettings(): void {
     this.showScreen(
       'settings',
       buildSettingsScreen({
@@ -329,7 +333,7 @@ export class App {
           this.save = defaultSave();
           this.applyDocumentSettings();
           this.input.setBindings(this.save.settings.bindings);
-          this.showSettings();
+          this.renderSettings();
         },
         onRebind: (action, done) => this.beginRebind(action, done),
       }),

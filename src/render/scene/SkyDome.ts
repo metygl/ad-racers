@@ -2,13 +2,24 @@ import * as THREE from 'three';
 import type { TrackTheme } from '../../game/track/types';
 
 /**
- * Sky and lighting.
+ * Sky, atmosphere and lighting.
  *
- * The dome is a single inverted sphere with a small custom shader: a vertical
- * gradient, a sun disc with a soft bloom around it, and a band of procedural
- * cloud. No texture, no cubemap, no download — and because it is a shader
- * rather than a gradient texture, the horizon stays smooth at any resolution
- * instead of banding.
+ * The dome is a single inverted sphere with a custom shader: a three-stop
+ * vertical gradient, a sun with a shaped halo rather than a hard disc, two
+ * drifting cloud layers at different scales, and — for a night course — stars
+ * that stay put in world space.
+ *
+ * No texture, no cubemap, no download. And because it is a shader rather than a
+ * gradient texture the horizon stays smooth at any resolution instead of
+ * banding, which at these low saturations is otherwise the first thing a player
+ * notices.
+ *
+ * The art bible requires the horizon band of the sky to match the fog colour
+ * *exactly*. A mismatch there is the most obvious tell of a cheap 3D scene:
+ * distant geometry fades into one colour while the sky behind it is another,
+ * and the world reads as a painted backdrop with objects in front of it. So the
+ * bottom of the gradient is not a hand-picked hex value that has to be kept in
+ * agreement with the fog — it *is* the fog colour.
  */
 
 const SKY_VERTEX = /* glsl */ `
@@ -26,14 +37,16 @@ const SKY_FRAGMENT = /* glsl */ `
 
   uniform vec3 uTop;
   uniform vec3 uHorizon;
+  uniform vec3 uHaze;
   uniform vec3 uSunColor;
   uniform vec3 uSunDirection;
   uniform float uCloud;
   uniform float uTime;
+  uniform float uNight;
 
   varying vec3 vDirection;
 
-  // Cheap hash-based value noise; two octaves is plenty for a cloud band.
+  // Cheap hash-based value noise; four octaves is plenty for a cloud band.
   float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
   }
@@ -49,27 +62,78 @@ const SKY_FRAGMENT = /* glsl */ `
     );
   }
 
+  float fbm(vec2 p) {
+    return noise(p) * 0.55 + noise(p * 2.3) * 0.27 + noise(p * 5.1) * 0.12 + noise(p * 9.7) * 0.06;
+  }
+
   void main() {
     vec3 dir = normalize(vDirection);
+    float up = clamp(dir.y, -1.0, 1.0);
 
-    // Bias the gradient towards the horizon so most of the visible sky while
-    // racing is the interesting part.
-    vec3 sky = mix(uHorizon, uTop, pow(clamp(dir.y, 0.0, 1.0), 0.38));
+    /*
+     * Three stops rather than two. A straight horizon-to-zenith lerp puts the
+     * brightest part of the gradient right at the horizon, which reads as an
+     * overcast dome whatever colours you feed it. Holding a haze band low down
+     * and easing into the sky colour above it is what gives a sky depth.
+     */
+    vec3 sky = mix(uHaze, uHorizon, smoothstep(-0.02, 0.16, up));
+    sky = mix(sky, uTop, pow(clamp(up, 0.0, 1.0), 0.55));
 
-    float sun = max(dot(dir, normalize(uSunDirection)), 0.0);
-    sky += uSunColor * pow(sun, 620.0) * 1.6;
-    sky += uSunColor * pow(sun, 8.0) * 0.22;
+    vec3 sunDir = normalize(uSunDirection);
+    float sun = max(dot(dir, sunDir), 0.0);
 
-    // Cloud band, only above the horizon, drifting slowly.
-    if (dir.y > 0.02) {
-      vec2 uv = dir.xz / max(dir.y, 0.08) * 0.35 + vec2(uTime * 0.004, uTime * 0.002);
-      float n = noise(uv) * 0.6 + noise(uv * 2.7) * 0.3 + noise(uv * 6.1) * 0.1;
-      float cloud = smoothstep(0.52, 0.78, n) * uCloud * smoothstep(0.02, 0.28, dir.y);
-      sky = mix(sky, mix(vec3(1.0), uSunColor, 0.35), cloud * 0.55);
+    /*
+     * The sun as a halo, not a disc.
+     *
+     * A single tight high-exponent term is a hard white dot, and once the bloom
+     * gets hold of it the result is a featureless ball with a visible edge —
+     * which is exactly what it looked like before this was rewritten. Three
+     * terms at very different falloffs give a core, an inner glow and a wide
+     * atmospheric scatter, which is what reads as light rather than as a sprite.
+     */
+    sky += uSunColor * pow(sun, 900.0) * 3.0 * (1.0 - uNight);
+    sky += uSunColor * pow(sun, 42.0) * 0.34 * (1.0 - uNight);
+    sky += uSunColor * pow(sun, 3.5) * 0.12;
+    // Scatter along the whole horizon on the sun's side, which is what makes a
+    // low sun feel like a low sun instead of a lamp.
+    sky += uSunColor * pow(max(sunDir.y * 0.5 + 0.5, 0.0), 2.0) * exp(-abs(up) * 9.0) * 0.1;
+
+    // Two cloud layers at different scales and speeds, so the sky has parallax
+    // of its own and never resolves into one repeating pattern.
+    if (up > 0.0) {
+      float mask = smoothstep(0.0, 0.3, up);
+      vec2 base = dir.xz / max(up, 0.06);
+      float high = fbm(base * 0.22 + vec2(uTime * 0.0035, uTime * 0.0018));
+      float low = fbm(base * 0.55 + vec2(uTime * 0.009, -uTime * 0.004));
+
+      float sheet = smoothstep(0.52, 0.82, high) * uCloud * mask;
+      float wisps = smoothstep(0.62, 0.9, low) * uCloud * mask * 0.55;
+
+      // Clouds are lit from the sun's side; the shadowed side stays close to
+      // the sky colour so they read as volume rather than as stickers.
+      vec3 lit = mix(vec3(0.86), uSunColor, 0.4);
+      vec3 shade = mix(sky, uHaze, 0.5);
+      sky = mix(sky, mix(shade, lit, clamp(sun * 1.6 + 0.35, 0.0, 1.0)), sheet * 0.6);
+      sky = mix(sky, lit, wisps * 0.2);
+    }
+
+    /*
+     * Stars, on a night course only.
+     *
+     * Placed by hashing a quantised direction, so they are fixed in world space
+     * and sweep past correctly as the camera turns — a star field that rotates
+     * with the camera is worse than no star field. Faded out near the horizon,
+     * where the haze would swallow them anyway.
+     */
+    if (uNight > 0.0 && up > 0.02) {
+      vec2 cell = floor(dir.xz / max(up, 0.05) * 90.0);
+      float star = hash(cell);
+      float twinkle = 0.75 + 0.25 * sin(uTime * 2.0 + star * 40.0);
+      float brightness = smoothstep(0.9972, 1.0, star) * twinkle * smoothstep(0.02, 0.3, up);
+      sky += vec3(brightness) * uNight * 1.3;
     }
 
     gl_FragColor = vec4(sky, 1.0);
-    #include <colorspace_fragment>
   }
 `;
 
@@ -93,10 +157,14 @@ export function buildSky(theme: TrackTheme, cloudiness: number): SkyResult {
   const uniforms = {
     uTop: { value: new THREE.Color(theme.skyTop) },
     uHorizon: { value: new THREE.Color(theme.skyHorizon) },
+    // The bottom of the gradient *is* the fog colour, so distant geometry
+    // dissolves into a sky of the same value instead of standing out against it.
+    uHaze: { value: new THREE.Color(theme.fogColor) },
     uSunColor: { value: new THREE.Color(theme.sunColor) },
     uSunDirection: { value: sunDirection },
     uCloud: { value: cloudiness },
     uTime: { value: 0 },
+    uNight: { value: theme.night ? 1 : 0 },
   };
 
   const material = new THREE.ShaderMaterial({
@@ -108,7 +176,7 @@ export function buildSky(theme: TrackTheme, cloudiness: number): SkyResult {
     fog: false,
   });
 
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 20), material);
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 24), material);
   mesh.name = 'sky';
   // Drawn first, never culled, and scaled to sit inside the far plane.
   mesh.renderOrder = -1;
@@ -135,6 +203,16 @@ export function buildLighting(theme: TrackTheme, shadowMapSize: number, shadowRa
   const group = new THREE.Group();
   group.name = 'lighting';
 
+  /*
+   * A hemisphere fill, and it does real work.
+   *
+   * Everything in this game is flat shaded, which means a face turned away from
+   * the key receives exactly nothing and goes to pure black — and a course full
+   * of black silhouettes is the difference between "stylised" and "unfinished".
+   * The hemisphere gives the shadow side the sky's colour from above and the
+   * ground's from below, which is both what actually happens and the cheapest
+   * possible way to keep a tree looking like a tree from behind.
+   */
   const hemisphere = new THREE.HemisphereLight(theme.ambientSky, theme.ambientGround, theme.ambientIntensity);
   group.add(hemisphere);
 

@@ -1,29 +1,43 @@
 import * as THREE from 'three';
-import { clamp01, damp, lerp, wrapAngle } from '../../core/math';
+import { clamp, clamp01, damp, lerp, wrapAngle } from '../../core/math';
 import type { RacerState } from '../../game/sim/state';
 
 /**
  * The chase camera.
  *
- * Almost all of the "feel" of a racing game lives here. The rules this one
- * follows:
+ * Almost all of the "feel" of a racing game lives here — the research is
+ * consistent that players read speed off the camera long before they read it
+ * off the speedometer, and that field of view and follow distance do more work
+ * than motion blur ever did. The rules this one follows:
  *
- *  - Follow the *velocity*, not the heading. Chasing the nose makes the camera
- *    whip round during a drift, which is both nauseating and useless — you want
- *    to see where you are going, which is where the skiff is going.
- *  - Never rotate faster than the player can read. The yaw is critically damped
- *    with a hard rate limit.
- *  - Sell speed with the field of view and the follow distance, not with shake.
- *  - When the player is looking at a countdown or a results screen, sit still.
+ *  - **Follow the velocity, not the heading.** Chasing the nose makes the
+ *    camera whip round during a drift, which is both nauseating and useless —
+ *    you want to see where you are going, which is where the skiff is going.
+ *  - **Never rotate faster than the player can read.** The yaw is damped with a
+ *    hard rate limit.
+ *  - **Sell speed with the frame, not with shake.** Field of view, follow
+ *    distance, height and a small roll do the work; shake is punctuation.
+ *  - **Every impulse decays.** Nothing the camera does persists into the next
+ *    corner, so the frame always settles back to a readable baseline.
+ *  - **When the player is reading a countdown or a results screen, sit still.**
  */
 
-export type CameraMode = 'chase' | 'close' | 'orbit';
+export type CameraMode = 'chase' | 'close' | 'far' | 'orbit';
 
-const MODE_SETTINGS: Record<CameraMode, { distance: number; height: number; look: number }> = {
-  chase: { distance: 10.6, height: 4.0, look: 6 },
-  close: { distance: 7.2, height: 2.9, look: 5 },
-  orbit: { distance: 14, height: 6, look: 0 },
+const MODE_SETTINGS: Record<CameraMode, { distance: number; height: number; look: number; fov: number }> = {
+  chase: { distance: 10.6, height: 4.0, look: 6, fov: 62 },
+  close: { distance: 7.2, height: 2.9, look: 5, fov: 66 },
+  // A wider, higher seat for players who want to see the whole corner coming.
+  // Not a cheat: it trades the sensation of speed for the information.
+  far: { distance: 14.5, height: 5.6, look: 8, fov: 58 },
+  orbit: { distance: 14, height: 6, look: 0, fov: 55 },
 };
+
+export const CAMERA_MODES: readonly { id: CameraMode; label: string }[] = [
+  { id: 'chase', label: 'Chase' },
+  { id: 'close', label: 'Close' },
+  { id: 'far', label: 'Wide' },
+];
 
 export class ChaseCamera {
   readonly camera: THREE.PerspectiveCamera;
@@ -38,6 +52,11 @@ export class ChaseCamera {
   private shake = 0;
   private orbitAngle = 0;
   private initialised = false;
+  private roll = 0;
+  private dip = 0;
+  private kick = 0;
+  private clock = 0;
+  private previousSpeed = 0;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(62, aspect, 0.5, 4200);
@@ -48,7 +67,7 @@ export class ChaseCamera {
    *
    * Exposed because the audio listener needs it, and reading it back out of
    * `camera.rotation.y` does not work: that is an Euler angle extracted from a
-   * `lookAt` matrix that also carries pitch, so it is neither the view heading
+   * `lookAt` matrix which also carries pitch, so it is neither the view heading
    * nor a fixed offset from it. Panning built on it put a rival directly
    * alongside in the centre of the mix and a rival dead ahead hard in one ear.
    */
@@ -66,17 +85,38 @@ export class ChaseCamera {
     this.shake = Math.min(1.4, this.shake + amount * this.shakeScale);
   }
 
+  /**
+   * Pulls the camera back sharply and lets it ease home — the punch that makes
+   * a boost or a drift release feel like it did something. Distinct from shake:
+   * shake is noise, this is a deliberate, readable move.
+   */
+  addKick(amount: number): void {
+    this.kick = Math.min(1.6, this.kick + amount * this.shakeScale);
+  }
+
+  /** Drops the camera briefly, for a landing. */
+  addDip(amount: number): void {
+    this.dip = Math.min(1.4, this.dip + amount * this.shakeScale);
+  }
+
   /** Snaps the camera behind a racer with no interpolation. */
   reset(racer: RacerState): void {
     this.yaw = racer.heading;
     this.shake = 0;
+    this.kick = 0;
+    this.dip = 0;
+    this.roll = 0;
     this.orbitAngle = 0;
     this.initialised = false;
+    this.previousSpeed = Math.hypot(racer.velocity.x, racer.velocity.z);
     this.apply(racer, 1 / 60, true);
   }
 
   update(racer: RacerState, elapsed: number, roughness: number): void {
+    this.clock += elapsed;
     this.shake = Math.max(0, this.shake - elapsed * 2.4);
+    this.kick = Math.max(0, this.kick - elapsed * 3.4);
+    this.dip = Math.max(0, this.dip - elapsed * 4.2);
     // Continuous rumble from the surface, on top of impulse shake.
     if (roughness > 0) this.shake = Math.max(this.shake, roughness * 0.09 * this.shakeScale);
     this.apply(racer, elapsed, false);
@@ -108,14 +148,27 @@ export class ChaseCamera {
       const delta = wrapAngle(desiredYaw - this.yaw);
       const step = delta * (1 - Math.exp(-6.5 * elapsed));
       const maxStep = 2.6 * elapsed;
-      this.yaw = wrapAngle(this.yaw + Math.max(-maxStep, Math.min(maxStep, step)));
+      this.yaw = wrapAngle(this.yaw + clamp(step, -maxStep, maxStep));
     }
 
-    // Pull back and lift slightly with speed, which reads as acceleration
-    // without touching the field of view.
+    /*
+     * Longitudinal acceleration, measured rather than asked for.
+     *
+     * The renderer has no access to the throttle, and it should not: a camera
+     * that keys off the input punches forward on a throttle press even when the
+     * skiff is against a wall and not moving. Differencing the speed gives the
+     * camera the acceleration the *player actually experienced*, which is the
+     * thing worth dramatising.
+     */
+    const acceleration = elapsed > 1e-4 ? (speed - this.previousSpeed) / elapsed : 0;
+    this.previousSpeed = speed;
+
+    // Pull back and lift with speed, which reads as acceleration without
+    // touching the field of view. The kick is a short additional pull on top.
     const speedFactor = clamp01(speed / 50);
-    const distance = settings.distance + speedFactor * 2.1 + (racer.boosting ? 1.1 : 0);
-    const height = settings.height + speedFactor * 0.55;
+    const surge = racer.boosting ? 1.1 : 0;
+    const distance = settings.distance + speedFactor * 2.1 + surge + this.kick * 1.6;
+    const height = settings.height + speedFactor * 0.55 - this.dip * 0.9;
 
     const behindX = -Math.cos(this.yaw);
     const behindZ = -Math.sin(this.yaw);
@@ -136,26 +189,54 @@ export class ChaseCamera {
     }
 
     const shakeAmount = this.shake * this.shakeScale;
-    // Deterministic wobble from the clock rather than random numbers, so shake
-    // never introduces nondeterminism and never jitters at low frame rates.
-    const t = performance.now() / 1000;
-    const shakeX = Math.sin(t * 47) * shakeAmount * 0.34;
-    const shakeY = Math.sin(t * 61 + 1.7) * shakeAmount * 0.28;
+    /*
+     * Deterministic wobble from the camera's own clock rather than
+     * `performance.now()` or a random number.
+     *
+     * Two frequencies that are not multiples of each other, so the pattern does
+     * not resolve into a visible beat — and both well above 3 Hz, which keeps
+     * the shake clear of the low-frequency band motion-sickness research
+     * implicates. The art bible forbids sustained camera motion in that band.
+     */
+    const t = this.clock;
+    const shakeX = (Math.sin(t * 47) * 0.6 + Math.sin(t * 71.3) * 0.4) * shakeAmount * 0.34;
+    const shakeY = (Math.sin(t * 61 + 1.7) * 0.6 + Math.sin(t * 89.1) * 0.4) * shakeAmount * 0.26;
 
     this.camera.position.set(this.position.x + shakeX, this.position.y + shakeY, this.position.z);
 
     // Look slightly ahead of the skiff so the road, not the tail fin, is the
-    // centre of the frame.
+    // centre of the frame. The look-ahead grows with speed, which is what keeps
+    // the corner in frame when there is less time to react to it.
     const lookAhead = settings.look + speedFactor * 5;
     this.camera.lookAt(
       racer.pos.x + Math.cos(this.yaw) * lookAhead,
-      racer.y + 1.35,
+      racer.y + 1.35 - this.dip * 0.4,
       racer.pos.z + Math.sin(this.yaw) * lookAhead,
     );
 
-    // Field of view widens with speed and snaps wider on boost. This is the
-    // single most effective speed cue available and costs nothing.
-    const targetFov = 62 + speedFactor * 9 + (racer.boosting ? 7 : 0);
+    /*
+     * A small camera roll into the slide.
+     *
+     * Two or three degrees, no more. Enough that a drift *feels* committed
+     * rather than merely looking sideways, and far short of the amount that
+     * turns a corner into a fairground ride. It goes to zero with the shake
+     * scale, so reduced motion removes it along with everything else.
+     */
+    const targetRoll = clamp(racer.slip * 0.14 + racer.steer * 0.03, -0.09, 0.09) * this.shakeScale;
+    this.roll = damp(this.roll, targetRoll, 5, elapsed);
+    this.camera.rotateZ(this.roll);
+
+    /*
+     * Field of view: the single most effective speed cue available, and it
+     * costs nothing.
+     *
+     * Three terms. A baseline that grows with speed; a snap wider on boost; and
+     * a term driven by measured acceleration, which is what makes a tow snap or
+     * a drift release read as a shove rather than as a number going up. The
+     * acceleration term is clamped hard so a collision cannot throw the frame.
+     */
+    const accelPunch = clamp(acceleration * 0.16, -2.5, 4.5);
+    const targetFov = settings.fov + speedFactor * 9 + (racer.boosting ? 7 : 0) + accelPunch + this.kick * 4;
     this.fov = snap ? targetFov : lerp(this.fov, targetFov, 1 - Math.exp(-5 * elapsed));
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;

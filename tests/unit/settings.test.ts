@@ -184,8 +184,8 @@ describe('quality tiers', () => {
         heightAt: () => 0,
         castShadows: false,
       });
-    const low = build('low');
-    const high = build('high');
+    const low = build('low').group;
+    const high = build('high').group;
     expect(low.children.length).toBeLessThanOrEqual(track.definition.scenery.length);
     expect(high.children.length).toBeLessThanOrEqual(track.definition.scenery.length);
     expect(low.children.reduce((sum, child) => sum + ((child as { count?: number }).count ?? 0), 0)).toBeLessThan(

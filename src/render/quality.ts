@@ -33,6 +33,16 @@ export interface QualitySettings {
   vehicleShadows: boolean;
   /** Anti-aliasing on the WebGL context. */
   antialias: boolean;
+  /**
+   * Whether the post-processing chain runs at all.
+   *
+   * Off on the low tier, and not as a token gesture: post costs a full-screen
+   * read plus three reduced-resolution draws, which on the class of device that
+   * lands on the low tier is a meaningful fraction of the frame. The art bible
+   * requires the game to be readable without it, so switching it off costs
+   * atmosphere and nothing else.
+   */
+  postProcessing: boolean;
 }
 
 export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
@@ -50,6 +60,7 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     speedEffects: false,
     vehicleShadows: false,
     antialias: false,
+    postProcessing: false,
   },
   medium: {
     id: 'medium',
@@ -65,6 +76,7 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     speedEffects: true,
     vehicleShadows: true,
     antialias: true,
+    postProcessing: true,
   },
   high: {
     id: 'high',
@@ -80,6 +92,7 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     speedEffects: true,
     vehicleShadows: true,
     antialias: true,
+    postProcessing: true,
   },
 };
 

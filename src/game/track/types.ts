@@ -125,12 +125,39 @@ export interface TrackTheme {
   ambientIntensity: number;
   roadColor: number;
   shoulderColor: number;
+  /**
+   * Kerb stripe accent. One of only three places a course may use full
+   * saturation; see `docs/ART-BIBLE.md`.
+   */
+  kerbColor?: number;
   terrainColor: number;
   terrainAccent: number;
   /** Tint applied to dust and drift particles. */
   dustColor: number;
   /** Additive haze colour used for the speed streaks. */
   speedLineColor: number;
+  /**
+   * Per-course colour grade, applied in the post-processing composite.
+   *
+   * Grading is where a course gets its *feeling* rather than its palette: lift
+   * moves the shadows without touching the highlights, which is how a course
+   * reads as hazy or as crisp, and gain moves the highlights, which is how it
+   * reads as hot or as cold. Optional; the default grade is neutral.
+   */
+  grade?: {
+    lift?: [number, number, number];
+    gamma?: [number, number, number];
+    gain?: [number, number, number];
+    saturation?: number;
+    contrast?: number;
+    bloomThreshold?: number;
+    bloomIntensity?: number;
+    vignette?: number;
+  };
+  /** 0-1 cloud cover in the sky shader. */
+  cloudiness?: number;
+  /** Renders a star field and dims the horizon glow. */
+  night?: boolean;
 }
 
 export interface TrackDefinition {

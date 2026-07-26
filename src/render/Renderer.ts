@@ -6,7 +6,8 @@ import { getRacer } from '../game/racers';
 import { SURFACES } from '../game/track/types';
 import { ChaseCamera } from './camera/ChaseCamera';
 import { ParticleSystem } from './scene/Particles';
-import { buildHazardMarkers, buildObstacles, buildScenery } from './scene/Scenery';
+import { buildHazardMarkers, buildHorizon, buildObstacles, buildScenery } from './scene/Scenery';
+import type { SceneryResult } from './scene/Scenery';
 import { buildLighting, buildSky } from './scene/SkyDome';
 import type { LightingResult, SkyResult } from './scene/SkyDome';
 import { buildTerrain } from './scene/Terrain';
@@ -15,6 +16,9 @@ import { buildVehicle } from './scene/VehicleModel';
 import type { VehicleVisual } from './scene/VehicleModel';
 import { QUALITY_TIERS } from './quality';
 import type { QualityId } from './quality';
+import { DEFAULT_GRADE, toColor } from './palette';
+import { PostComposer, defaultPostSettings } from './post/Composer';
+import type { PostSettings } from './post/Composer';
 import { disposeTextures } from './textures/procedural';
 
 /**
@@ -52,6 +56,7 @@ export class GameRenderer {
   private readonly vehicles = new Map<number, VehicleVisual>();
   private particles: ParticleSystem;
   private sky: SkyResult | null = null;
+  private scenery: SceneryResult | null = null;
   private lighting: LightingResult | null = null;
   private quality: QualityId;
   private reducedMotion: boolean;
@@ -60,6 +65,11 @@ export class GameRenderer {
   private elapsedTotal = 0;
   private disposed = false;
   private canvas: HTMLCanvasElement;
+  private composer: PostComposer | null = null;
+  private post: PostSettings = defaultPostSettings();
+  private size = { width: 1, height: 1 };
+  /** Smoothed speed cue, so the warp does not snap on a single fast frame. */
+  private speedCue = 0;
 
   constructor(private readonly options: RendererOptions) {
     this.quality = options.quality;
@@ -75,6 +85,7 @@ export class GameRenderer {
     this.chase.shakeScale = this.reducedMotion ? 0 : 1;
     this.particles = new ParticleSystem(tier.particleBudget);
     for (const mesh of this.particles.meshes) this.scene.add(mesh);
+    this.composer = tier.postProcessing ? new PostComposer(this.renderer) : null;
 
     this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
     this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
@@ -95,9 +106,22 @@ export class GameRenderer {
   private configureRenderer(renderer: THREE.WebGLRenderer, tier: (typeof QUALITY_TIERS)[QualityId]): void {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.maxPixelRatio));
     renderer.shadowMap.enabled = tier.shadowMapSize > 0;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCFSoftShadowMap is deprecated in current three and silently falls back to
+    // PCFShadowMap with a console warning, so ask for what we actually get.
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    /*
+     * Tone mapping belongs to whichever stage writes the final pixel.
+     *
+     * With the post chain on, the scene is drawn into a half-float target in
+     * linear light and the composite does ACES and the sRGB encode after the
+     * bloom has had a look at the real highlight values. Letting three tone map
+     * the scene pass as well would apply the curve twice and would flatten
+     * every highlight before the bright pass could distinguish a thruster from
+     * the sun.
+     */
+    const post = tier.postProcessing;
+    renderer.toneMapping = post ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
   }
 
@@ -116,8 +140,10 @@ export class GameRenderer {
   }
 
   setSize(width: number, height: number): void {
+    this.size = { width, height };
     this.renderer.setSize(width, height, false);
     this.chase.setAspect(width / Math.max(1, height));
+    this.composer?.setSize(width, height);
   }
 
   setReducedMotion(value: boolean): void {
@@ -165,6 +191,10 @@ export class GameRenderer {
     this.particles = new ParticleSystem(tier.particleBudget);
     for (const mesh of this.particles.meshes) this.scene.add(mesh);
 
+    this.composer?.dispose();
+    this.composer = tier.postProcessing ? new PostComposer(this.renderer) : null;
+    this.composer?.setSize(this.size.width, this.size.height);
+
     if (simulation) {
       this.trackId = null;
       this.buildWorld(simulation);
@@ -188,7 +218,7 @@ export class GameRenderer {
       this.scene.fog = new THREE.FogExp2(theme.fogColor, theme.fogDensity);
       this.scene.background = null;
 
-      this.sky = buildSky(theme, track.definition.id === 'saltflat-reliquary' ? 0.55 : 0.8);
+      this.sky = buildSky(theme, theme.cloudiness ?? 0.6);
       this.scene.add(this.sky.mesh);
 
       this.lighting = buildLighting(theme, tier.shadowMapSize, tier.shadowRadius);
@@ -197,16 +227,31 @@ export class GameRenderer {
       const terrain = buildTerrain(track, tier.terrainResolution);
       this.world.add(terrain.mesh);
       this.world.add(buildTrackMesh(track));
-      this.world.add(buildScenery(track, {
+      const scenery = buildScenery(track, {
         densityScale: tier.sceneryDensity,
         visibilityDistance: tier.sceneryDistance,
         heightAt: terrain.heightAt,
         castShadows: tier.shadowMapSize > 0,
-      }));
+      });
+      this.scenery = scenery;
+      this.world.add(scenery.group);
+      this.world.add(buildHorizon(track));
       this.world.add(buildObstacles(track));
       this.world.add(buildHazardMarkers(track));
 
       this.dustColor = new THREE.Color(theme.dustColor);
+
+      // Per-course grade, merged over the neutral default so a course only has
+      // to state the parts of its look that differ.
+      const grade = { ...DEFAULT_GRADE, ...(theme.grade ?? {}) };
+      this.post.lift = toColor(grade.lift);
+      this.post.gamma = toColor(grade.gamma);
+      this.post.gain = toColor(grade.gain);
+      this.post.saturation = grade.saturation;
+      this.post.contrast = grade.contrast;
+      this.post.bloomThreshold = grade.bloomThreshold;
+      this.post.bloomIntensity = grade.bloomIntensity;
+      this.post.vignette = grade.vignette;
     }
 
     // Racer models are cheap; rebuild them whenever the field changes.
@@ -236,6 +281,7 @@ export class GameRenderer {
       disposeObject(this.sky.mesh);
       this.sky = null;
     }
+    this.scenery = null;
     if (this.lighting) {
       this.scene.remove(this.lighting.group);
       this.lighting = null;
@@ -288,13 +334,44 @@ export class GameRenderer {
             10 + event.tier * 5,
             1,
           );
+          // The camera punch scales with the tier, so the third tier is
+          // physically bigger news than the first rather than just a different
+          // colour of spark.
+          if (racer.isPlayer) this.chase.addKick(0.16 + event.tier * 0.14);
+          break;
+        }
+        case 'boostStart': {
+          if (simulation.racers[event.racer]?.isPlayer) this.chase.addKick(0.45);
+          break;
+        }
+        case 'towSnap': {
+          const racer = simulation.racers[event.racer];
+          if (!racer) break;
+          this.particles.emit('boost', racer.pos.x, racer.y + 0.6, racer.pos.z, 0xbfe9ff, 16, event.strength * 1.4);
+          if (racer.isPlayer) this.chase.addKick(0.3 * event.strength);
+          break;
+        }
+        case 'hop': {
+          const racer = simulation.racers[event.racer];
+          if (!racer) break;
+          this.particles.emit('dust', racer.pos.x, racer.y + 0.1, racer.pos.z, this.dustColor, 5, 0.9);
           break;
         }
         case 'jumpLand': {
           const racer = simulation.racers[event.racer];
           if (!racer) break;
           this.particles.emit('dust', racer.pos.x, racer.y + 0.2, racer.pos.z, this.dustColor, event.clean ? 8 : 16, 1.4);
-          if (racer.isPlayer && !event.clean) this.chase.addShake(clamp01(event.speed / 22) * 0.6);
+          if (racer.isPlayer) {
+            // The suspension compressing is the read on how well that landing
+            // went, so the camera dips with the impact and kicks with a good
+            // one. A bad landing gets the shake instead.
+            this.chase.addDip(clamp01(event.speed / 14) * 0.7);
+            if (event.quality > 0.35) this.chase.addKick(event.quality * 0.35);
+            if (!event.clean) this.chase.addShake(clamp01(event.speed / 22) * 0.6);
+          }
+          if (event.quality > 0.35) {
+            this.particles.emit('boost', racer.pos.x, racer.y + 0.4, racer.pos.z, 0xa8f0e0, 12, event.quality * 1.5);
+          }
           break;
         }
         case 'hazard': {
@@ -345,8 +422,31 @@ export class GameRenderer {
       }
     }
 
+    this.scenery?.update(elapsed);
     this.particles.update(elapsed, this.chase.camera.quaternion);
-    this.renderer.render(this.scene, this.chase.camera);
+
+    /*
+     * The speed cue drives the radial warp and the chromatic fringe. It is
+     * smoothed rather than read raw: a single fast frame — the instant a boost
+     * pad fires, say — would otherwise snap the whole frame's geometry, which
+     * reads as a glitch rather than as speed. And it is gated on the *player's*
+     * speed, not the camera's, so a fast attract-mode leader does not warp the
+     * menu behind the title.
+     */
+    const focusSpeed = focus ? Math.hypot(focus.velocity.x, focus.velocity.z) : 0;
+    const target = clamp01((focusSpeed - 22) / 34) + (focus?.boosting ? 0.35 : 0);
+    this.speedCue += (target - this.speedCue) * (1 - Math.exp(-4 * elapsed));
+    this.post.speed = this.speedCue;
+    this.post.motion = this.reducedMotion ? 0 : 1;
+
+    if (this.composer) {
+      this.renderer.setRenderTarget(this.composer.target);
+      this.renderer.render(this.scene, this.chase.camera);
+      this.composer.render(this.post);
+    } else {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.chase.camera);
+    }
   }
 
   /** Continuous per-racer effects: tyre dust, boost flare, drift smoke. */
@@ -413,6 +513,7 @@ export class GameRenderer {
     this.vehicles.clear();
     this.clearWorld();
     this.particles.dispose();
+    this.composer?.dispose();
     disposeTextures();
     this.renderer.dispose();
   }

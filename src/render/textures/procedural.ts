@@ -180,6 +180,50 @@ export function roadTexture(key: string, base: string, line: string, seed: numbe
 }
 
 /**
+ * The kerb stripe.
+ *
+ * Two bands of colour running across the strip, softened at the seams and
+ * scuffed towards the road edge where three hundred years of traffic would have
+ * worn them. The V axis runs along the track, so the repeat is set by distance
+ * and the stripes stay the same length whatever the road is doing.
+ *
+ * The accent colour is the course's, and it is one of only three places a
+ * course is allowed to use full saturation — the art bible reserves that for
+ * things a driver has to find.
+ */
+export function kerbTexture(accent: number): THREE.Texture {
+  const key = `kerb-${accent.toString(16)}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  const size = 64;
+  const { canvas, ctx } = makeCanvas(size);
+  const hex = `#${accent.toString(16).padStart(6, '0')}`;
+
+  ctx.fillStyle = '#20242a';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = hex;
+  ctx.fillRect(0, 0, size, size / 2);
+
+  // Scuff both bands unevenly, so the kerb reads as worn concrete rather than
+  // as a flat two-tone decal.
+  const rng = new Rng(accent ^ 0x51ed);
+  ctx.globalAlpha = 0.22;
+  ctx.fillStyle = '#000000';
+  for (let i = 0; i < 90; i++) {
+    ctx.fillRect(rng.range(0, size), rng.range(0, size), rng.range(1, 5), rng.range(1, 3));
+  }
+  ctx.globalAlpha = 1;
+
+  const texture = finish(canvas, 1, key);
+  // The U axis crosses the strip and must not tile; the V axis runs along the
+  // track and must.
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.repeat.set(1, 1);
+  return texture;
+}
+
+/**
  * A soft radial falloff used for every additive particle. One texture serves
  * dust, sparks, embers and the impact flash; the colour comes from the
  * instance, not the texture.

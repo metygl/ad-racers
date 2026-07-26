@@ -1,8 +1,16 @@
 import * as THREE from 'three';
 import { Rng, hashSeed } from '../../core/rng';
+import { PHYSICS } from '../../game/config';
 import { mergeGeometries } from './mergeGeometry';
 import type { Track } from '../../game/track/buildTrack';
 import type { ObstacleDefinition, PathSample, SceneryKind, TrackTheme } from '../../game/track/types';
+
+/** Multiplies a colour's lightness, keeping its hue and saturation. */
+function shade(color: number, factor: number): THREE.Color {
+  const c = new THREE.Color(color);
+  const hsl = c.getHSL({ h: 0, s: 0, l: 0 });
+  return c.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l * factor));
+}
 
 /**
  * Set dressing and static obstacles.
@@ -16,8 +24,56 @@ import type { ObstacleDefinition, PathSample, SceneryKind, TrackTheme } from '..
  * having *enough* things rather than detailed ones.
  */
 
+/**
+ * Adds a wind sway to an instanced material, in the vertex shader.
+ *
+ * Foliage that does not move is the loudest possible statement that a world is
+ * geometry rather than a place — and animating it on the CPU would mean
+ * rewriting an instance matrix buffer every frame for two thousand trees. The
+ * sway is a function of world position and time, so every instance gets its own
+ * phase for free and the whole species still costs one draw call.
+ *
+ * The displacement scales with height above the instance origin, so trunks stay
+ * planted and only the canopy moves. Anything else looks like the tree is
+ * sliding around on the ground.
+ */
+function applyWind(material: THREE.Material, strength: number, speed: number): { time: { value: number } } {
+  const time = { value: 0 };
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uWindTime = time;
+    shader.uniforms.uWindStrength = { value: strength };
+    shader.uniforms.uWindSpeed = { value: speed };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+         uniform float uWindTime;
+         uniform float uWindStrength;
+         uniform float uWindSpeed;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         {
+           vec3 instanceOrigin = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+           float phase = instanceOrigin.x * 0.13 + instanceOrigin.z * 0.11;
+           float height = max(transformed.y, 0.0);
+           float sway = sin(uWindTime * uWindSpeed + phase) * 0.7
+                      + sin(uWindTime * uWindSpeed * 1.7 + phase * 2.3) * 0.3;
+           transformed.x += sway * uWindStrength * height * height * 0.02;
+           transformed.z += sway * uWindStrength * height * height * 0.012;
+         }`,
+      );
+  };
+  // Changing `onBeforeCompile` after a material has been used needs a new
+  // program; setting the key up front keeps three from caching the unmodified
+  // shader against this material.
+  material.customProgramCacheKey = () => `wind-${strength}-${speed}`;
+  return { time };
+}
+
 /** Prototype geometry for one scenery kind, in local space, y-up from 0. */
-function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.BufferGeometry; material: THREE.Material } {
+function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.BufferGeometry; material: THREE.Material; wind?: number } {
   const stone = new THREE.MeshStandardMaterial({ color: theme.shoulderColor, roughness: 0.95, flatShading: true });
 
   switch (kind) {
@@ -31,7 +87,16 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({ color: 0x2f5c3a, roughness: 0.9, flatShading: true }),
+        // Foliage takes its colour from the course's terrain accent rather than
+        // a fixed green. The art bible puts every plant a full value band below
+        // the road, and a hard-coded green cannot honour that on a salt flat or
+        // in a quarry at last light.
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 0.72),
+          roughness: 0.92,
+          flatShading: true,
+        }),
+        wind: 0.5,
       };
     }
     case 'broadleaf': {
@@ -42,7 +107,12 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({ color: 0x4a7c3f, roughness: 0.88, flatShading: true }),
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 1.05),
+          roughness: 0.9,
+          flatShading: true,
+        }),
+        wind: 0.9,
       };
     }
     case 'palm': {
@@ -52,7 +122,12 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({ color: 0x6d8a4a, roughness: 0.9, flatShading: true }),
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 1.2),
+          roughness: 0.9,
+          flatShading: true,
+        }),
+        wind: 1.4,
       };
     }
     case 'boulder':
@@ -85,7 +160,12 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({ color: 0xb8ac7e, roughness: 1, flatShading: true }),
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 1.35),
+          roughness: 1,
+          flatShading: true,
+        }),
+        wind: 2.2,
       };
     }
     case 'crystal': {
@@ -124,17 +204,24 @@ export interface SceneryOptions {
   castShadows: boolean;
 }
 
+export interface SceneryResult {
+  group: THREE.Group;
+  /** Advances every wind-swayed material. */
+  update: (elapsed: number) => void;
+}
+
 /**
  * Scatters every scenery spec the course declares. Placement is seeded from the
  * track, so the world is identical on every load and every machine — which
  * matters because the screenshots in the docs and the visual regression checks
  * would otherwise drift.
  */
-export function buildScenery(track: Track, options: SceneryOptions): THREE.Group {
+export function buildScenery(track: Track, options: SceneryOptions): SceneryResult {
   const group = new THREE.Group();
   group.name = 'scenery';
   const samples = track.main.samples;
   const theme = track.definition.theme;
+  const clocks: { value: number }[] = [];
 
   for (const spec of track.definition.scenery) {
     const rng = new Rng(hashSeed(spec.kind, track.definition.seed));
@@ -160,9 +247,19 @@ export function buildScenery(track: Track, options: SceneryOptions): THREE.Group
         const x = sample.pos.x + sample.normal.x * lateral + sample.tangent.x * along;
         const z = sample.pos.z + sample.normal.z * lateral + sample.tangent.z * along;
 
-        // Never place anything on a drivable surface, including shortcuts.
+        /*
+         * Never place anything on a drivable surface — nor anywhere inside the
+         * run-off.
+         *
+         * The obvious clearance is "just off the road", and it is wrong. Only
+         * the course's declared obstacles are collidable, so a tree standing
+         * two metres past the white line is scenery a player drives *through*:
+         * the camera ends up inside a canopy with the road nowhere in frame.
+         * The run-off margin is how far a car can legitimately be flung, so it
+         * is the clearance scenery has to respect.
+         */
         const projection = track.project({ x, z });
-        if (Math.abs(projection.lateral) < projection.halfWidth + 2.5) continue;
+        if (Math.abs(projection.lateral) < projection.halfWidth + PHYSICS.offTrackMargin * 0.8) continue;
 
         placements.push({ x, z, scale: rng.range(spec.scaleMin, spec.scaleMax), rotation: rng.range(0, Math.PI * 2) });
       }
@@ -175,7 +272,8 @@ export function buildScenery(track: Track, options: SceneryOptions): THREE.Group
       { length: budget },
       (_, index) => placements[Math.floor((index * placements.length) / budget)] as (typeof placements)[number],
     );
-    const { geometry, material } = prototype(spec.kind, theme);
+    const { geometry, material, wind } = prototype(spec.kind, theme);
+    if (wind) clocks.push(applyWind(material, wind, 1.1).time);
     const mesh = new THREE.InstancedMesh(geometry, material, selected.length);
     mesh.name = `scenery-${spec.kind}`;
     mesh.castShadow = options.castShadows;
@@ -198,6 +296,77 @@ export function buildScenery(track: Track, options: SceneryOptions): THREE.Group
     group.add(mesh);
   }
 
+  return {
+    group,
+    update: (elapsed: number) => {
+      for (const clock of clocks) clock.value += elapsed;
+    },
+  };
+}
+
+/**
+ * The far horizon.
+ *
+ * A ring of large, low, silhouette-only landforms placed well outside the
+ * course, at the value band the art bible reserves for vistas. Nothing here is
+ * ever reached or collided with; its whole job is that the frame has a
+ * background as well as a foreground, which is the difference between a course
+ * that sits in a world and a course that sits on a table.
+ *
+ * One instanced draw for the whole ring, and no shadows — a shadow cast from
+ * 900 m away lands nowhere useful and costs a shadow-map slot that the trees
+ * beside the road need.
+ */
+export function buildHorizon(track: Track): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'horizon';
+  const { bounds, definition } = track;
+  const theme = definition.theme;
+
+  const centreX = (bounds.minX + bounds.maxX) / 2;
+  const centreZ = (bounds.minZ + bounds.maxZ) / 2;
+  const reach = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) / 2;
+
+  const rng = new Rng(hashSeed('horizon', definition.seed));
+  const geometry = new THREE.ConeGeometry(1, 1, 5, 1);
+  // Vistas sit a band below the near terrain and carry no high-frequency
+  // detail, so they read as depth rather than as noise.
+  const material = new THREE.MeshStandardMaterial({
+    color: shade(theme.fogColor, 0.42),
+    roughness: 1,
+    flatShading: true,
+    fog: true,
+  });
+
+  const count = 88;
+  const mesh = new THREE.InstancedMesh(geometry, material, count);
+  mesh.name = 'horizon-range';
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  const axis = new THREE.Vector3(0, 1, 0);
+
+  for (let i = 0; i < count; i++) {
+    // Two staggered rings, so the range has depth of its own instead of reading
+    // as a single scalloped wall.
+    const band = i % 2;
+    const angle = (i / count) * Math.PI * 2 + rng.range(-0.05, 0.05);
+    const distance = reach + 340 + band * 260 + rng.range(-70, 70);
+    const height = rng.range(60, 190) * (1 + band * 0.5);
+    const width = rng.range(180, 420);
+    position.set(centreX + Math.cos(angle) * distance, -18, centreZ + Math.sin(angle) * distance);
+    quaternion.setFromAxisAngle(axis, rng.range(0, Math.PI * 2));
+    scale.set(width, height, width * rng.range(0.7, 1.2));
+    matrix.compose(position, quaternion, scale);
+    mesh.setMatrixAt(i, matrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.computeBoundingSphere();
+  group.add(mesh);
   return group;
 }
 

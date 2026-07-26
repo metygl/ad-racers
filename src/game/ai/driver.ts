@@ -537,7 +537,26 @@ function chooseBranch(racer: RacerState, ctx: AiContext, normal: Vec2, halfWidth
        * — an Ace will take a cut that barely pays, a Rookie wants it obvious —
        * and a route that is predicted to be slower is never taken by anyone.
        */
-      ai.branchChoice = ctx.rng.chance(ai.boldness) ? branch.id : null;
+      /*
+       * Take it when it is worth taking, and let nerve set how thin a margin
+       * counts as worth it.
+       *
+       * This used to be a bare dice roll against boldness, which the comment
+       * above already described as something better than it was. Two
+       * consequences, both measured: a branch that was *strictly slower* was
+       * still taken by every crew in the field — Glasshouse's Rootway tore
+       * whole races apart that way — and the difficulty ordering the suite
+       * asserts was not real, a census over eight seeds reading 10 / 13 / 11
+       * for Rookie / Pro / Ace.
+       *
+       * `branch.idealGain` is the seconds the route actually saves, measured at
+       * build time with each metre's surface speed cap. A route that loses time
+       * is now never chosen by anyone at any difficulty, and a bold driver
+       * accepts a thinner margin than a cautious one — which makes the ordering
+       * a property of the design rather than of the seed.
+       */
+      const margin = lerp(RACE.branchMarginCautious, RACE.branchMarginBold, ai.boldness);
+      ai.branchChoice = branch.idealGain >= margin ? branch.id : null;
     }
   }
 

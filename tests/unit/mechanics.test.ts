@@ -826,3 +826,123 @@ describe('flat hopping pays nothing', () => {
     expect(paidOn('saltflat-reliquary'), 'the flat course paid for a landing').toBe(0);
   }, 600000);
 });
+
+describe('the gust has a lee', () => {
+  /**
+   * The race-design review's finding on Glasshouse's signature hazard: the
+   * catastrophic slowdown is closed, but "I still could not read wind
+   * direction, a safe lane, a drafting shelter, or a timing response". A hazard
+   * with no counterplay is a toll, not a decision.
+   *
+   * Measured on the thing the wind actually does — sideways velocity imparted
+   * per second — at both edges of the corridor, because a driving proxy over
+   * the whole sequence measures the corners as much as the wind.
+   */
+  it('pushes far less on the sheltered side', () => {
+    const track = getTrack('glasshouse-vigil');
+    const gust = track.hazards.find((hazard) => hazard.kind === 'gust');
+    if (!gust) throw new Error('the hero course has no gust to test');
+
+    /*
+     * How far the wind carries an uncorrected car, in metres.
+     *
+     * Displacement rather than sideways velocity: grip bleeds the lateral
+     * component off every step, so a gust does not slide a skiff — it makes the
+     * driver hold a correction, and the drift they get for not holding it is
+     * what they actually feel.
+     */
+    const driftAt = (bias: number): number => {
+      const sim = new Simulation(buildSetup({ trackId: 'glasshouse-vigil', entries: 1, playerIndex: 0 }));
+      while (sim.phase === 'countdown') {
+        sim.step(emptyInput());
+        sim.drainEvents();
+      }
+      const racer = sim.racers[0] as RacerState;
+      const at = track.project({ x: gust.x, z: gust.z });
+
+      // Standing in the gust, at `bias` across the corridor, pointing down it.
+      const offset = bias * at.halfWidth * 0.8;
+      racer.pos = { x: at.center.x + at.normal.x * offset, z: at.center.z + at.normal.z * offset };
+      racer.heading = Math.atan2(at.tangent.z, at.tangent.x);
+      racer.velocity = { x: Math.cos(racer.heading) * 40, z: Math.sin(racer.heading) * 40 };
+
+      const before = track.project(racer.pos, racer.path).lateral;
+      run(sim, 1.2, { ...emptyInput(), throttle: 1 });
+      return Math.abs(track.project(racer.pos, racer.path).lateral - before);
+    };
+
+    const oneEdge = driftAt(-1);
+    const otherEdge = driftAt(1);
+    const sheltered = Math.min(oneEdge, otherEdge);
+    const exposed = Math.max(oneEdge, otherEdge);
+
+    // The wind has to be doing something at all, and one side has to be
+    // materially calmer than the other for there to be a lane to find.
+    expect(exposed, 'the gust carries an uncorrected car nowhere').toBeGreaterThan(0.4);
+    expect(sheltered).toBeLessThan(exposed * 0.7);
+  });
+});
+
+describe('the first corner is survivable', () => {
+  /**
+   * The gameplay review's first-run finding: a fresh profile, no post-countdown
+   * input, and by race time 21.9 the player was sixth, stationary, on grass,
+   * with `STUCK - PRESS R TO RECOVER`. On touch the throttle is open by design,
+   * so it happens sooner and through no decision at all. Whatever else the
+   * opening is, it should not be able to end a three-lap race before the player
+   * has worked out that they are driving.
+   */
+  it('does not roll an idle player into the scenery', () => {
+    const sim = new Simulation(buildSetup({ trackId: 'glasshouse-vigil', playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+    const player = sim.player;
+    if (!player) throw new Error('no player');
+
+    // The touch case exactly: the platform supplies the throttle, the player
+    // has not touched anything.
+    let worst = -Infinity;
+    for (let i = 0; i < Math.ceil(6 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1, automaticThrottle: true });
+      sim.drainEvents();
+      const projection = sim.track.project(player.pos, player.path);
+      worst = Math.max(worst, Math.abs(projection.lateral) - projection.halfWidth);
+    }
+
+    /*
+     * The promise is not that an idle player drives a perfect line — it is that
+     * the opening cannot end their race. Wide into the run-off and back is
+     * racing; deposited in the vegetation, stopped, with `STUCK` on screen, is
+     * the defect. So the bar is the run-off, and that they are still moving.
+     */
+    expect(worst, 'an untouched player left the run-off').toBeLessThan(PHYSICS.offTrackMargin * 0.6);
+    expect(speedOf(player), 'an untouched player was left stranded').toBeGreaterThan(8);
+  });
+
+  it('hands the wheel over the instant the player steers', () => {
+    /*
+     * The other half, and the one that keeps the assist honest: it must be
+     * invisible to anyone actually playing, and it must never come back.
+     */
+    const sim = new Simulation(buildSetup({ trackId: 'glasshouse-vigil', playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+    const player = sim.player;
+    if (!player) throw new Error('no player');
+
+    // One deliberate steering input ends it for the rest of the race.
+    run(sim, 0.2, { ...emptyInput(), throttle: 1, steer: 0.6 });
+    expect(player.hasSteered).toBe(true);
+
+    // And from here the player's own steering is what reaches the car: hold
+    // full lock and the skiff must actually leave the racing line.
+    const before = sim.track.project(player.pos, player.path).lateral;
+    run(sim, 1.5, { ...emptyInput(), throttle: 1, steer: 1 });
+    const after = sim.track.project(player.pos, player.path).lateral;
+    expect(Math.abs(after - before), 'the assist was still steering').toBeGreaterThan(1.5);
+  });
+});

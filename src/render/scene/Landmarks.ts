@@ -99,20 +99,61 @@ function landmarkParts(kind: LandmarkDefinition['kind'], scale: number): MergePa
      * running along a hundred metres of ruined glazing is a place.
      */
     case 'wall': {
+      /*
+       * A solid, leaning, buttressed face — deliberately nothing like the
+       * glazing frames.
+       *
+       * The first version was posts and rails: the same vocabulary as the
+       * scattered frames, at the same scale, in a darker version of the same
+       * colour, so a review read it as "another set of near-black rectangular
+       * frames rather than a dominant back to the chicane". A landmark cannot
+       * be built out of the kit it is supposed to stand out from.
+       *
+       * So this is mass where the frames are line, it leans where they stand
+       * plumb, it is *lighter* than them rather than darker, and it has one
+       * enormous arched opening that nothing else on the course has. The
+       * opening is the recognisable part: a hole big enough to see the sky
+       * through reads at any distance and from any angle.
+       */
       const parts: MergePart[] = [];
-      const bays = 7;
-      for (let i = 0; i < bays; i++) {
-        const x = (i - (bays - 1) / 2) * 13 * scale;
-        // A ragged top line: every bay is a different height, and two of them
-        // have come down entirely.
-        const height = i === 2 || i === 5 ? 5 * scale : (16 + Math.sin(i * 2.1) * 6) * scale;
-        parts.push({ geometry: new THREE.BoxGeometry(1.1 * scale, height, 1.1 * scale), position: [x, height / 2, 0] });
-        if (i < bays - 1) {
-          parts.push({
-            geometry: new THREE.BoxGeometry(13 * scale, 0.9 * scale, 0.8 * scale),
-            position: [x + 6.5 * scale, Math.min(height, 12 * scale), 0],
-          });
-        }
+      const length = 78 * scale;
+      const height = 19 * scale;
+      const lean = 0.09;
+
+      // The face, in four slabs with a ragged top, leaning back over the road.
+      const slabs = 4;
+      for (let i = 0; i < slabs; i++) {
+        const span = length / slabs;
+        const x = (i - (slabs - 1) / 2) * span;
+        const tall = height * (i === 1 ? 0.62 : i === 3 ? 0.8 : 1);
+        parts.push({
+          geometry: new THREE.BoxGeometry(span * 0.98, tall, 2.4 * scale),
+          position: [x, tall / 2, Math.sin(lean) * tall * 0.5],
+          rotation: [lean, 0, 0],
+        });
+      }
+
+      // Buttresses, which are what make it read as a *wall* rather than a slab.
+      for (let i = 0; i <= slabs; i++) {
+        const x = (i - slabs / 2) * (length / slabs);
+        parts.push({
+          geometry: new THREE.BoxGeometry(2.2 * scale, height * 0.55, 7 * scale),
+          position: [x, height * 0.275, -3.4 * scale],
+          rotation: [-0.22, 0, 0],
+        });
+      }
+
+      // The arch: the one thing on the course you can see the sky through.
+      const ribs = 9;
+      const archSpan = 17 * scale;
+      const archRise = 12 * scale;
+      for (let i = 0; i < ribs; i++) {
+        const angle = Math.PI * (i / (ribs - 1));
+        parts.push({
+          geometry: new THREE.BoxGeometry((archSpan / ribs) * 1.3, 2 * scale, 3 * scale),
+          position: [-Math.cos(angle) * (archSpan / 2), Math.sin(angle) * archRise, 1.6 * scale],
+          rotation: [0, 0, angle - Math.PI / 2],
+        });
       }
       return parts;
     }
@@ -148,18 +189,44 @@ function landmarkParts(kind: LandmarkDefinition['kind'], scale: number): MergePa
   }
 }
 
-/** The lamp head on a beacon, in the emitter family so it actually glows. */
-function beaconHead(scale: number, accent: number): { geometry: THREE.BufferGeometry; material: THREE.Material } {
+/**
+ * The lit part of the beacon: a head, and a ladder of bands up the mast.
+ *
+ * A single lamp on top of a dark lattice is not a navigation aid at night. A
+ * review looked for it from the lower approach and found "road, repeated
+ * glazing frames, lights, and distant motes, but no unmistakable beacon
+ * silhouette" — because from below, at distance, the mast was the same
+ * near-black as everything else and the head was a dot among lamp masts.
+ *
+ * What makes a beacon findable is a *vertical line of light*: bands up the
+ * whole mast turn it into the one tall bright stroke in a frame full of short
+ * dark ones, and verticality is the cue that survives being small. The head
+ * stays the brightest thing so the top of the climb is still unambiguous.
+ */
+function beaconLights(scale: number, accent: number): { geometry: THREE.BufferGeometry; material: THREE.Material } {
   const height = 46 * scale;
+  const parts: MergePart[] = [
+    { geometry: new THREE.CylinderGeometry(2.4 * scale, 1.6 * scale, 2.6 * scale, 8), position: [0, height + 1.3 * scale, 0] },
+  ];
+  // The ladder. Denser towards the top, so the eye is led up it.
+  for (let i = 1; i <= 8; i++) {
+    const t = i / 8;
+    parts.push({
+      geometry: new THREE.BoxGeometry(4.6 * scale, 0.5 * scale, 0.5 * scale),
+      position: [0, height * t * t * 0.94 + 4 * scale, 0],
+    });
+    parts.push({
+      geometry: new THREE.BoxGeometry(0.5 * scale, 0.5 * scale, 4.6 * scale),
+      position: [0, height * t * t * 0.94 + 4 * scale, 0],
+    });
+  }
   return {
-    geometry: mergeGeometries([
-      { geometry: new THREE.CylinderGeometry(2.4 * scale, 1.6 * scale, 2.6 * scale, 8), position: [0, height + 1.3 * scale, 0] },
-    ]),
+    geometry: mergeGeometries(parts),
     material: familyMaterial('emitter', {
       color: 0x2b3540,
       emissive: accent,
-      // Bright, and deliberately the brightest thing on the course that is not
-      // a skiff. It is what the course is *for* — a light kept running.
+      // Deliberately the brightest thing on the course that is not a skiff. It
+      // is what the course is *for* — a light kept running.
       emissiveIntensity: 2.2,
       repeat: 1,
     }),
@@ -190,8 +257,16 @@ export function buildLandmarks(track: Track, heightAt: (x: number, z: number) =>
     const scale = landmark.scale ?? 1;
 
     const geometry = mergeGeometries(landmarkParts(landmark.kind, scale));
-    const material = familyMaterial(landmark.kind === 'wall' ? 'corroded' : 'structure', {
-      color: new THREE.Color(theme.shoulderColor).multiplyScalar(landmark.kind === 'wall' ? 0.78 : 0.92),
+    /*
+     * A landmark has to sit *above* the scatter in value, not below it.
+     *
+     * The wall was a darker corroded version of the shoulder colour, which is
+     * the same direction the glazing frames go, so it disappeared into them.
+     * Masonry at 1.45x reads as a pale mass against a course made of dark thin
+     * lines — which is the whole job.
+     */
+    const material = familyMaterial(landmark.kind === 'wall' ? 'masonry' : 'structure', {
+      color: new THREE.Color(theme.shoulderColor).multiplyScalar(landmark.kind === 'wall' ? 1.45 : 0.92),
       repeat: 4,
     });
     const mesh = new THREE.Mesh(geometry, material);
@@ -205,9 +280,9 @@ export function buildLandmarks(track: Track, heightAt: (x: number, z: number) =>
     group.add(mesh);
 
     if (landmark.kind === 'beacon') {
-      const head = beaconHead(scale, theme.kerbColor ?? theme.speedLineColor);
+      const head = beaconLights(scale, theme.kerbColor ?? theme.speedLineColor);
       const headMesh = new THREE.Mesh(head.geometry, head.material);
-      headMesh.name = 'landmark-beacon-head';
+      headMesh.name = 'landmark-beacon-lights';
       headMesh.position.copy(mesh.position);
       headMesh.rotation.copy(mesh.rotation);
       group.add(headMesh);

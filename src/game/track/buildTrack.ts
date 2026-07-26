@@ -13,6 +13,7 @@ import type {
   SurfaceId,
   TrackDefinition,
 } from './types';
+import { SURFACES } from './types';
 
 /** Arc-length spacing of resampled path points, in metres. */
 const SAMPLE_SPACING = 1.5;
@@ -30,6 +31,32 @@ const GRID_CELL = 12;
  * at racing speed with nothing it could have done differently.
  */
 const JUNCTION_CLEARANCE = 45;
+/**
+ * Reference speed for comparing routes, in m/s.
+ *
+ * A single number rather than a per-crew one on purpose: the *ordering* of two
+ * routes barely changes with speed, and a route decision that differed by crew
+ * would make the same corner unlearnable from watching a rival take it.
+ */
+const REFERENCE_SPEED = 46;
+/**
+ * How far before an open path's end it stops claiming racers, in metres.
+ *
+ * Long enough that a car always has real road ahead of the line it is
+ * following, short enough that it is still inside the blended merge where the
+ * branch and the main line describe the same tarmac.
+ */
+const MERGE_HANDOFF = 12;
+
+/** Ideal time to drive a path, respecting each metre's surface speed cap. */
+function pathIdealTime(samples: readonly PathSample[]): number {
+  let total = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const step = (samples[i] as PathSample).distance - (samples[i - 1] as PathSample).distance;
+    total += step / (REFERENCE_SPEED * SURFACES[(samples[i] as PathSample).surface].speedCap);
+  }
+  return total;
+}
 
 interface FineSample {
   pos: Vec2;
@@ -213,7 +240,7 @@ function buildPath(
     (samples[i] as PathSample).curvature = c;
   });
 
-  return { id, closed, samples, length, entryMainDistance, exitMainDistance };
+  return { id, closed, samples, length, entryMainDistance, exitMainDistance, idealGain: 0 };
 }
 
 /**
@@ -330,6 +357,24 @@ export class Track {
       }
       return buildPath(branch.id, branch.points, false, { entry, exit });
     });
+    /*
+     * What each branch is actually worth, in seconds.
+     *
+     * Measured the same way `tests/unit/track.test.ts` measures it: length
+     * against the main span it replaces, with every metre divided by the speed
+     * its surface allows. A branch that is shorter and wetter can be worth less
+     * than nothing, and the AI has to be able to see that.
+     */
+    for (const branch of this.branches) {
+      const span = this.forwardGap(branch.entryMainDistance, branch.exitMainDistance);
+      const branchTime = pathIdealTime(branch.samples);
+      let mainTime = 0;
+      for (let d = SAMPLE_SPACING; d <= span; d += SAMPLE_SPACING) {
+        mainTime += SAMPLE_SPACING / (REFERENCE_SPEED * SURFACES[this.sampleMain((branch.entryMainDistance + d) % this.length).surface].speedCap);
+      }
+      branch.idealGain = mainTime - branchTime;
+    }
+
     /*
      * A junction cannot be walled.
      *
@@ -460,8 +505,22 @@ export class Track {
        * measuring true distance; this is the other half of it. A branch that
        * has ended must not keep hold of the racer by seniority.
        */
+      /*
+       * A branch stops claiming a racer *before* it physically runs out.
+       *
+       * Holding on until the last centimetre means the last thing a car steers
+       * by is the few metres of corridor with the least road left in it: a
+       * field trace found an opponent pinned on the Conveyor's edge for four
+       * seconds at the exit, on track, on tarmac, with nothing touching it —
+       * it was following a line that was about to stop existing. Through the
+       * merge the two corridors coincide anyway, so handing over a few metres
+       * early costs nothing and gives the car somewhere to aim.
+       */
+      const endingSoon =
+        !path.closed &&
+        lerp(a.distance, b.distance, t) > path.length - MERGE_HANDOFF;
       const clampedAtEnd =
-        !path.closed && ((index === 0 && t <= 0) || (nextIndex === n - 1 && t >= 1));
+        !path.closed && (((index === 0 && t <= 0) || (nextIndex === n - 1 && t >= 1)) || endingSoon);
       const preferred = preferredPath === path && !clampedAtEnd;
 
       /*

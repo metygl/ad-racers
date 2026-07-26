@@ -1,4 +1,5 @@
 import { formatLapTime, ordinal } from '../../core/math';
+import { shouldUseTouch } from '../ui/TouchControls';
 import type { GameSettings } from '../../core/storage';
 import { getDifficulty } from '../../game/ai/driver';
 import { getSpeedClass } from '../../game/config';
@@ -14,20 +15,61 @@ import { button, el } from '../ui/dom';
  * used for loading and for the states where the game cannot run.
  */
 
+/**
+ * What the touch layout actually does, in the order a thumb needs it.
+ *
+ * A review on a phone continued past this screen and immediately started an
+ * auto-accelerating vehicle it had not been told about, because the first thing
+ * a touch player was shown was a wall of key names for a keyboard they do not
+ * have. The single most important fact — *you do not press accelerate* — was
+ * nowhere on it.
+ */
+const TOUCH_ROWS: readonly { control: string; name: string; hint: string }[] = [
+  { control: 'Automatic', name: 'Throttle', hint: 'You are already accelerating. There is no go button.' },
+  { control: 'Bottom strip', name: 'Steer', hint: 'Slide a thumb along it. Centre is straight.' },
+  { control: 'Brake', name: 'Slow, then reverse', hint: 'Hold it past a stop to back out of trouble.' },
+  { control: 'Drift', name: 'Bank Surge', hint: 'Hold it through a corner, release on the exit.' },
+  { control: 'Surge', name: 'Spend it', hint: 'Once the meter has a segment.' },
+  { control: 'Hop', name: 'Take a crest level', hint: 'Landing straight and flat pays.' },
+  { control: 'Recover', name: 'Get unstuck', hint: 'Puts you back on the road if you end up off it.' },
+  { control: 'CAM / II', name: 'Camera and pause', hint: 'Top left, out of the way of your thumbs.' },
+];
+
 /** First-run controls card. Short on purpose — six lines, then race. */
 export function buildControlsCard(settings: GameSettings, onDismiss: () => void, dismissLabel = 'Got it'): HTMLElement {
   const rows = el('dl', { class: 'controls__list' });
-  for (const action of ACTIONS) {
-    if (!action.rebindable && action.id !== 'pause') continue;
-    rows.append(
-      el('div', { class: 'controls__row' },
-        el('dt', { class: 'controls__key', text: bindingLabel(settings.bindings, action.id) }),
-        el('dd', { class: 'controls__action' },
-          el('span', { class: 'controls__name', text: action.label }),
-          action.hint ? el('span', { class: 'controls__hint', text: action.hint }) : null,
+
+  /*
+   * Serve the controls the device actually has.
+   *
+   * Showing a touch player the keyboard bindings is not merely unhelpful, it is
+   * misleading: it implies there is a key to press to move.
+   */
+  if (shouldUseTouch()) {
+    for (const row of TOUCH_ROWS) {
+      rows.append(
+        el('div', { class: 'controls__row' },
+          el('dt', { class: 'controls__key', text: row.control }),
+          el('dd', { class: 'controls__action' },
+            el('span', { class: 'controls__name', text: row.name }),
+            el('span', { class: 'controls__hint', text: row.hint }),
+          ),
         ),
-      ),
-    );
+      );
+    }
+  } else {
+    for (const action of ACTIONS) {
+      if (!action.rebindable && action.id !== 'pause') continue;
+      rows.append(
+        el('div', { class: 'controls__row' },
+          el('dt', { class: 'controls__key', text: bindingLabel(settings.bindings, action.id) }),
+          el('dd', { class: 'controls__action' },
+            el('span', { class: 'controls__name', text: action.label }),
+            action.hint ? el('span', { class: 'controls__hint', text: action.hint }) : null,
+          ),
+        ),
+      );
+    }
   }
 
   return el(
@@ -44,9 +86,10 @@ export function buildControlsCard(settings: GameSettings, onDismiss: () => void,
     rows,
     el('p', {
       class: 'settings__note',
-      text:
-        'A gamepad works too: left stick steers, right trigger accelerates, the bottom face button hops, ' +
-        'the left and top buttons drift and Surge, and the shoulders swing the pod arm left and right.',
+      text: shouldUseTouch()
+        ? 'A keyboard or gamepad works too if you plug one in — the on-screen controls stay available either way.'
+        : 'A gamepad works too: left stick steers, right trigger accelerates, the bottom face button hops, ' +
+          'the left and top buttons drift and Surge, and the shoulders swing the pod arm left and right.',
     }),
     el('div', { class: 'screen__actions' }, button(dismissLabel, onDismiss, { primary: true, class: 'btn--large' })),
   );

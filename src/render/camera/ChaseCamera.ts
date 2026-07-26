@@ -81,8 +81,6 @@ export class ChaseCamera {
   private occludedBand = 0;
   /** Finish-sequence progress, 0 when not finishing. */
   private finish = 0;
-  /** Remaining hit-pause, seconds. */
-  private held = 0;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(62, aspect, 0.5, 4200);
@@ -125,28 +123,6 @@ export class ChaseCamera {
     this.dip = Math.min(1.4, this.dip + amount * this.shakeScale);
   }
 
-  /**
-   * Freezes the camera in place for a few frames — the hit-pause.
-   *
-   * Motion finding F6 asked for a hit-pause, and the obvious implementation of
-   * one is not available here: slowing time would desynchronise the simulation
-   * from the render clock, and this game's determinism guarantee is the reason
-   * a whole race can be a unit test. So the pause is *presentational* and it is
-   * applied to the camera alone. The world keeps moving at full speed; the
-   * viewpoint stops dead for 80 ms and then catches up.
-   *
-   * That is enough. The eye reads impact weight from the *frame* not advancing,
-   * and the skiff continuing to move inside a held frame is a stronger read of
-   * being knocked than freezing everything would be — a fighting game holds the
-   * camera and animates the recoil for exactly this reason.
-   *
-   * Held frames are capped hard and the catch-up is damped, so this can never
-   * lose the racer: at 80 ms and 50 m/s the skiff moves four metres inside a
-   * ten-metre frame, and the damped position chases it back immediately.
-   */
-  hold(seconds: number): void {
-    this.held = Math.min(0.09, Math.max(this.held, seconds * this.shakeScale));
-  }
 
   /** Snaps the camera behind a racer with no interpolation. */
   reset(racer: RacerState): void {
@@ -160,7 +136,6 @@ export class ChaseCamera {
     this.reverse = 0;
     this.occlusion = 0;
     this.finish = 0;
-    this.held = 0;
     this.trackYaw = null;
     this.previousSpeed = Math.hypot(racer.velocity.x, racer.velocity.z);
     this.apply(racer, 1 / 60, true);
@@ -231,16 +206,6 @@ export class ChaseCamera {
     this.dip = Math.max(0, this.dip - elapsed * 4.2);
     // Continuous rumble from the surface, on top of impulse shake.
     if (roughness > 0) this.shake = Math.max(this.shake, roughness * 0.09 * this.shakeScale);
-    /*
-     * The hit-pause. The camera transform is simply not rewritten this frame,
-     * so the viewpoint stays exactly where the impact caught it while the world
-     * carries on. Everything else above has already decayed, so the shake and
-     * kick resume mid-flight rather than restarting when the hold ends.
-     */
-    if (this.held > 0) {
-      this.held -= elapsed;
-      return;
-    }
     this.apply(racer, elapsed, false);
   }
 

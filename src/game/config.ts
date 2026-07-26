@@ -504,8 +504,25 @@ export const COMBAT = {
 } as const;
 
 export const COLLISION = {
-  /** Racer collision radius. */
-  radius: 1.35,
+  /**
+   * Radius of one of the two lobes a skiff's hull is made of.
+   *
+   * A skiff is 4.2 m long and 1.7 m wide. A single 1.35 m circle described
+   * neither: two cars could sit 2.7 m apart, which physics called clear, while
+   * four metres of hull visibly occupied the same space — a motion review found
+   * "three or more skiffs visually occupy the same space" with the contact
+   * point buried between the bodies, so the player could not tell which skiff
+   * hit which side or which way they had been shoved.
+   *
+   * Two lobes along the length is the cheapest shape that is actually a car.
+   * At this radius and offset the hull is 4.4 m by 2.3 m, which is slightly
+   * *tighter* side to side than the old circle, so door-to-door racing gets
+   * closer rather than further apart, and nose-to-tail contact happens where
+   * the noses are rather than when the centres are within 2.7 m.
+   */
+  radius: 1.15,
+  /** How far each lobe sits from the hull's centre, along its heading. */
+  lobeOffset: 1.05,
   /**
    * After a wall impact, the same wall cannot bill again until the racer has
    * been clear of it for this long.
@@ -584,6 +601,23 @@ export const RACE = {
    * anyone could use it as cover. It expires immediately once the car moves.
    */
   gridGrace: 4,
+  /**
+   * How large a predicted saving a driver needs before taking a shortcut, in
+   * seconds, from the most cautious nerve to the boldest.
+   *
+   * The cautious end is deliberately above what a marginal branch offers: a
+   * Rookie should take only the obvious cut. The bold end is just above zero,
+   * so an Ace takes anything that pays at all — but nobody takes a route that
+   * loses time, which is the failure that made every crew drive into
+   * Glasshouse's flooded tunnel.
+   */
+  branchMarginCautious: 0.9,
+  branchMarginBold: 0.15,
+  /**
+   * How long the opening steering assist lasts for a player who has not yet
+   * touched the wheel, seconds. Roughly the first corner.
+   */
+  launchWait: 12,
 } as const;
 
 export const HAZARDS = {
@@ -591,4 +625,12 @@ export const HAZARDS = {
   boostPadImpulse: 6,
   mudSpeedMultiplier: 0.55,
   gustStrength: 9,
+  /**
+   * How much of a gust still reaches a racer tucked hard into its lee.
+   *
+   * The counter has to be worth real time or it is not a counter, and it has to
+   * cost something or it is not a decision — the lee is the outside of the
+   * corridor, so taking it gives up the inside line for whatever comes next.
+   */
+  gustLee: 0.25,
 } as const;

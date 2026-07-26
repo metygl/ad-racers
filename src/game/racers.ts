@@ -147,13 +147,19 @@ export function toVehicleSpec(stats: RacerStats, speedClass: SpeedClass = SPEED_
    * the open courses without letting it near the top of the technical one,
    * which is exactly the shape the character asks for.
    *
+   * It needs re-checking after any physics change, and has needed it twice.
+   * Giving the hull a real two-lobe shape moved contact from "centres within
+   * 2.7 m" to "noses within 4.4 m", which is a different pack, and a census of
+   * twenty races put Emberworks back down to a single podium against
+   * Greenline's eighteen. The spreads here are the dial for that.
+   *
    * `tests/unit/fairness.test.ts` asserts every crew reaches a podium
    * somewhere, which is what pins this down.
    */
   return {
-    topSpeed: (44 + stats.topSpeed * 11) * speedClass.scale,
+    topSpeed: (43.4 + stats.topSpeed * 12.2) * speedClass.scale,
     enginePower: (20 + stats.acceleration * 9) * speedClass.scale,
-    grip: (9.7 + stats.grip * 2.9) * speedClass.gripScale,
+    grip: (9.95 + stats.grip * 2.45) * speedClass.gripScale,
     mass: 0.78 + stats.weight * 0.5,
     reach: 3.2 + stats.reach * 1.0,
     shove: 0.82 + stats.reach * 0.4,

@@ -115,6 +115,9 @@ const NEAR_MISS_COOLDOWN = 1.2;
  */
 const REDUCED_MOTION_EFFECTS = 0.45;
 
+/** How far ahead a tow's tether may be drawn to, in metres. */
+const TOW_TETHER_REACH = 26;
+
 export interface RendererOptions {
   canvas: HTMLCanvasElement;
   quality: QualityId;
@@ -177,6 +180,8 @@ export class GameRenderer {
    * into an assertion that 1 is less than 90.
    */
   private sceneStats = { drawCalls: 0, triangles: 0 };
+  /** Seconds of frozen presentation left. See `holdPresentation`. */
+  private presentationHold = 0;
   /** Per-rival near-miss cooldowns, so one pass fires exactly one cue. */
   private readonly nearMissCooldowns = new Map<number, number>();
   /** Audio hook for a near miss; the renderer has no business making sound. */
@@ -494,7 +499,7 @@ export class GameRenderer {
             this.chase.addShake(clamp01(event.speed / 16) * 0.8);
             // Only a solid one holds the frame. A brush at 6 m/s that stopped
             // the camera would make ordinary side-by-side racing feel broken.
-            if (force > 0.45) this.chase.hold(0.03 + force * 0.05);
+            if (force > 0.45) this.holdPresentation(0.03 + force * 0.05);
           }
           break;
         }
@@ -537,7 +542,7 @@ export class GameRenderer {
              * in the game and it previously read as a shove; holding the frame
              * for a few dozen milliseconds is what gives it weight.
              */
-            this.chase.hold(0.035 + event.strength * 0.05);
+            this.holdPresentation(0.035 + event.strength * 0.05);
           }
           break;
         }
@@ -594,7 +599,52 @@ export class GameRenderer {
         case 'towSnap': {
           const racer = simulation.racers[event.racer];
           if (!racer) break;
-          this.particles.emit('boost', racer.pos.x, racer.y + 0.6, racer.pos.z, 0xbfe9ff, 16, event.strength * 1.4);
+          /*
+           * A tether collapsing forward, not a puff of thrust.
+           *
+           * Sixteen generic boost particles at the car's centre were visually
+           * interchangeable with Surge, ambient thrust and a drift release — a
+           * review captured the moment unobstructed and could not identify what
+           * race interaction had just succeeded. The reward has to be
+           * teachable, which means it has to look like the thing it is.
+           *
+           * The tow is a line between two cars, so the snap is drawn as that
+           * line collapsing: a short trail of embers laid along the gap to the
+           * car ahead, arriving at the nose. Direction is the whole read, and
+           * embers are the one additive kind that keeps a shape instead of
+           * blooming into a ball.
+           */
+          const wake = simulation.racers.find(
+            (other) => other.index !== racer.index && !other.finished &&
+              Math.hypot(other.pos.x - racer.pos.x, other.pos.z - racer.pos.z) < TOW_TETHER_REACH,
+          );
+          const forward = { x: Math.cos(racer.heading), z: Math.sin(racer.heading) };
+          const toward = wake
+            ? { x: wake.pos.x - racer.pos.x, z: wake.pos.z - racer.pos.z }
+            : { x: forward.x * 8, z: forward.z * 8 };
+          const span = Math.max(1, Math.hypot(toward.x, toward.z));
+          for (let step = 0; step < 6; step++) {
+            const along = (step + 1) / 6;
+            this.particles.emit(
+              'ember',
+              racer.pos.x + (toward.x / span) * along * span,
+              racer.y + 0.75,
+              racer.pos.z + (toward.z / span) * along * span,
+              0xbfe9ff,
+              2,
+              event.strength * (1 - along * 0.6),
+            );
+          }
+          // And a compact ring at the nose, where the snap lands.
+          this.particles.emit(
+            'boost',
+            racer.pos.x + forward.x * 2.2,
+            racer.y + 0.7,
+            racer.pos.z + forward.z * 2.2,
+            0xdff4ff,
+            5,
+            event.strength * 0.7,
+          );
           if (racer.isPlayer) this.chase.addKick(0.3 * event.strength);
           break;
         }
@@ -607,7 +657,34 @@ export class GameRenderer {
         case 'jumpLand': {
           const racer = simulation.racers[event.racer];
           if (!racer) break;
-          this.particles.emit('dust', racer.pos.x, racer.y + 0.2, racer.pos.z, this.dustColor, event.clean ? 8 : 16, 1.4);
+          /*
+           * A landing has to be *coupled to the ground*, not a puff at the car.
+           *
+           * A review found the rig's compression and rebound working but the
+           * landing itself unreadable — "the landing lacks a clear
+           * ground-coupled debris or shadow beat" — because the only cue was a
+           * cloud emitted at the hull. So the material the skiff arrived on is
+           * thrown outward in a ring at ground level, in that surface's own
+           * colour, scaled by how hard the arrival was. The ring is what says
+           * "this is where you touched down"; the cloud only said "something
+           * happened somewhere near this car".
+           */
+          const bed = SURFACE_BEDS[racer.surface] ?? DEFAULT_BED;
+          const force = clamp01(event.speed / 16);
+          const ringCount = event.clean ? 6 : 10;
+          for (let step = 0; step < ringCount; step++) {
+            const angle = (step / ringCount) * Math.PI * 2;
+            this.particles.emit(
+              bed.kind,
+              racer.pos.x + Math.cos(angle) * 1.5,
+              racer.y + 0.08,
+              racer.pos.z + Math.sin(angle) * 1.5,
+              bed.color ?? this.dustColor,
+              1,
+              (0.5 + force) * bed.scale,
+            );
+          }
+          this.particles.emit('dust', racer.pos.x, racer.y + 0.2, racer.pos.z, this.dustColor, event.clean ? 5 : 9, 1.1);
           if (racer.isPlayer) {
             // The suspension compressing is the read on how well that landing
             // went, so the camera dips with the impact and kicks with a good
@@ -641,8 +718,40 @@ export class GameRenderer {
    * `focusIndex` overrides which racer the camera and audio listener follow,
    * which is how the attract race can follow the leader instead of a player.
    */
+  /**
+   * Freezes everything that is *drawn*, without touching simulation timing.
+   *
+   * Motion finding R2-M4 was that the checkpoint's "presentation-only hit
+   * pause" was nothing of the kind: `chase.hold()` returned early from the
+   * camera update alone, so the rig, the particles, the HUD and the audio all
+   * carried on while only the viewpoint stopped. That is a camera stutter, not
+   * a hit stop.
+   *
+   * A real one cannot slow the clock here — the simulation is deterministic and
+   * fixed-step, and a whole race being a unit test depends on that never
+   * changing. What it can do is stop advancing the *image*: for a few dozen
+   * milliseconds the scene graph is re-presented exactly as it was, then every
+   * channel resumes together. The simulation runs on underneath, so the frame
+   * after the hold catches up in one step — at 50 m/s and 90 ms that is four
+   * and a half metres, inside the follow distance, and it is the same snap a
+   * fighting game's recoil resolves into.
+   */
+  holdPresentation(seconds: number): void {
+    if (this.reducedMotion) return;
+    this.presentationHold = Math.min(0.09, Math.max(this.presentationHold, seconds));
+  }
+
   render(simulation: Simulation, elapsed: number, focusIndex?: number): void {
     if (this.disposed) return;
+
+    if (this.presentationHold > 0) {
+      this.presentationHold -= elapsed;
+      // Draw the scene exactly as it stands. The frame is still presented, so
+      // pacing and the draw-call budget are measured on a real frame.
+      this.present();
+      return;
+    }
+
     this.elapsedTotal += elapsed;
     const tier = QUALITY_TIERS[this.quality];
 
@@ -709,6 +818,18 @@ export class GameRenderer {
     this.post.speed = this.speedCue;
     this.post.motion = this.reducedMotion ? 0 : 1;
 
+    this.present();
+  }
+
+  /**
+   * Draws the scene as it currently stands.
+   *
+   * Split out so a held frame is a *real* frame — presented, measured, and
+   * costing what an ordinary one costs — rather than a skipped one. A hit stop
+   * that quietly stopped rendering would flatter the frame-pacing numbers and
+   * hide its own cost.
+   */
+  private present(): void {
     if (this.composer) {
       this.renderer.setRenderTarget(this.composer.target);
       this.renderer.render(this.scene, this.chase.camera);

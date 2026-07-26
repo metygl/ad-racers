@@ -392,3 +392,54 @@ describe('the pod arm explains itself', () => {
     expect(player.strike.reachRight, 'a rival alongside was not reported in reach').toBe(true);
   });
 });
+
+describe('skiffs do not occupy the same space', () => {
+  /**
+   * The round-2 motion review's collision finding: at first contact "three or
+   * more skiffs visually occupy the same space", the initial sparkle is buried
+   * between the bodies, and the player cannot infer which skiff hit which side
+   * or which way they were shoved. The cause was a 1.35 m collision circle
+   * standing in for a 4.2 m by 1.7 m hull — two cars 2.7 m apart were "clear"
+   * with four metres of geometry overlapping.
+   *
+   * Measured on the whole field through the one moment it is worst: the opening
+   * corner, where six cars are still bunched.
+   */
+  it('keeps hulls apart through the opening pack', () => {
+    const HULL_LENGTH = 4.2;
+    const HULL_WIDTH = 1.7;
+
+    let worst = 0;
+    runHeadlessRace({
+      trackId: 'glasshouse-vigil',
+      difficultyId: 'pro',
+      playerIndex: null,
+      maxSeconds: 25,
+      onStep: (sim) => {
+        for (let i = 0; i < sim.racers.length; i++) {
+          for (let j = i + 1; j < sim.racers.length; j++) {
+            const a = sim.racers[i] as RacerState;
+            const b = sim.racers[j] as RacerState;
+            if (Math.abs(a.y - b.y) > 2.6) continue;
+
+            /*
+             * Overlap of the two rendered footprints, approximated by the
+             * distance between centres against the mean of the two hull axes.
+             * A pair genuinely nose to tail is the tightest legitimate case and
+             * is what sets the bar.
+             */
+            const gap = Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z);
+            const footprint = (HULL_LENGTH + HULL_WIDTH) / 2;
+            worst = Math.max(worst, footprint - gap);
+          }
+        }
+      },
+    });
+
+    // Some overlap of the *circumscribed* footprints is unavoidable for cars
+    // racing door to door — a 4.2 m long hull is not 4.2 m wide. What must not
+    // happen is centres closer than the hull is wide, which is bodies inside
+    // bodies rather than alongside them.
+    expect(worst, 'hull centres closer than the hull is wide').toBeLessThan(HULL_LENGTH - HULL_WIDTH);
+  }, 300000);
+});

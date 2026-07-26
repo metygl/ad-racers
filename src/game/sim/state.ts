@@ -4,6 +4,15 @@ import type { VehicleSpec } from '../racers';
 
 /** One frame of driver intent. Identical shape for the player and the AI. */
 export interface ControlInput {
+  /**
+   * True when the throttle is supplied by the platform rather than pressed.
+   *
+   * Touch has no accelerate button by design, so its throttle is always open.
+   * That makes throttle useless on its own as a signal that the player has
+   * *decided* to go, which is exactly what the rolling start needs to know
+   * before it carries an idle car into the first corner.
+   */
+  automaticThrottle: boolean;
   /** -1 (full left) to 1 (full right). */
   steer: number;
   /** 0 to 1. */
@@ -33,6 +42,7 @@ export function emptyInput(): ControlInput {
     hop: false,
     strike: 0,
     respawn: false,
+    automaticThrottle: false,
   };
 }
 
@@ -177,6 +187,8 @@ export interface RacerState {
   airGroundDrop: number;
   /** Main-line distance at the previous step, for measuring progress rate. */
   lastProgressDistance: number;
+  /** Whether the player has ever steered. Ends the opening assist for good. */
+  hasSteered: boolean;
   drift: DriftState;
   strike: StrikeState;
   /** Seconds of degraded control remaining after being struck. */

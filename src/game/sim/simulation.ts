@@ -1,5 +1,5 @@
 import { Rng, hashSeed } from '../../core/rng';
-import { clamp, clamp01, distance, dot, fromHeading, normalize, rightOf } from '../../core/math';
+import { clamp, clamp01, distance, dot, fromHeading, lerp, normalize, rightOf } from '../../core/math';
 import type { Vec2 } from '../../core/math';
 import { COLLISION, FIXED_STEP, HAZARDS, PHYSICS, RACE, RECOVERY, SPEED_CLASSES, SURGE, TOW } from '../config';
 import type { SpeedClass } from '../config';
@@ -124,6 +124,7 @@ export class Simulation {
       airGroundStart: 0,
       airGroundDrop: 0,
       lastProgressDistance: gridDistance,
+      hasSteered: false,
       drift: { active: false, direction: 0, charge: 0 },
       strike: { phase: 'idle', timer: 0, side: 1, cooldown: 0, hitThisSwing: [], reachLeft: false, reachRight: false },
       stagger: 0,
@@ -384,6 +385,31 @@ export class Simulation {
         return { ...playerInput, brake: false, boost: false, strike: 0 };
       }
       /*
+       * Until the player first steers, the race steers for them.
+       *
+       * A review used a fresh profile, provided no input, and was stationary on
+       * grass in sixth place before it had formed any model of how the car
+       * turns. The obvious fix — hold the car on the grid until someone presses
+       * something — breaks a contract the same review confirmed as fixed: on
+       * touch there *is* no accelerate button, and "you only have to steer" is
+       * the whole onboarding promise. Taking the throttle away to protect the
+       * player would have quietly removed the thing that makes the game
+       * playable with one thumb.
+       *
+       * So the throttle stays, and the *steering* is what waits. A player who
+       * has never touched the wheel is held near the racing line; the instant
+       * they steer, this is gone for the rest of the race. It cannot be leaned
+       * on — any input at all ends it permanently — and it expires on its own
+       * for a player who has walked away.
+       */
+      if (!racer.hasSteered && this.raceTime < RACE.launchWait) {
+        if (Math.abs(playerInput.steer) > 0.05) racer.hasSteered = true;
+        else return { ...playerInput, steer: this.laneKeepSteer(racer) };
+      } else {
+        racer.hasSteered = true;
+      }
+
+      /*
        * The player is rescued too, after a longer grace than the AI.
        *
        * Automatic recovery used to live inside the AI branch, so a human who
@@ -517,6 +543,40 @@ export class Simulation {
     return Math.hypot(racer.velocity.x, racer.velocity.z) < RACE.stuckSpeed;
   }
 
+  /**
+   * A gentle steer that holds the racing line, for the opening seconds only.
+   *
+   * Pure pursuit to a point ahead plus a cross-track term, which is the same
+   * shape the AI's line following uses — deliberately, so the assist behaves
+   * like the car is being driven rather than like it is on rails, and hands
+   * over to the player without a discontinuity.
+   */
+  private laneKeepSteer(racer: RacerState): number {
+    const projection = this.track.project(racer.pos, racer.path);
+    /*
+     * Speed-scaled lookahead, not a fixed one. A fixed distance is too short at
+     * racing speed and oscillates — the same lesson the AI's line following
+     * already records.
+     */
+    const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
+    const ahead = this.track.sampleMain(projection.mainDistance + 14 + speed * 0.55);
+    const desired = Math.atan2(ahead.pos.z - racer.pos.z, ahead.pos.x - racer.pos.x);
+    let error = desired - racer.heading;
+    while (error > Math.PI) error -= Math.PI * 2;
+    while (error < -Math.PI) error += Math.PI * 2;
+    const cross = -projection.lateral / Math.max(4, projection.halfWidth);
+    return clamp(error * 2.4 + cross * 0.75, -1, 1);
+  }
+
+  /** The two hull lobes of a skiff, nose first. See `COLLISION.radius`. */
+  private static lobes(racer: RacerState): [Vec2, Vec2] {
+    const forward = fromHeading(racer.heading);
+    return [
+      { x: racer.pos.x + forward.x * COLLISION.lobeOffset, z: racer.pos.z + forward.z * COLLISION.lobeOffset },
+      { x: racer.pos.x - forward.x * COLLISION.lobeOffset, z: racer.pos.z - forward.z * COLLISION.lobeOffset },
+    ];
+  }
+
   private resolveRacerCollisions(dt: number): void {
     const minDist = COLLISION.radius * 2;
     for (let i = 0; i < this.racers.length; i++) {
@@ -524,10 +584,34 @@ export class Simulation {
       for (let j = i + 1; j < this.racers.length; j++) {
         const b = this.racers[j] as RacerState;
         if (Math.abs(a.y - b.y) > 2.6) continue;
-        const dist = distance(a.pos, b.pos);
+
+        /*
+         * Resolve the deepest of the four lobe pairs.
+         *
+         * Taking the deepest rather than all four keeps one contact per pair
+         * per step — resolving several would apply the impulse repeatedly and
+         * turn a graze into a launch — while still putting the contact point
+         * where the hulls actually meet, which is what makes the direction of a
+         * shove readable.
+         */
+        const aLobes = Simulation.lobes(a);
+        const bLobes = Simulation.lobes(b);
+        let dist = Infinity;
+        let contactA = a.pos;
+        let contactB = b.pos;
+        for (const lobeA of aLobes) {
+          for (const lobeB of bLobes) {
+            const d = distance(lobeA, lobeB);
+            if (d < dist) {
+              dist = d;
+              contactA = lobeA;
+              contactB = lobeB;
+            }
+          }
+        }
         if (dist >= minDist || dist < 1e-6) continue;
 
-        const n = normalize({ x: b.pos.x - a.pos.x, z: b.pos.z - a.pos.z });
+        const n = normalize({ x: contactB.x - contactA.x, z: contactB.z - contactA.z });
         const overlap = minDist - dist;
         const totalMass = a.spec.mass + b.spec.mass;
         let aShare = b.spec.mass / totalMass;
@@ -575,7 +659,9 @@ export class Simulation {
               racer: a.index,
               other: b.index,
               speed: -closing,
-              pos: { x: (a.pos.x + b.pos.x) / 2, z: (a.pos.z + b.pos.z) / 2 },
+              // The point where the hulls met, not the midpoint between two
+              // centres: it is what the debris cone is thrown from.
+              pos: { x: (contactA.x + contactB.x) / 2, z: (contactA.z + contactB.z) / 2 },
             });
           }
         } else {
@@ -680,8 +766,31 @@ export class Simulation {
             break;
           }
           case 'gust': {
+            /*
+             * The wind has a lee, and finding it is the mechanic.
+             *
+             * A review measured the gust sequence costing a clean line 47% of
+             * its speed with "no legible lane or timing counter" — momentum
+             * survived, but the signature hazard read as a long tax rather than
+             * something to be driven. A hazard with no counterplay is not a
+             * decision, it is a toll.
+             *
+             * So the strength falls away on the *upwind* side of the corridor,
+             * where the standing structures break it. Tucking up the windward
+             * edge is measurably faster, costs you the inside line for whatever
+             * comes next, and is learnable in one lap because the wind always
+             * blows the same way. `tests/unit/mechanics.test.ts` asserts the
+             * lane is actually worth taking.
+             */
             const dir = hazard.direction ?? 0;
-            const strength = (hazard.strength ?? 1) * HAZARDS.gustStrength;
+            const projection = this.track.project(racer.pos, racer.path);
+            // Where the racer sits across the corridor, -1 to 1.
+            const across = clamp(projection.lateral / Math.max(1, projection.halfWidth), -1, 1);
+            // Which way the wind pushes, in the same terms.
+            const push = Math.sign(Math.cos(dir) * projection.normal.x + Math.sin(dir) * projection.normal.z) || 1;
+            // Full strength downwind, a fraction of it hard against the lee.
+            const exposure = lerp(HAZARDS.gustLee, 1, clamp01((across * push + 1) / 2));
+            const strength = (hazard.strength ?? 1) * HAZARDS.gustStrength * exposure;
             racer.velocity = {
               x: racer.velocity.x + Math.cos(dir) * strength * dt,
               z: racer.velocity.z + Math.sin(dir) * strength * dt,

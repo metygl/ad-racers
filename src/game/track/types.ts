@@ -261,6 +261,18 @@ export interface Path {
   /** Main-centreline span this path covers (identical to [0, length] for main). */
   entryMainDistance: number;
   exitMainDistance: number;
+  /**
+   * Seconds this branch saves against the main line, driven ideally.
+   *
+   * Derived at build time from length and per-metre surface speed caps, so it
+   * accounts for a shortcut that is shorter *and slower* — which is what
+   * Glasshouse's Rootway and Saltflat's lagoon both were. Zero on the main line.
+   *
+   * The AI's route choice reads this rather than rolling dice, which is what
+   * makes "bolder drivers take thinner margins" a real property instead of a
+   * claim in a comment.
+   */
+  idealGain: number;
 }
 
 export interface Checkpoint {

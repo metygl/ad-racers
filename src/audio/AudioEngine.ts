@@ -114,7 +114,29 @@ export class AudioEngine {
       this.effectsGain = context.createGain();
       this.musicGain.connect(this.masterGain);
       this.effectsGain.connect(this.masterGain);
-      this.masterGain.connect(context.destination);
+
+      /*
+       * A limiter between the master bus and the speakers.
+       *
+       * The measured headroom today is healthy — an audio review put a staged
+       * six-car collision at -1.8 dBFS with no clipped frames — but nothing
+       * *protected* it. The mix has twenty simultaneous voices at its peak and
+       * every future cue stacks onto the same bus, so the first time a busier
+       * moment lands it clips, and clipping is the one audio fault a player
+       * cannot un-hear.
+       *
+       * Set transparent rather than loud: it sits above the working peak and
+       * only catches the sum nobody predicted. A fast attack and a slow release
+       * keep it from breathing on the engine loops underneath.
+       */
+      const limiter = context.createDynamicsCompressor();
+      limiter.threshold.value = -3;
+      limiter.knee.value = 2;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.18;
+      this.masterGain.connect(limiter);
+      limiter.connect(context.destination);
 
       this.buildBuffers(context);
       this.applySettings();
@@ -345,15 +367,36 @@ export class AudioEngine {
    * reverse: a player who cannot hear a strike land because a chord was
    * playing has been failed by the mix, not by the sound.
    */
+  /**
+   * Steps the music bed back for a priority moment.
+   *
+   * Ducking only the pulse loop left the ambience, wind and the rest of the
+   * music bus at full level under a collision, a strike or a finish — so the
+   * moment the mix most needs to open up was the moment it stayed exactly as
+   * dense as before. The whole music group now steps back together, which is
+   * what ducking means, and the pulse still takes the deeper cut because it is
+   * the most rhythmically insistent part of it.
+   */
   private duck(amount = 0.55, seconds = 0.35): void {
     const context = this.context;
-    const gain = this.pulseGain;
-    if (!context || !gain) return;
+    if (!context) return;
     const now = context.currentTime;
-    const target = this.intensity * 0.5;
-    gain.gain.cancelScheduledValues(now);
-    gain.gain.setTargetAtTime(target * (1 - amount), now, 0.02);
-    gain.gain.setTargetAtTime(target, now + seconds, 0.18);
+
+    const pulse = this.pulseGain;
+    if (pulse) {
+      const target = this.intensity * 0.5;
+      pulse.gain.cancelScheduledValues(now);
+      pulse.gain.setTargetAtTime(target * (1 - amount), now, 0.02);
+      pulse.gain.setTargetAtTime(target, now + seconds, 0.18);
+    }
+
+    const music = this.musicGain;
+    if (music) {
+      const target = clamp01(this.settings.music) * 0.5;
+      music.gain.cancelScheduledValues(now);
+      music.gain.setTargetAtTime(target * (1 - amount * 0.6), now, 0.02);
+      music.gain.setTargetAtTime(target, now + seconds, 0.22);
+    }
   }
 
   play(sound: OneShot, options: { volume?: number; rate?: number; pan?: number } = {}): void {
@@ -592,7 +635,11 @@ export class AudioEngine {
           if (simulation.racers[event.racer]?.isPlayer) this.play('lap', { volume: 0.6 });
           break;
         case 'finish':
-          if (simulation.racers[event.racer]?.isPlayer) this.play('finish', { volume: 0.75 });
+          if (simulation.racers[event.racer]?.isPlayer) {
+            this.play('finish', { volume: 0.75 });
+            // The one moment in the race that should have the mix to itself.
+            this.duck(0.7, 1.2);
+          }
           break;
         default:
           break;

@@ -302,7 +302,11 @@ export class InputManager {
     }
 
     // --- touch --------------------------------------------------------------
-    if (this.touch.accelerate) throttle = 1;
+    let automaticThrottle = false;
+    if (this.touch.accelerate) {
+      throttle = 1;
+      automaticThrottle = true;
+    }
     if (this.touch.brake) brake = true;
     if (this.touch.drift) drift = true;
     if (this.touch.hop) hop = true;
@@ -329,6 +333,7 @@ export class InputManager {
     input.boost = boost;
     input.strike = strike;
     input.respawn = respawn;
+    input.automaticThrottle = automaticThrottle;
 
     this.pressedThisFrame.clear();
     return input;

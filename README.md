@@ -8,6 +8,8 @@ Six crews. Three courses. Two seats per skiff: a pilot on the spine and a
 wrench in the outrigger pod who can swing a grapple arm at anyone running
 alongside.
 
+**Play it:** <https://metygl.github.io/ad-racers/>
+
 No backend, no accounts, no analytics, no ads, no asset files. One runtime
 dependency. 178 kB gzipped, and it runs offline once loaded.
 
@@ -171,15 +173,13 @@ The site is a static bundle with hashed filenames and a configurable base path.
 push to `main`, deriving the base path from the repository name so a fork under
 a different name works unchanged.
 
-> **⚠ The live site is not yet enabled.** This repository is private, and the
-> account's current plan does not permit GitHub Pages from a private
-> repository — the API returns
-> `Your current plan does not support GitHub Pages for this repository.`
-> (HTTP 422). The build and workflow are complete and will publish as soon as
-> either the repository is made public or the account is upgraded. See
-> [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+**Live site:** <https://metygl.github.io/ad-racers/>
 
-Meanwhile the production build runs anywhere that serves static files:
+Pages is enabled and sourced from GitHub Actions. The site is published by the
+first run of the deploy workflow on `main`; until that lands the URL returns a
+404. See [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+
+The production build also runs anywhere that serves static files:
 
 ```bash
 npm run build
@@ -226,8 +226,6 @@ meshes or textures from any existing title.
 
 ## Known limitations
 
-- **The live site is not enabled** — see Deployment above. This is a plan
-  restriction, not a build problem.
 - **Software WebGL is functional but not smooth.** Verified in CI under
   SwiftShader; a real mobile GPU sits far above that, but there is no hardware
   mobile measurement in this repository yet.

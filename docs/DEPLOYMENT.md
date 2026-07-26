@@ -1,40 +1,38 @@
 # Deployment
 
-## Status: blocked on an account decision
+## Status: enabled
 
-The build and the deployment workflow are complete and tested. The live site is
-**not** enabled, for one specific reason:
+The repository was made public and GitHub Pages is enabled, sourced from GitHub
+Actions:
 
 ```
 $ gh api -X POST repos/metygl/ad-racers/pages -f build_type=workflow
-{
-  "message": "Your current plan does not support GitHub Pages for this repository.",
-  "status": "422"
-}
+{ "build_type": "workflow", "html_url": "https://metygl.github.io/ad-racers/" }
 ```
 
-`metygl/ad-racers` is a **private** repository. GitHub Pages can only publish
-from a private repository on a paid plan (Pro, Team or Enterprise); on the Free
-plan it is available for public repositories only.
+**Site URL:** <https://metygl.github.io/ad-racers/>
 
-Nothing about the project is wrong — `npm run build` produces a correct,
-budgeted, base-path-aware bundle, and `.github/workflows/deploy.yml` will
-publish it without modification the moment Pages becomes available.
+The site publishes when `.github/workflows/deploy.yml` runs, which happens on
+every push to `main`. Until the first such push lands the URL will 404 — Pages
+is configured but has no artefact yet. Nothing further is needed to make it
+work.
 
-### What would unblock it
+### Why it was blocked before
 
-| Option | Effect | Cost |
-| --- | --- | --- |
-| **Make the repository public** | Pages works immediately on the Free plan. The workflow needs no change. | Source code becomes public. |
-| **Upgrade the account to GitHub Pro** | Pages works from the private repository. The published *site* is still public — Pages access control is Enterprise-only. | Paid subscription. |
-| **Use a different static host** | Netlify, Cloudflare Pages, Vercel and others publish from a private repository on free tiers. | A new account/credential, and a host the brief did not specify. |
-| **Ship without a live site** | Everything else is complete; the site is enabled later. | No public URL. |
+For the record, since the workflow was written against this constraint: while
+the repository was private, enabling Pages returned
 
-This is an ownership decision about public exposure and billing, so it is not
-one to make silently. The brief is explicit that a different host must not be
-substituted without saying so.
+```
+422 "Your current plan does not support GitHub Pages for this repository."
+```
 
----
+GitHub Pages publishes from a private repository only on a paid plan; on the
+Free plan it is available for public repositories only. Making the repository
+public was chosen over upgrading the account or moving to another host.
+
+Note that a Pages site is publicly readable regardless of repository
+visibility — access control for Pages is an Enterprise feature. Publishing the
+game was always going to mean publishing the game.
 
 ## What is already in place
 

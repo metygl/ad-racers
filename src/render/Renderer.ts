@@ -97,6 +97,11 @@ const DEFAULT_BED: SurfaceBed = { kind: 'dust', rate: 1, scale: 1 };
  */
 const NEAR_MISS_DISTANCE = 3.6;
 const NEAR_MISS_CLOSING = 7;
+/**
+ * Inside this the two are touching, not passing, and the collision feedback
+ * owns the moment.
+ */
+const NEAR_MISS_CONTACT = 1.9;
 /** Seconds before the same rival can trigger another. */
 const NEAR_MISS_COOLDOWN = 1.2;
 
@@ -769,7 +774,23 @@ export class GameRenderer {
       // Relative speed along the line between them: positive is separating.
       const relative =
         ((rival.velocity.x - focus.velocity.x) * dx + (rival.velocity.z - focus.velocity.z) * dz) / Math.max(0.01, distance);
-      if (Math.abs(relative) < NEAR_MISS_CLOSING) continue;
+
+      /*
+       * A near miss is a pass that has *already happened*.
+       *
+       * The first version accepted any large radial speed, in either sign, so
+       * it announced a rival that was closing hard into a collision as a near
+       * miss — and then stacked its camera kick on top of the impact feedback a
+       * few frames later. A cue that fires before the event it names is worse
+       * than no cue: it teaches the player the wrong thing about what just
+       * happened.
+       *
+       * Separating is therefore required, not merely fast, and anything in
+       * contact or fresh out of a contact is excluded outright.
+       */
+      if (relative < NEAR_MISS_CLOSING) continue;
+      if (focus.contactCooldown > 0 || rival.contactCooldown > 0) continue;
+      if (distance < NEAR_MISS_CONTACT) continue;
 
       this.nearMissCooldowns.set(rival.index, NEAR_MISS_COOLDOWN);
       const intensity = clamp01((NEAR_MISS_DISTANCE - distance) / NEAR_MISS_DISTANCE);

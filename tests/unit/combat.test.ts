@@ -312,3 +312,83 @@ describe('combat balance', () => {
     });
   });
 });
+
+describe('the pod arm explains itself', () => {
+  /**
+   * The round-2 gameplay review attempted six strikes across a full race,
+   * landed none, and could not tell whether it had chosen the wrong side,
+   * lacked longitudinal overlap, was out of reach, hit a guard, was on
+   * cooldown, or simply mistimed it. The interface said `POD ARM READY`
+   * throughout. Combat that is completely deterministic still reads as
+   * arbitrary if none of that is ever said out loud.
+   */
+  it('reports why an input was refused', () => {
+    const sim = new Simulation(buildSetup({ trackId: 'overgrown-interchange', playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+    const player = sim.player;
+    if (!player) throw new Error('no player');
+
+    // Swing, then immediately swing again: the second is refused for a reason
+    // the player has no other way of learning.
+    sim.step({ ...emptyInput(), throttle: 1, strike: 1 });
+    sim.drainEvents();
+
+    const reasons = new Set<string>();
+    for (let i = 0; i < Math.ceil(1.5 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1, strike: 1 });
+      for (const event of sim.drainEvents()) {
+        if (event.type === 'strikeRejected' && event.racer === player.index) reasons.add(event.reason);
+      }
+    }
+
+    expect(reasons.size, 'a refused strike said nothing at all').toBeGreaterThan(0);
+  });
+
+  it('reports a swing that touched nothing', () => {
+    const sim = new Simulation(buildSetup({ trackId: 'overgrown-interchange', entries: 1, playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+
+    // Past the start grace, or the swing is refused rather than thrown.
+    for (let i = 0; i < Math.ceil((COMBAT.graceAfterStart + 0.2) / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1 });
+      sim.drainEvents();
+    }
+
+    // Alone on the course, so the swing cannot possibly connect.
+    let missed = false;
+    sim.step({ ...emptyInput(), throttle: 1, strike: 1 });
+    sim.drainEvents();
+    for (let i = 0; i < Math.ceil(1.5 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1 });
+      for (const event of sim.drainEvents()) if (event.type === 'strikeMiss') missed = true;
+    }
+
+    expect(missed, 'a swing at nothing produced no miss').toBe(true);
+  });
+
+  it('knows which side has a target before the player commits', () => {
+    const sim = new Simulation(buildSetup({ trackId: 'overgrown-interchange', playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+    const player = sim.player;
+    const rival = sim.racers[1];
+    if (!player || !rival) throw new Error('no field');
+
+    // Park a rival squarely off the player's right.
+    const right = { x: -Math.sin(player.heading), z: Math.cos(player.heading) };
+    rival.pos = { x: player.pos.x + right.x * 2.4, z: player.pos.z + right.z * 2.4 };
+    rival.heading = player.heading;
+    sim.step({ ...emptyInput(), throttle: 1 });
+    sim.drainEvents();
+
+    expect(player.strike.reachRight, 'a rival alongside was not reported in reach').toBe(true);
+  });
+});

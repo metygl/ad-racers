@@ -529,6 +529,21 @@ export class AudioEngine {
           this.play('strike', { volume: volume * 0.6, pan });
           break;
         }
+        case 'strikeMiss': {
+          /*
+           * A miss gets its own end point. Without one, a swing that touched
+           * nothing sounds exactly like a swing that was never thrown, and the
+           * player learns nothing from either.
+           */
+          const { volume, pan } = spatial(simulation.racers[event.racer]);
+          this.play('scrape', { volume: volume * 0.22, rate: 1.9, pan });
+          break;
+        }
+        case 'strikeRejected': {
+          // Quiet and dry: an interface sound, not a race event.
+          if (simulation.racers[event.racer]?.isPlayer) this.play('uiBack', { volume: 0.35 });
+          break;
+        }
         case 'strikeHit': {
           const { volume, pan } = spatial(simulation.racers[event.target]);
           this.play('strikeHit', { volume: volume * (0.5 + event.strength * 0.5), pan });

@@ -47,6 +47,32 @@ export function canStartStrike(racer: RacerState, raceTime: number): boolean {
 export function stepCombat(racer: RacerState, input: ControlInput, ctx: CombatContext): void {
   const strike = racer.strike;
 
+  /*
+   * Reach, refreshed every step for both sides, so the interface can say what
+   * is possible before the player commits rather than after they have missed.
+   */
+  strike.reachLeft = ctx.racers.some(
+    (target) => target.index !== racer.index && !target.finished && isInStrikeEnvelope(racer, target, -1),
+  );
+  strike.reachRight = ctx.racers.some(
+    (target) => target.index !== racer.index && !target.finished && isInStrikeEnvelope(racer, target, 1),
+  );
+
+  if (input.strike !== 0 && !canStartStrike(racer, ctx.raceTime)) {
+    // Say why. The reasons are ordered by how surprising they are to a player
+    // who has just pressed a button and seen nothing happen.
+    const reason = racer.strike.phase !== 'idle'
+      ? 'busy'
+      : racer.airborne
+        ? 'airborne'
+        : racer.stagger > 0
+          ? 'staggered'
+          : ctx.raceTime < COMBAT.graceAfterStart
+            ? 'tooEarly'
+            : 'cooldown';
+    ctx.events.push({ type: 'strikeRejected', racer: racer.index, reason });
+  }
+
   if (input.strike !== 0 && canStartStrike(racer, ctx.raceTime)) {
     strike.phase = 'windup';
     strike.timer = COMBAT.windup;
@@ -72,6 +98,11 @@ export function stepCombat(racer: RacerState, input: ControlInput, ctx: CombatCo
         resolveSwing(racer, ctx);
         break;
       case 'active':
+        // A swing that touched nothing has its own event: a miss the player
+        // cannot distinguish from a rejection teaches them nothing either way.
+        if (strike.hitThisSwing.length === 0) {
+          ctx.events.push({ type: 'strikeMiss', racer: racer.index, side: strike.side });
+        }
         strike.phase = 'recovery';
         strike.timer = COMBAT.recovery;
         break;

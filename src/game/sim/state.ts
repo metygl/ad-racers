@@ -39,6 +39,18 @@ export function emptyInput(): ControlInput {
 export type StrikePhase = 'idle' | 'windup' | 'active' | 'recovery';
 
 export interface StrikeState {
+  /**
+   * Whether a rival is currently inside the strike envelope on each side.
+   *
+   * Exposed as *state* rather than inferred from events because the HUD has to
+   * say it **before** the player commits. A review attempted six strikes over a
+   * full race, landed none, and could not tell whether it had chosen the wrong
+   * side, lacked overlap, was out of reach, was on cooldown or simply mistimed
+   * it — the interface said `POD ARM READY` throughout. Reach is the single
+   * most useful thing it could have said instead.
+   */
+  reachLeft: boolean;
+  reachRight: boolean;
   phase: StrikePhase;
   /** Seconds remaining in the current phase. */
   timer: number;
@@ -224,6 +236,13 @@ export type SimEvent =
   | { type: 'finish'; racer: number; position: number; time: number }
   | { type: 'raceEnd' }
   | { type: 'strikeSwing'; racer: number; side: -1 | 1 }
+  /** A swing that reached the end of its active window without contact. */
+  | { type: 'strikeMiss'; racer: number; side: -1 | 1 }
+  /**
+   * An input the simulation refused, and why. Silent rejection is what makes a
+   * mechanic feel arbitrary even when it is completely deterministic.
+   */
+  | { type: 'strikeRejected'; racer: number; reason: 'cooldown' | 'airborne' | 'staggered' | 'tooEarly' | 'busy' }
   | { type: 'strikeHit'; attacker: number; target: number; strength: number; pos: Vec2 }
   | { type: 'strikeCounter'; a: number; b: number }
   | { type: 'collision'; racer: number; other: number | null; speed: number; pos: Vec2 }

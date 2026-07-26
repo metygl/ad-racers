@@ -125,7 +125,7 @@ export class Simulation {
       airGroundDrop: 0,
       lastProgressDistance: gridDistance,
       drift: { active: false, direction: 0, charge: 0 },
-      strike: { phase: 'idle', timer: 0, side: 1, cooldown: 0, hitThisSwing: [] },
+      strike: { phase: 'idle', timer: 0, side: 1, cooldown: 0, hitThisSwing: [], reachLeft: false, reachRight: false },
       stagger: 0,
       guards: [],
       strikesLanded: 0,

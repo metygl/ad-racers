@@ -296,9 +296,30 @@ export class Hud {
 
     this.updateGaps(simulation);
 
-    this.strikeState.className = `strike strike--${player.strike.phase}`;
+    /*
+     * Say what the pod arm can actually do, not just that it exists.
+     *
+     * A review attempted six strikes across a full race, landed none, and had
+     * no way to tell whether it had picked the wrong side, lacked overlap, was
+     * out of reach or was on cooldown — this line read `POD ARM READY`
+     * throughout. Reach is the one thing that makes the decision legible before
+     * it is made, so it is what the line says when there is something to hit.
+     */
+    const { reachLeft, reachRight, phase, cooldown } = player.strike;
+    const inReach = reachLeft || reachRight;
+    this.strikeState.className = `strike strike--${phase}${inReach && phase === 'idle' && cooldown <= 0 ? ' strike--reach' : ''}`;
     this.strikeState.textContent =
-      player.strike.cooldown > 0 && player.strike.phase === 'idle' ? 'Pod arm resetting' : 'Pod arm ready';
+      phase !== 'idle'
+        ? 'Pod arm swinging'
+        : cooldown > 0
+          ? 'Pod arm resetting'
+          : reachLeft && reachRight
+            ? 'Pod arm — target either side'
+            : reachLeft
+              ? 'Pod arm — target left'
+              : reachRight
+                ? 'Pod arm — target right'
+                : 'Pod arm ready';
 
     const countdown = simulation.countdown;
     if (simulation.phase === 'countdown') {
@@ -492,6 +513,25 @@ export class Hud {
           break;
         case 'strikeCounter':
           if (event.a === player.index || event.b === player.index) this.notify('Countered', 'info');
+          break;
+        case 'strikeMiss':
+          // A miss and a refusal look identical from the driver's seat unless
+          // the game distinguishes them, and then combat reads as arbitrary.
+          if (event.racer === player.index) this.notify('Swung wide', 'info');
+          break;
+        case 'strikeRejected':
+          if (event.racer === player.index) {
+            this.notify(
+              {
+                cooldown: 'Pod arm still resetting',
+                airborne: 'No swing in the air',
+                staggered: 'Staggered — no swing',
+                tooEarly: 'Pod arm stows until the green',
+                busy: 'Already swinging',
+              }[event.reason],
+              'bad',
+            );
+          }
           break;
         case 'driftRelease':
           if (event.racer === player.index) {

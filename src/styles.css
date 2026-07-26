@@ -1349,6 +1349,15 @@ body {
   border-radius: 999px;
 }
 
+/*
+ * A target is in reach. The one moment the pod arm is a decision rather than a
+ * button, so it is the one moment this line changes colour.
+ */
+.strike--reach {
+  color: var(--signal);
+  border-color: color-mix(in srgb, var(--signal) 45%, transparent);
+}
+
 .strike--windup {
   color: var(--amber);
 }

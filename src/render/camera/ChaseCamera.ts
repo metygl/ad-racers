@@ -43,6 +43,19 @@ export class ChaseCamera {
     this.camera = new THREE.PerspectiveCamera(62, aspect, 0.5, 4200);
   }
 
+  /**
+   * The direction the camera is looking, as a plain simulation-space heading.
+   *
+   * Exposed because the audio listener needs it, and reading it back out of
+   * `camera.rotation.y` does not work: that is an Euler angle extracted from a
+   * `lookAt` matrix that also carries pitch, so it is neither the view heading
+   * nor a fixed offset from it. Panning built on it put a rival directly
+   * alongside in the centre of the mix and a rival dead ahead hard in one ear.
+   */
+  get listenerYaw(): number {
+    return this.yaw;
+  }
+
   setAspect(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();

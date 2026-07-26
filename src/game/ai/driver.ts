@@ -344,10 +344,19 @@ function steerTowardsLine(racer: RacerState, ctx: AiContext, lateral: number, lo
   const crossTrack = clamp((lateral - projection.lateral) / Math.max(4, projection.halfWidth), -1.5, 1.5);
 
   const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
+  // Opposite lock. `slip` is positive when the skiff is sliding towards its own
+  // right, which is the slide you catch by steering right.
   const damping = racer.slip * clamp01(speed / 30) * 0.55;
 
-  // Positive steer turns right; a positive heading error means turn left.
-  return clamp(-(error * AI_TUNING.headingGain + crossTrack * AI_TUNING.crossTrackGain + damping), -1, 1);
+  /*
+   * Positive steer turns right, and a positive heading error means the target
+   * is to the right — so every term carries straight through with no negation.
+   *
+   * This used to be negated as a whole, which cancelled a matching sign error
+   * in `stepVehicle` and left the AI driving correctly while the player steered
+   * backwards. Both negations are gone; the AI's behaviour is unchanged.
+   */
+  return clamp(error * AI_TUNING.headingGain + crossTrack * AI_TUNING.crossTrackGain + damping, -1, 1);
 }
 
 /** Mean curvature over a stretch of path, used for line and boost decisions. */
@@ -543,7 +552,9 @@ function updateRecovery(racer: RacerState, ctx: AiContext, input: ControlInput):
   if (ai.recovery === 'reverse') {
     input.brake = true;
     input.throttle = 0;
-    input.steer = racer.lateral > 0 ? 0.6 : -0.6;
+    // `lateral` is positive to the right of the centreline, and reversing swings
+    // the nose the opposite way — so back out towards the middle of the road.
+    input.steer = racer.lateral > 0 ? -0.6 : 0.6;
     if (ai.recoveryTimer <= 0) {
       ai.recovery = 'realign';
       ai.recoveryTimer = 1.4;
@@ -555,7 +566,7 @@ function updateRecovery(racer: RacerState, ctx: AiContext, input: ControlInput):
   const projection = ctx.track.project(racer.pos, racer.path);
   const desired = headingOf(projection.tangent);
   const error = angleDelta(racer.heading, desired);
-  input.steer = clamp(-error * 2.2, -1, 1);
+  input.steer = clamp(error * 2.2, -1, 1);
   input.throttle = 0.7;
   if (ai.recoveryTimer <= 0 || (Math.abs(error) < 0.35 && speed > RACE.stuckSpeed * 2)) {
     ai.recovery = 'none';

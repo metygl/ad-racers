@@ -40,7 +40,7 @@ export interface ControlPoint {
   y?: number;
   /** Half-width of the drivable corridor at this point. */
   halfWidth: number;
-  /** Banking in radians; positive banks the left edge up. */
+  /** Banking in radians; positive banks the right edge up. */
   bank?: number;
   surface?: SurfaceId;
   edge?: EdgeKind;
@@ -163,11 +163,11 @@ export interface PathSample {
   y: number;
   /** Unit tangent, pointing forwards along the path. */
   tangent: Vec2;
-  /** Unit normal, pointing to the left of the tangent. */
+  /** Unit normal, pointing to the **right** of the tangent (see `core/math.ts`). */
   normal: Vec2;
   halfWidth: number;
   bank: number;
-  /** Signed curvature (1/m); positive turns left. */
+  /** Signed curvature (1/m); positive is a turn to the **right**. */
   curvature: number;
   /** Arc length from the start of this path. */
   distance: number;
@@ -204,7 +204,7 @@ export interface Projection {
   distance: number;
   /** Equivalent arc length along the main centreline. */
   mainDistance: number;
-  /** Signed lateral offset from the centreline; positive is left. */
+  /** Signed lateral offset from the centreline; positive is to the **right**. */
   lateral: number;
   halfWidth: number;
   /** Interpolated centre position at `distance`. */

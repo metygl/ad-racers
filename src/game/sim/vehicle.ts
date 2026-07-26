@@ -1,6 +1,5 @@
 import type { Rng } from '../../core/rng';
-import { clamp, clamp01, damp, dot, fromHeading, moveTowards, wrapAngle } from '../../core/math';
-import type { Vec2 } from '../../core/math';
+import { clamp, clamp01, damp, dot, fromHeading, moveTowards, rightOf, wrapAngle } from '../../core/math';
 import { COMBAT, DRIFT, PHYSICS, SURGE } from '../config';
 import type { Track } from '../track/buildTrack';
 import { sampleAt } from '../track/buildTrack';
@@ -23,11 +22,6 @@ export interface VehicleStepContext {
   engineScale: number;
   /** Racing has started; before this the vehicles are held on the grid. */
   running: boolean;
-}
-
-/** Unit vector pointing left of the given heading. */
-function leftOf(headingRad: number): Vec2 {
-  return { x: -Math.sin(headingRad), z: Math.cos(headingRad) };
 }
 
 /**
@@ -95,9 +89,11 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
 
   // --- basis and velocity split -------------------------------------------
   const forward = fromHeading(racer.heading);
-  const left = leftOf(racer.heading);
+  const right = rightOf(racer.heading);
   let vLong = dot(racer.velocity, forward);
-  let vLat = dot(racer.velocity, left);
+  // Positive `vLat` is a slide towards the vehicle's right. See the handedness
+  // rule in `core/math.ts`.
+  let vLat = dot(racer.velocity, right);
 
   // --- drift --------------------------------------------------------------
   const wantsDrift = input.drift && vLong > DRIFT.minSpeed && !racer.airborne;
@@ -150,7 +146,7 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   // angle, and the slip angle is the drift.
   {
     const f = fromHeading(racer.heading);
-    const l = leftOf(racer.heading);
+    const l = rightOf(racer.heading);
     racer.velocity = { x: f.x * vLong + l.x * vLat, z: f.z * vLong + l.z * vLat };
   }
 
@@ -175,8 +171,16 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   const gripYawLimit = latAccelMax / Math.max(6, speed);
   const yawRate = Math.min(steerYawRate, gripYawLimit);
 
-  // Positive steer turns right, which is a negative rotation in this basis.
-  const yaw = -racer.steer * yawRate * (vLong < 0 ? -1 : 1);
+  /*
+   * Positive steer turns right, and a turn to the right *increases* the heading
+   * in this basis — see the handedness rule in `core/math.ts`. There is no
+   * negation here and there must never be one: an earlier version had it, which
+   * is precisely how the player's steering ended up mirrored.
+   *
+   * Reversing flips the sign, because the nose swings the other way when the
+   * car is travelling backwards, exactly as it does in a real vehicle.
+   */
+  const yaw = racer.steer * yawRate * (vLong < 0 ? -1 : 1);
   racer.heading = wrapAngle(racer.heading + yaw * dt);
 
   // --- lateral grip -------------------------------------------------------
@@ -184,9 +188,9 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   // lateral component that appears is the skiff sliding, and grip bleeds it off
   // over time rather than instantly.
   const newForward = fromHeading(racer.heading);
-  const newLeft = leftOf(racer.heading);
+  const newRight = rightOf(racer.heading);
   vLong = dot(racer.velocity, newForward);
-  vLat = dot(racer.velocity, newLeft);
+  vLat = dot(racer.velocity, newRight);
 
   let grip = spec.grip * surf.grip;
   if (drifting) grip *= DRIFT.gripMultiplier;
@@ -231,8 +235,8 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
 
   // --- reassemble world velocity -----------------------------------------
   racer.velocity = {
-    x: newForward.x * vLong + newLeft.x * vLat,
-    z: newForward.z * vLong + newLeft.z * vLat,
+    x: newForward.x * vLong + newRight.x * vLat,
+    z: newForward.z * vLong + newRight.z * vLat,
   };
 
   // --- vertical -----------------------------------------------------------
@@ -252,8 +256,8 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
         const loss = clamp01((impact - PHYSICS.cleanLandingSpeed) / 18);
         vLong *= 1 - loss * 0.28;
         racer.velocity = {
-          x: newForward.x * vLong + newLeft.x * vLat,
-          z: newForward.z * vLong + newLeft.z * vLat,
+          x: newForward.x * vLong + newRight.x * vLat,
+          z: newForward.z * vLong + newRight.z * vLat,
         };
       }
       ctx.events.push({ type: 'jumpLand', racer: racer.index, clean, speed: impact });

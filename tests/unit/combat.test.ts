@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromHeading } from '../../src/core/math';
+import { fromHeading, leftOf, rightOf } from '../../src/core/math';
 import { COMBAT, FIXED_STEP } from '../../src/game/config';
 import { applyStrike, canStartStrike, guardMultiplier, isInStrikeEnvelope, stepCombat } from '../../src/game/sim/combat';
 import { Simulation } from '../../src/game/sim/simulation';
@@ -35,11 +35,10 @@ function setup(): { sim: Simulation; a: RacerState; b: RacerState } {
 /** Places `b` alongside `a` at the given side and offsets. */
 function placeAlongside(a: RacerState, b: RacerState, side: -1 | 1, lateral: number, ahead = 0): void {
   const forward = fromHeading(a.heading);
-  const left = { x: -Math.sin(a.heading), z: Math.cos(a.heading) };
-  const sign = side === -1 ? 1 : -1;
+  const out = side === 1 ? rightOf(a.heading) : leftOf(a.heading);
   b.pos = {
-    x: a.pos.x + left.x * lateral * sign + forward.x * ahead,
-    z: a.pos.z + left.z * lateral * sign + forward.z * ahead,
+    x: a.pos.x + out.x * lateral + forward.x * ahead,
+    z: a.pos.z + out.z * lateral + forward.z * ahead,
   };
   b.y = a.y;
   b.heading = a.heading;

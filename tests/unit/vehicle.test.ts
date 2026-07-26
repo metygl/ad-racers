@@ -50,7 +50,14 @@ function laneKeep(sim: Simulation, racer: RacerState): number {
   let error = desired - racer.heading;
   while (error > Math.PI) error -= Math.PI * 2;
   while (error < -Math.PI) error += Math.PI * 2;
-  return Math.max(-1, Math.min(1, -error * 2.2));
+  // A positive heading error means the target is to the right, and positive
+  // steer turns right. See the handedness rule in `src/core/math.ts`.
+  return Math.max(-1, Math.min(1, error * 2.2));
+}
+
+/** Full lock away from the centreline, whichever side the racer is on. */
+function steerOffRoad(racer: RacerState): number {
+  return racer.lateral >= 0 ? 1 : -1;
 }
 
 /** Runs with lane-keeping applied on top of the supplied input. */
@@ -179,15 +186,25 @@ describe('drifting', () => {
   });
 
   it('costs speed, so it is a choice rather than free', () => {
-    const straight = solo();
-    drive(straight.sim, straight.racer, 20, { ...emptyInput(), throttle: 1 });
-    run(straight.sim, 3, { ...emptyInput(), throttle: 1, steer: -0.8 });
+    /*
+     * Measured while both cars are still on the road. Letting them run off
+     * compares two run-offs rather than two lines, and the drifting car — which
+     * arrives slower and at a different angle — can come out of that faster,
+     * which says nothing about whether drifting is free.
+     */
+    const cornerSpeed = (drift: boolean): { speed: number; surface: string } => {
+      const { sim, racer } = solo();
+      drive(sim, racer, 20, { ...emptyInput(), throttle: 1 });
+      run(sim, 0.9, { ...emptyInput(), throttle: 1, steer: -0.8, drift });
+      return { speed: speedOf(racer), surface: racer.surface };
+    };
 
-    const drifted = solo();
-    drive(drifted.sim, drifted.racer, 20, { ...emptyInput(), throttle: 1 });
-    run(drifted.sim, 3, { ...emptyInput(), throttle: 1, steer: -0.8, drift: true });
-
-    expect(speedOf(drifted.racer)).toBeLessThan(speedOf(straight.racer));
+    const drifted = cornerSpeed(true);
+    const held = cornerSpeed(false);
+    // Only meaningful if both cars are still on the same surface; otherwise this
+    // measures a run-off rather than the cost of the slide.
+    expect(drifted.surface).toBe(held.surface);
+    expect(drifted.speed).toBeLessThan(held.speed);
   });
 });
 
@@ -208,7 +225,7 @@ describe('surfaces', () => {
     drive(sim, racer, 25, { ...emptyInput(), throttle: 1 });
     const onRoad = speedOf(racer);
     // Steer off, then straighten and hold the throttle out on the grass.
-    run(sim, 1.6, { ...emptyInput(), throttle: 1, steer: 1 });
+    run(sim, 1.6, { ...emptyInput(), throttle: 1, steer: steerOffRoad(racer) });
     run(sim, 4, { ...emptyInput(), throttle: 1 });
     expect(racer.onTrack).toBe(false);
     expect(speedOf(racer)).toBeLessThan(onRoad * 0.85);
@@ -220,14 +237,14 @@ describe('run-off', () => {
     const { sim, racer } = solo('overgrown-interchange');
     drive(sim, racer, 20, { ...emptyInput(), throttle: 1 });
     // Drive hard off the side, then steer back.
-    run(sim, 3, { ...emptyInput(), throttle: 1, steer: 1 });
+    run(sim, 3, { ...emptyInput(), throttle: 1, steer: steerOffRoad(racer) });
     const worst = Math.abs(racer.lateral);
     expect(worst).toBeGreaterThan(racer.currentHalfWidth);
 
     for (let i = 0; i < Math.ceil(30 / FIXED_STEP); i++) {
       // Steer back towards the centreline. Part throttle, because the turn
       // radius is grip limited: charging back at full speed turns wider.
-      sim.step({ ...emptyInput(), throttle: 0.5, steer: racer.lateral < 0 ? -1 : 1 });
+      sim.step({ ...emptyInput(), throttle: 0.5, steer: racer.lateral < 0 ? 1 : -1 });
       sim.drainEvents();
       if (racer.onTrack) break;
     }

@@ -24,7 +24,7 @@ export interface RingNode {
   halfWidth: number;
   /** Centreline elevation, metres. */
   y?: number;
-  /** Banking, degrees; positive raises the left edge. */
+  /** Banking, degrees; positive raises the right edge. */
   bankDeg?: number;
   surface?: SurfaceId;
   edge?: EdgeKind;
@@ -186,7 +186,7 @@ export function scatterAlong(
     const dx = next.x - base.x;
     const dz = next.z - base.z;
     const len = Math.hypot(dx, dz) || 1;
-    // Left normal of the local direction.
+    // Right-hand normal of the local direction (see `core/math.ts`).
     out.push({ x: base.x + (-dz / len) * lateral(t), z: base.z + (dx / len) * lateral(t) });
   }
   return out;

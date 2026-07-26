@@ -259,7 +259,7 @@ export class AudioEngine {
         // Inverse falloff with a floor, so a pack sounds like a pack rather
         // than like one car that keeps teleporting.
         volume = 0.22 / (1 + distance / 14);
-        const right = Math.sin(listenerHeading) * dx - Math.cos(listenerHeading) * dz;
+        const right = -Math.sin(listenerHeading) * dx + Math.cos(listenerHeading) * dz;
         pan = clamp(right / Math.max(6, distance), -1, 1);
         voice.filter.frequency.setTargetAtTime(2400 - clamp01(distance / 80) * 1500, now, 0.15);
       }
@@ -296,7 +296,7 @@ export class AudioEngine {
       const dx = racer.pos.x - player.pos.x;
       const dz = racer.pos.z - player.pos.z;
       const distance = Math.hypot(dx, dz);
-      const right = Math.sin(listenerHeading) * dx - Math.cos(listenerHeading) * dz;
+      const right = -Math.sin(listenerHeading) * dx + Math.cos(listenerHeading) * dz;
       return { volume: clamp01(1 / (1 + distance / 18)), pan: clamp(right / Math.max(6, distance), -1, 1) };
     };
 

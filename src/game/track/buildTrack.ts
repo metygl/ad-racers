@@ -1,5 +1,5 @@
 import type { Vec2 } from '../../core/math';
-import { clamp, closestPointOnSegment, distanceSq, lerp, normalize } from '../../core/math';
+import { clamp, closestPointOnSegment, distanceSq, lerp, normalize, rightNormal } from '../../core/math';
 import { catmullRom, catmullRomScalar, splineIndex } from './spline';
 import type {
   BranchDefinition,
@@ -170,16 +170,18 @@ function buildPath(
     return {
       ...s,
       tangent,
-      // Left normal: rotating the tangent by +90° on the XZ plane.
-      normal: { x: -tangent.z, z: tangent.x },
+      // Right-hand normal: +90° on the XZ plane is the vehicle's right. See the
+      // handedness rule in `core/math.ts`.
+      normal: rightNormal(tangent),
       curvature: 0,
       mainDistance: entryMainDistance + (length > 1e-6 ? (s.distance / length) * span : 0),
     };
   });
 
   // Signed curvature from the turn angle between consecutive tangents divided
-  // by the arc length between them. Used for AI corner-speed prediction and
-  // for banking the camera, so it needs to be smooth, not just correct.
+  // by the arc length between them; positive is a right-hand corner. Used for
+  // AI corner-speed prediction and for banking the camera, so it needs to be
+  // smooth, not just correct.
   for (let i = 0; i < n; i++) {
     const prev = samples[splineIndex(i - 1, n, closed)] as PathSample;
     const next = samples[splineIndex(i + 1, n, closed)] as PathSample;
@@ -390,7 +392,7 @@ export class Track {
       const t = closestPointOnSegment(point, a.pos, b.pos);
       const center: Vec2 = { x: lerp(a.pos.x, b.pos.x, t), z: lerp(a.pos.z, b.pos.z, t) };
       const tangent = normalize({ x: lerp(a.tangent.x, b.tangent.x, t), z: lerp(a.tangent.z, b.tangent.z, t) });
-      const normal: Vec2 = { x: -tangent.z, z: tangent.x };
+      const normal = rightNormal(tangent);
       const lateral = (point.x - center.x) * normal.x + (point.z - center.z) * normal.z;
       const halfWidth = lerp(a.halfWidth, b.halfWidth, t);
 
@@ -480,7 +482,7 @@ export function sampleAt(path: Path, distance: number): PathSample {
     pos: { x: lerp(a.pos.x, b.pos.x, t), z: lerp(a.pos.z, b.pos.z, t) },
     y: lerp(a.y, b.y, t),
     tangent,
-    normal: { x: -tangent.z, z: tangent.x },
+    normal: rightNormal(tangent),
     halfWidth: lerp(a.halfWidth, b.halfWidth, t),
     bank: lerp(a.bank, b.bank, t),
     curvature: lerp(a.curvature, b.curvature, t),

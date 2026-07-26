@@ -656,15 +656,14 @@ export class App {
       if (events.length > 0) {
         renderer.consumeEvents(events, simulation);
         this.hud.handleEvents(events, simulation);
-        const heading = renderer.chase.camera.rotation.y;
-        this.audio.handleEvents(events, simulation, heading);
+        this.audio.handleEvents(events, simulation, renderer.chase.listenerYaw);
         if (events.some((event) => event.type === 'raceEnd')) {
           this.finishRace();
           return;
         }
       }
 
-      this.audio.updateEngines(simulation, renderer.chase.camera.rotation.y);
+      this.audio.updateEngines(simulation, renderer.chase.listenerYaw);
       this.hud.update(simulation, elapsed);
     } else {
       this.input.poll(elapsed);

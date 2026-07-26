@@ -1,4 +1,4 @@
-import { dot, fromHeading } from '../../core/math';
+import { dot, fromHeading, leftOf, rightOf } from '../../core/math';
 import type { Vec2 } from '../../core/math';
 import { COMBAT, SURGE } from '../config';
 import type { ControlInput, RacerState, SimEvent } from './state';
@@ -27,9 +27,9 @@ export interface CombatContext {
   racers: RacerState[];
 }
 
-/** Unit vector pointing left of a heading. */
-function leftOf(headingRad: number): Vec2 {
-  return { x: -Math.sin(headingRad), z: Math.cos(headingRad) };
+/** Unit vector pointing out along the striking side. */
+function towards(headingRad: number, side: -1 | 1): Vec2 {
+  return side === 1 ? rightOf(headingRad) : leftOf(headingRad);
 }
 
 export function canStartStrike(racer: RacerState, raceTime: number): boolean {
@@ -108,11 +108,10 @@ export function isInStrikeEnvelope(attacker: RacerState, target: RacerState, sid
 
   const rel: Vec2 = { x: target.pos.x - attacker.pos.x, z: target.pos.z - attacker.pos.z };
   const forward = fromHeading(attacker.heading);
-  const left = leftOf(attacker.heading);
   const ahead = dot(rel, forward);
-  // `lateral` is positive to the attacker's left; flip it so it is always
-  // "distance out on the striking side".
-  const lateral = dot(rel, left) * (side === -1 ? 1 : -1);
+  // Measured straight out along the striking side, so it is always "how far out
+  // on the side the arm is swinging towards".
+  const lateral = dot(rel, towards(attacker.heading, side));
 
   const reach = attacker.spec.reach;
   return (
@@ -165,7 +164,7 @@ export function applyStrike(
 
   // Push the target away from the attacker, in the attacker's frame, so a
   // strike always sends the victim outwards rather than through you.
-  const pushDir = side === -1 ? leftOf(attacker.heading) : { x: Math.sin(attacker.heading), z: -Math.cos(attacker.heading) };
+  const pushDir = towards(attacker.heading, side);
   target.velocity = {
     x: target.velocity.x + pushDir.x * shove,
     z: target.velocity.z + pushDir.z * shove,

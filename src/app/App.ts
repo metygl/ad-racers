@@ -184,22 +184,27 @@ export class App {
 
   private updateSettings(next: GameSettings): void {
     const previousQuality = this.save.settings.autoQuality ? 'auto' : this.save.settings.quality;
-    this.save.settings = next;
-    this.input.setBindings(next.bindings);
-    this.applyDocumentSettings();
-    this.persist();
-
     const nextQuality = next.autoQuality ? 'auto' : next.quality;
     if (nextQuality !== previousQuality && this.renderer) {
       const tier: QualityId = next.autoQuality ? detectInitialQuality() : next.quality;
-      this.adaptive.reset(tier);
       const active = this.simulation ?? this.attract;
-      this.renderer.setQuality(tier, active);
+      try {
+        this.renderer.setQuality(tier, active);
+      } catch {
+        this.showSettings();
+        return;
+      }
+      this.adaptive.reset(tier);
       if (!this.simulation) {
         if (tier === 'low') this.stopAttract();
         else if (!this.attract) this.startAttract();
       }
     }
+
+    this.save.settings = next;
+    this.input.setBindings(next.bindings);
+    this.applyDocumentSettings();
+    this.persist();
     this.renderer?.setReducedMotion(next.reducedMotion);
     if (this.renderer) this.renderer.chase.mode = next.cameraMode;
   }

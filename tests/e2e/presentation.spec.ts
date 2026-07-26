@@ -181,7 +181,7 @@ test.describe('accessibility', () => {
       (canvas as HTMLCanvasElement & { originalCanvas?: boolean }).originalCanvas = true;
     });
     await page.getByRole('button', { name: 'Settings' }).click();
-    await page.getByRole('radio', { name: 'Low' }).check();
+    await page.locator('label[for="seg-graphics-quality-low"]').click();
     await expect
       .poll(() =>
         page.locator('#scene').evaluate(
@@ -191,6 +191,32 @@ test.describe('accessibility', () => {
       .toBe(false);
     await page.getByRole('button', { name: 'Back' }).click();
     await expect(page.getByRole('button', { name: 'Race', exact: true })).toBeVisible();
+  });
+
+  test('rolls back a quality setting when context creation fails', async ({ page }) => {
+    await openGame(page);
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.locator('label[for="seg-graphics-quality-medium"]').click();
+    await page.evaluate(() => {
+      const prototype = HTMLCanvasElement.prototype;
+      const original = prototype.getContext;
+      let fail = true;
+      prototype.getContext = function (this: HTMLCanvasElement, ...args: unknown[]) {
+        if (fail && this !== document.querySelector('#scene')) {
+          fail = false;
+          throw new Error('injected context failure');
+        }
+        return (original as (...values: unknown[]) => RenderingContext | null).apply(this, args);
+      } as HTMLCanvasElement['getContext'];
+    });
+
+    await page.locator('label[for="seg-graphics-quality-low"]').click();
+    await expect(page.getByRole('radio', { name: 'Medium' })).toBeChecked();
+    expect(await page.evaluate(() => window.adRacers?.settings().quality)).toBe('medium');
+
+    await page.locator('label[for="seg-graphics-quality-low"]').click();
+    await expect(page.getByRole('radio', { name: 'Low' })).toBeChecked();
+    expect(await page.evaluate(() => window.adRacers?.settings().quality)).toBe('low');
   });
 
   test('cancels key capture when settings returns to pause', async ({ page }) => {

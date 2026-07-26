@@ -1,9 +1,20 @@
 import { AudioEngine } from '../audio/AudioEngine';
-import { clamp01, formatLapTime } from '../core/math';
+import { clamp01, formatLapTime, ordinal } from '../core/math';
 import { PerformanceMonitor } from '../core/perf';
-import { clearSave, defaultSave, loadSave, recordResult, saveSave } from '../core/storage';
+import {
+  clearSave,
+  defaultSave,
+  loadSave,
+  recordCircuit,
+  recordResult,
+  saveSave,
+  unlockedSpeedClasses,
+} from '../core/storage';
 import type { GameSettings, SaveData } from '../core/storage';
-import { FIXED_STEP, MAX_STEPS_PER_FRAME } from '../game/config';
+import { FIXED_STEP, MAX_STEPS_PER_FRAME, SPEED_CLASSES, getSpeedClass } from '../game/config';
+import type { SpeedClass } from '../game/config';
+import { applyRoundResult, createCircuit, isComplete, playerPlace, playerStanding } from '../game/circuit';
+import type { CircuitState } from '../game/circuit';
 import { getDifficulty } from '../game/ai/driver';
 import { InputManager } from '../game/input/InputManager';
 import { bindingLabel } from '../game/input/bindings';
@@ -34,7 +45,27 @@ import { clear, el, trapFocus } from './ui/dom';
  * breakpoint can never make the race play out differently.
  */
 
-type ScreenName = 'loading' | 'title' | 'setup' | 'settings' | 'controls' | 'race' | 'results' | 'error' | 'unsupported';
+type ScreenName =
+  | 'loading'
+  | 'title'
+  | 'setup'
+  | 'settings'
+  | 'controls'
+  | 'race'
+  | 'results'
+  | 'error'
+  | 'unsupported';
+
+/**
+ * How the current race came to exist.
+ *
+ * A championship round and a one-off race are the same `Simulation` with the
+ * same rules; the only difference is what happens at the results screen. Making
+ * that an explicit mode rather than a nullable circuit field is what keeps
+ * "restart" honest: restarting a championship round has to replay *that round's*
+ * seed, not roll a new race.
+ */
+type RaceMode = 'single' | 'circuit';
 
 export interface AppOptions {
   root: HTMLElement;
@@ -76,7 +107,10 @@ export class App {
   private systemReducedMotion = false;
   private contextLost = false;
   private raceSeed = 1;
+  private raceMode: RaceMode = 'single';
+  private circuit: CircuitState | null = null;
   private lastResultRecords = { race: false, lap: false };
+  private lastUnlock: string | null = null;
   private detachInput: (() => void) | null = null;
   private lastPlayerInput: ControlInput = emptyInput();
 
@@ -254,19 +288,44 @@ export class App {
   }
 
   private showTitle(): void {
+    this.raceMode = 'single';
+    this.circuit = null;
     this.stopRace();
     this.showScreen(
       'title',
       buildTitleScreen({
         onRace: () => {
           void this.audio.start();
+          this.pendingMode = 'single';
+          if (!this.save.settings.seenControls) this.showControls(true);
+          else this.showSetup();
+        },
+        onCircuit: () => {
+          void this.audio.start();
+          this.pendingMode = 'circuit';
           if (!this.save.settings.seenControls) this.showControls(true);
           else this.showSetup();
         },
         onSettings: () => this.showSettings(),
         onControls: () => this.showControls(false),
         bestSummary: this.bestSummary(),
+        circuitSummary: this.circuitSummary(),
       }),
+    );
+  }
+
+  /** Which mode the setup screen will launch into. */
+  private pendingMode: RaceMode = 'single';
+
+  private circuitSummary(): string | null {
+    const entries = Object.entries(this.save.circuits);
+    if (entries.length === 0) return null;
+    const best = entries.reduce((a, b) => (a[1].place <= b[1].place ? a : b));
+    const [key, record] = best;
+    const [difficultyId, speedClassId] = key.split(':');
+    return (
+      `Circuit best — ${ordinal(record.place)} on ${getDifficulty(difficultyId ?? 'pro').label} ` +
+      `${getSpeedClass(speedClassId ?? 'reclaim').label}`
     );
   }
 
@@ -293,19 +352,30 @@ export class App {
     this.showScreen(
       'setup',
       buildSetupScreen({
+        mode: this.pendingMode,
         selection: {
           trackId: this.save.settings.lastTrack,
           racerId: this.save.settings.lastRacer,
           difficultyId: this.save.settings.lastDifficulty,
+          speedClassId: this.save.settings.lastSpeedClass,
         },
         bests: this.save.bests,
+        unlockedSpeedClasses: unlockedSpeedClasses(this.save, SPEED_CLASSES.map((c) => c.id)),
         onChange: (selection) => {
           this.save.settings.lastTrack = selection.trackId;
           this.save.settings.lastRacer = selection.racerId;
           this.save.settings.lastDifficulty = selection.difficultyId;
+          this.save.settings.lastSpeedClass = selection.speedClassId;
           this.persist();
         },
-        onStart: () => this.startRace(),
+        onStart: () => {
+          if (this.pendingMode === 'circuit') this.startCircuit();
+          else {
+            this.raceMode = 'single';
+            this.circuit = null;
+            this.startRace();
+          }
+        },
         onBack: () => this.showTitle(),
       }),
     );
@@ -363,14 +433,14 @@ export class App {
 
   // --- race lifecycle -----------------------------------------------------
 
-  private startRace(seed = Math.floor(performance.now()) >>> 0): void {
+  private startRace(seed = Math.floor(performance.now()) >>> 0, trackId = this.save.settings.lastTrack): void {
     if (!this.renderer) return;
     this.stopAttract();
     this.raceSeed = seed;
 
     let track;
     try {
-      track = getTrack(this.save.settings.lastTrack);
+      track = getTrack(trackId);
     } catch (error) {
       this.showScreen(
         'error',
@@ -396,6 +466,7 @@ export class App {
       track,
       entries,
       difficulty: getDifficulty(this.save.settings.lastDifficulty),
+      speedClass: this.activeSpeedClass(),
       seed,
       catchUp: this.save.settings.catchUp,
     });
@@ -466,9 +537,48 @@ export class App {
   }
 
   private restartRace(): void {
-    // Same seed replays exactly the same race, which is what makes "restart"
-    // a real retry rather than a reroll.
-    this.startRace(this.raceSeed);
+    // Same seed *and* same course replays exactly the same race, which is what
+    // makes "restart" a real retry rather than a reroll — and what stops a
+    // restarted championship round quietly becoming a different round.
+    this.startRace(this.raceSeed, this.simulation?.track.definition.id);
+  }
+
+  /**
+   * The speed class the player has actually earned.
+   *
+   * Read through the unlock check rather than straight off the settings,
+   * because a save edited by hand — or one carried over from a session where a
+   * class was unlocked and then the data was cleared — must not be able to
+   * start a race in a class the player has not opened.
+   */
+  private activeSpeedClass(): SpeedClass {
+    const unlocked = unlockedSpeedClasses(this.save, SPEED_CLASSES.map((c) => c.id));
+    const wanted = this.save.settings.lastSpeedClass;
+    return getSpeedClass(unlocked.has(wanted) ? wanted : (SPEED_CLASSES[0]?.id ?? 'reclaim'));
+  }
+
+  /** Starts a fresh championship over every course. */
+  private startCircuit(): void {
+    const playerId = this.save.settings.lastRacer;
+    this.raceMode = 'circuit';
+    this.circuit = createCircuit({
+      seed: Math.floor(performance.now()) >>> 0,
+      difficultyId: this.save.settings.lastDifficulty,
+      speedClassId: this.activeSpeedClass().id,
+      playerProfileId: playerId,
+      entries: [playerId, ...RACERS.filter((r) => r.id !== playerId).map((r) => r.id)],
+    });
+    this.startCircuitRound();
+  }
+
+  private startCircuitRound(): void {
+    const circuit = this.circuit;
+    const round = circuit?.rounds[circuit.currentRound];
+    if (!circuit || !round) {
+      this.showTitle();
+      return;
+    }
+    this.startRace(round.seed, round.trackId);
   }
 
   private showPause(): void {
@@ -518,6 +628,7 @@ export class App {
     if (!simulation) return;
     const player = simulation.player;
     this.audio.stopEngines();
+    const speedClass = this.activeSpeedClass();
 
     this.lastResultRecords = { race: false, lap: false };
     if (player?.completed) {
@@ -527,20 +638,70 @@ export class App {
         player.finishTime,
         player.bestLap,
         this.save.settings.lastDifficulty,
+        speedClass.id,
       );
       this.persist();
     }
 
+    const results = simulation.results();
+    let circuitView: Parameters<typeof buildResultsScreen>[0]['circuit'] = null;
+    this.lastUnlock = null;
+
+    if (this.raceMode === 'circuit' && this.circuit) {
+      const before = new Set(unlockedSpeedClasses(this.save, SPEED_CLASSES.map((c) => c.id)));
+      this.circuit = applyRoundResult(
+        this.circuit,
+        results.map((racer) => ({
+          profileId: racer.profileId,
+          position: racer.finishPosition,
+          time: racer.finishTime,
+        })),
+      );
+      const complete = isComplete(this.circuit);
+      if (complete) {
+        const standing = playerStanding(this.circuit);
+        recordCircuit(this.save, this.circuit.difficultyId, this.circuit.speedClassId, {
+          place: playerPlace(this.circuit),
+          points: standing?.points ?? 0,
+          totalTime: standing?.totalTime ?? Infinity,
+        });
+        this.persist();
+        const after = unlockedSpeedClasses(this.save, SPEED_CLASSES.map((c) => c.id));
+        const opened = [...after].find((id) => !before.has(id));
+        this.lastUnlock = opened ? getSpeedClass(opened).label : null;
+      }
+      circuitView = {
+        round: this.circuit.currentRound,
+        rounds: this.circuit.rounds.length,
+        standings: this.circuit.standings,
+        playerProfileId: this.circuit.playerProfileId,
+        complete,
+        ...(this.lastUnlock ? { unlocked: this.lastUnlock } : {}),
+      };
+    }
+
+    const inCircuit = this.raceMode === 'circuit' && this.circuit !== null;
+    const moreRounds = inCircuit && this.circuit !== null && !isComplete(this.circuit);
+
     this.showScreen(
       'results',
       buildResultsScreen({
-        results: simulation.results(),
+        results,
         playerIndex: player?.index ?? 0,
         track: simulation.track,
         difficultyId: this.save.settings.lastDifficulty,
+        speedClassId: speedClass.id,
         records: this.lastResultRecords,
-        onRematch: () => this.startRace(),
+        circuit: circuitView,
+        primaryLabel: moreRounds ? 'Next round' : inCircuit ? 'New circuit' : 'Rematch',
+        onPrimary: () => {
+          if (moreRounds) this.startCircuitRound();
+          else if (inCircuit) this.startCircuit();
+          else this.startRace();
+        },
         onSetup: () => {
+          this.raceMode = 'single';
+          this.circuit = null;
           this.stopRace();
           this.showSetup();
         },

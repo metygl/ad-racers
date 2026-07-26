@@ -1,6 +1,8 @@
 import { formatLapTime, ordinal } from '../../core/math';
 import type { GameSettings } from '../../core/storage';
 import { getDifficulty } from '../../game/ai/driver';
+import { getSpeedClass } from '../../game/config';
+import type { CircuitStanding } from '../../game/circuit';
 import { getRacer } from '../../game/racers';
 import { ACTIONS, bindingLabel } from '../../game/input/bindings';
 import type { RacerState } from '../../game/sim/state';
@@ -34,12 +36,17 @@ export function buildControlsCard(settings: GameSettings, onDismiss: () => void,
     el('h1', { class: 'screen__heading', id: 'controls-heading', text: 'Controls' }),
     el('p', {
       class: 'screen__lead',
-      text: 'Hold the drift through a corner to bank Surge, then spend it on the straight. Your wrench can swing at anyone running alongside — but you have to earn the position first.',
+      text:
+        'Hold the drift through a corner to bank Surge, then spend it on the exit. Sit in a rival\'s wake to ' +
+        'charge a tow snap, and pull out to spend it. Hop to take a crest level — landing straight and flat ' +
+        'pays. Your wrench can swing at anyone running alongside, but you have to earn the position first.',
     }),
     rows,
     el('p', {
       class: 'settings__note',
-      text: 'A gamepad works too: left stick steers, right trigger accelerates, face buttons drift and Surge, shoulders swing left and right.',
+      text:
+        'A gamepad works too: left stick steers, right trigger accelerates, the bottom face button hops, ' +
+        'the left and top buttons drift and Surge, and the shoulders swing the pod arm left and right.',
     }),
     el('div', { class: 'screen__actions' }, button(dismissLabel, onDismiss, { primary: true, class: 'btn--large' })),
   );
@@ -81,10 +88,69 @@ export interface ResultsActions {
   playerIndex: number;
   track: Track;
   difficultyId: string;
+  speedClassId: string;
   records: { race: boolean; lap: boolean };
-  onRematch: () => void;
+  /** Present when this race was a championship round. */
+  circuit?: {
+    round: number;
+    rounds: number;
+    standings: CircuitStanding[];
+    playerProfileId: string;
+    complete: boolean;
+    /** Set when finishing the championship opened a new speed class. */
+    unlocked?: string;
+  } | null;
+  primaryLabel: string;
+  onPrimary: () => void;
   onSetup: () => void;
   onTitle: () => void;
+}
+
+/** The championship table, shared by the results screen and the standings view. */
+export function buildStandingsTable(
+  standings: readonly CircuitStanding[],
+  playerProfileId: string,
+  rounds: number,
+): HTMLElement {
+  const rows = el('ol', { class: 'standings-table__list' });
+  standings.forEach((standing, index) => {
+    const profile = getRacer(standing.profileId);
+    const row = el(
+      'li',
+      {
+        class: `standings-table__row ${standing.profileId === playerProfileId ? 'standings-table__row--player' : ''}`,
+      },
+      el('span', { class: 'standings-table__place', text: String(index + 1) }),
+      el('span', { class: 'standings-table__crew', text: profile.crew }),
+      el(
+        'span',
+        { class: 'standings-table__finishes' },
+        ...Array.from({ length: rounds }, (_, round) =>
+          el('span', {
+            class: `standings-table__pip ${standing.finishes[round] === 1 ? 'standings-table__pip--win' : ''}`,
+            text: standing.finishes[round] === undefined ? '–' : String(standing.finishes[round]),
+          }),
+        ),
+      ),
+      el('span', { class: 'standings-table__points', text: String(standing.points) }),
+    );
+    row.style.setProperty('--crew', `#${profile.colors.body.toString(16).padStart(6, '0')}`);
+    rows.append(row);
+  });
+
+  return el(
+    'div',
+    { class: 'standings-table' },
+    el(
+      'div',
+      { class: 'standings-table__head', 'aria-hidden': 'true' },
+      el('span', { text: '#' }),
+      el('span', { text: 'Crew' }),
+      el('span', { text: 'Rounds' }),
+      el('span', { text: 'Pts' }),
+    ),
+    rows,
+  );
 }
 
 export function buildResultsScreen(actions: ResultsActions): HTMLElement {
@@ -118,7 +184,16 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
     rows.append(row);
   }
 
-  const headline = player
+  const circuit = actions.circuit ?? null;
+  const playerPlace = circuit
+    ? circuit.standings.findIndex((standing) => standing.profileId === circuit.playerProfileId) + 1
+    : 0;
+
+  const headline = circuit?.complete
+    ? playerPlace === 1
+      ? 'Circuit won'
+      : `Circuit finished ${ordinal(playerPlace)}`
+    : player
     ? !player.completed
       ? 'Did not finish'
       : player.finishPosition === 1
@@ -126,14 +201,20 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
       : `Finished ${ordinal(player.finishPosition)}`
     : 'Race complete';
 
+  const subtitle = circuit
+    ? `${actions.track.definition.name} · Round ${circuit.round} of ${circuit.rounds} · ` +
+      `${getDifficulty(actions.difficultyId).label} · ${getSpeedClass(actions.speedClassId).label}`
+    : `${actions.track.definition.name} · ${actions.track.laps} laps · ` +
+      `${getDifficulty(actions.difficultyId).label} · ${getSpeedClass(actions.speedClassId).label}`;
+
   return el(
     'section',
     { class: 'screen screen--results', 'data-screen': 'results', 'aria-labelledby': 'results-heading' },
     el('h1', { class: 'screen__heading', id: 'results-heading', text: headline }),
-    el('p', {
-      class: 'screen__lead',
-      text: `${actions.track.definition.name} · ${actions.track.laps} laps · ${getDifficulty(actions.difficultyId).label}`,
-    }),
+    el('p', { class: 'screen__lead', text: subtitle }),
+    circuit?.unlocked
+      ? el('p', { class: 'results__record results__record--unlock', text: `Unlocked: ${circuit.unlocked} class` })
+      : null,
     actions.records.race || actions.records.lap
       ? el('p', {
           class: 'results__record',
@@ -157,10 +238,18 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
       ),
       rows,
     ),
+    circuit
+      ? el(
+          'div',
+          { class: 'results__standings' },
+          el('h2', { class: 'screen__subheading', text: 'Circuit standings' }),
+          buildStandingsTable(circuit.standings, circuit.playerProfileId, circuit.rounds),
+        )
+      : null,
     el(
       'div',
       { class: 'screen__actions' },
-      button('Rematch', actions.onRematch, { primary: true, class: 'btn--large' }),
+      button(actions.primaryLabel, actions.onPrimary, { primary: true, class: 'btn--large' }),
       button('Change setup', actions.onSetup),
       button('Title', actions.onTitle),
     ),

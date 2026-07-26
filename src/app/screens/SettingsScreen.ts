@@ -4,6 +4,8 @@ import type { ActionId } from '../../game/input/bindings';
 import { QUALITY_ORDER, QUALITY_TIERS } from '../../render/quality';
 import type { QualityId } from '../../render/quality';
 import { button, el, segmented, slider, toggle } from '../ui/dom';
+import { CAMERA_MODES } from '../../render/camera/ChaseCamera';
+import type { CameraMode } from '../../render/camera/ChaseCamera';
 
 /**
  * Settings.
@@ -126,12 +128,9 @@ export function buildSettingsScreen(actions: SettingsActions): HTMLElement {
         settings.showPerformance = v;
         emit();
       }),
-      segmented<'chase' | 'close'>(
+      segmented<CameraMode>(
         'Camera',
-        [
-          { value: 'chase', label: 'Chase' },
-          { value: 'close', label: 'Close' },
-        ],
+        CAMERA_MODES.map((mode) => ({ value: mode.id, label: mode.label })),
         settings.cameraMode,
         (value) => {
           settings.cameraMode = value;

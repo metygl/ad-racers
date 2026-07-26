@@ -1,4 +1,5 @@
 import { clamp01, formatLapTime, ordinal } from '../../core/math';
+import { DRIFT, TOW } from '../../game/config';
 import type { Simulation } from '../../game/sim/simulation';
 import type { SimEvent } from '../../game/sim/state';
 import { displayLap } from '../../game/sim/race';
@@ -34,6 +35,11 @@ export class Hud {
   private readonly speed: HTMLElement;
   private readonly surgeFill: HTMLElement;
   private readonly surgeTier: HTMLElement;
+  private readonly driftPips: HTMLElement[] = [];
+  private readonly towFill: HTMLElement;
+  private readonly towPanel: HTMLElement;
+  private readonly gapAhead: HTMLElement;
+  private readonly gapBehind: HTMLElement;
   private readonly strikeState: HTMLElement;
   private readonly notifications: HTMLElement;
   private readonly countdown: HTMLElement;
@@ -61,6 +67,23 @@ export class Hud {
     this.speed = el('span', { class: 'hud__speed', text: '0' });
     this.surgeFill = el('div', { class: 'surge__fill' });
     this.surgeTier = el('div', { class: 'surge__tier' });
+    /*
+     * The drift ladder, as three discrete pips rather than a continuous bar.
+     *
+     * The payout is tiered, so the readout has to be tiered too: a smooth bar
+     * tells a player how much charge they have, which is not the question they
+     * are asking mid-corner. The question is "have I banked the next tier yet",
+     * and three lights answer it in peripheral vision.
+     */
+    for (let i = 0; i < 3; i++) this.driftPips.push(el('span', { class: 'drift__pip' }));
+    this.towFill = el('div', { class: 'tow__fill' });
+    this.towPanel = el(
+      'div',
+      { class: 'tow', role: 'meter', 'aria-label': 'Tow charge', 'aria-valuemin': '0', 'aria-valuemax': '100' },
+      this.towFill,
+    );
+    this.gapAhead = el('span', { class: 'gap gap--ahead' });
+    this.gapBehind = el('span', { class: 'gap gap--behind' });
     this.strikeState = el('div', { class: 'strike' });
     this.notifications = el('div', { class: 'hud__notifications' });
     this.countdown = el('div', { class: 'countdown', 'aria-hidden': 'true' });
@@ -99,7 +122,13 @@ export class Hud {
           el('div', { class: 'hud__row' }, this.lap, this.lapTotal),
         ),
       ),
-      el('div', { class: 'hud__side' }, this.standings, this.minimap),
+      el(
+        'div',
+        { class: 'hud__side' },
+        el('div', { class: 'hud__gaps' }, this.gapAhead, this.gapBehind),
+        this.standings,
+        this.minimap,
+      ),
       this.countdown,
       this.warning,
       this.notifications,
@@ -116,6 +145,12 @@ export class Hud {
             { class: 'surge', role: 'meter', 'aria-label': 'Surge', 'aria-valuemin': '0', 'aria-valuemax': '100' },
             this.surgeFill,
             this.surgeTier,
+          ),
+          el(
+            'div',
+            { class: 'hud__meters' },
+            el('div', { class: 'drift', 'aria-label': 'Drift charge' }, ...this.driftPips),
+            this.towPanel,
           ),
         ),
       ),
@@ -188,6 +223,22 @@ export class Hud {
     this.surgeTier.style.transform = `scaleX(${clamp01(player.drift.charge)})`;
     this.surgeTier.classList.toggle('surge__tier--charging', player.drift.active);
 
+    const tier = player.drift.active
+      ? DRIFT.tiers.reduce((best, threshold, index) => (player.drift.charge >= threshold ? index : best), -1)
+      : -1;
+    this.driftPips.forEach((pip, index) => {
+      pip.classList.toggle('drift__pip--lit', index <= tier);
+      pip.classList.toggle('drift__pip--charging', player.drift.active && index === tier + 1);
+    });
+
+    const tow = clamp01(player.towCharge);
+    this.towFill.style.transform = `scaleX(${tow})`;
+    this.towPanel.setAttribute('aria-valuenow', String(Math.round(tow * 100)));
+    this.towPanel.classList.toggle('tow--ready', player.towCharge >= TOW.minCharge);
+    this.towPanel.classList.toggle('tow--towing', player.slipstreaming);
+
+    this.updateGaps(simulation);
+
     this.strikeState.className = `strike strike--${player.strike.phase}`;
     this.strikeState.textContent =
       player.strike.cooldown > 0 && player.strike.phase === 'idle' ? 'Pod arm resetting' : 'Pod arm ready';
@@ -222,6 +273,46 @@ export class Hud {
     this.drawMinimap(simulation);
     this.updateSpeedLines(speed, player.boosting);
     this.tickNotifications(elapsed);
+  }
+
+  /**
+   * Time gaps to the racers immediately ahead and behind.
+   *
+   * This is the single most valuable number a racing HUD can show, and the
+   * original build did not have it: without a gap the player has no way to tell
+   * whether a lead is safe, whether a rival is reeling them in, or whether the
+   * lap they just drove was worth anything. It is what turns a procession into a
+   * race that can be *felt*.
+   *
+   * Estimated from progress distance over closing speed rather than measured at
+   * checkpoints, so it updates continuously instead of once every gate. That
+   * makes it approximate by construction, and it is presented to one decimal
+   * accordingly — a spuriously precise number would be worse than a rounded one.
+   */
+  private updateGaps(simulation: Simulation): void {
+    const player = simulation.player;
+    if (!player) return;
+    const order = [...simulation.racers].sort((a, b) => a.position - b.position);
+    const index = order.findIndex((racer) => racer.index === player.index);
+    const ahead = index > 0 ? order[index - 1] : undefined;
+    const behind = index >= 0 && index < order.length - 1 ? order[index + 1] : undefined;
+
+    const format = (other: typeof ahead, sign: string): string => {
+      if (!other || simulation.phase !== 'running') return '';
+      const distance = Math.abs(other.progress - player.progress);
+      // Divide by the *player's* pace, so the number answers "how long would it
+      // take me to cover this", which is the question being asked.
+      const pace = Math.max(8, Math.hypot(player.velocity.x, player.velocity.z));
+      const seconds = distance / pace;
+      if (seconds > 25) return `${sign} —`;
+      return `${sign} ${seconds.toFixed(1)}s`;
+    };
+
+    this.gapAhead.textContent = format(ahead, '▲');
+    this.gapBehind.textContent = format(behind, '▼');
+    // Under a second either way is a fight; the styling says so.
+    this.gapAhead.classList.toggle('gap--close', !!ahead && Math.abs(ahead.progress - player.progress) < 30);
+    this.gapBehind.classList.toggle('gap--close', !!behind && Math.abs(behind.progress - player.progress) < 30);
   }
 
   private updateStandings(simulation: Simulation): void {
@@ -317,6 +408,12 @@ export class Hud {
           if (event.racer === player.index) {
             this.notify(['Drift', 'Strong drift', 'Perfect drift'][event.tier - 1] ?? 'Drift', 'good');
           }
+          break;
+        case 'towSnap':
+          if (event.racer === player.index) this.notify('Tow snap', 'good');
+          break;
+        case 'jumpLand':
+          if (event.racer === player.index && event.quality > 0.6) this.notify('Clean landing', 'good');
           break;
         case 'respawn':
           if (event.racer === player.index) this.notify('Recovered to the racing line', 'info');

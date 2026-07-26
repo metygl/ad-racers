@@ -9,14 +9,24 @@ import { button, el } from '../ui/dom';
 
 export interface TitleActions {
   onRace: () => void;
+  onCircuit: () => void;
   onSettings: () => void;
   onControls: () => void;
   /** Present only once a best time exists somewhere. */
   bestSummary: string | null;
+  /** Present only once a championship has been finished. */
+  circuitSummary: string | null;
 }
 
 export function buildTitleScreen(actions: TitleActions): HTMLElement {
+  /*
+   * Single Race is the primary action and Circuit sits beside it, not above.
+   * A championship is three races long, and a player arriving for the first
+   * time should not have to opt out of a commitment to find out whether they
+   * like the driving.
+   */
   const play = button('Race', actions.onRace, { primary: true, class: 'btn--large' });
+  const circuit = button('Circuit', actions.onCircuit, { class: 'btn--large' });
 
   return el(
     'section',
@@ -32,8 +42,20 @@ export function buildTitleScreen(actions: TitleActions): HTMLElement {
       class: 'title__tagline',
       text: 'Three hundred years after the Long Quiet, the motorways are green again — and the salvage crews race on them.',
     }),
-    el('div', { class: 'title__actions' }, play, button('Settings', actions.onSettings), button('Controls', actions.onControls)),
-    actions.bestSummary ? el('p', { class: 'title__best', text: actions.bestSummary }) : null,
+    el(
+      'div',
+      { class: 'title__actions' },
+      play,
+      circuit,
+      button('Settings', actions.onSettings),
+      button('Controls', actions.onControls),
+    ),
+    el(
+      'div',
+      { class: 'title__records' },
+      actions.bestSummary ? el('p', { class: 'title__best', text: actions.bestSummary }) : null,
+      actions.circuitSummary ? el('p', { class: 'title__best', text: actions.circuitSummary }) : null,
+    ),
     el(
       'footer',
       { class: 'title__footer' },

@@ -77,7 +77,21 @@ describe('save migration', () => {
       settings: { volume: 0.5 },
       bests: { 'overgrown-interchange': { race: 118.4, lap: 38.2, difficulty: 'ace' } },
     });
-    expect(save.bests['overgrown-interchange']).toEqual({ race: 118.4, lap: 38.2, difficulty: 'ace' });
+    // A v1 save predates speed classes, so the time is attributed to the base
+    // class rather than silently claiming to have been set on a faster one.
+    expect(save.bests['overgrown-interchange']).toEqual({
+      race: 118.4,
+      lap: 38.2,
+      difficulty: 'ace',
+      speedClass: 'reclaim',
+    });
+  });
+
+  it('carries a v2 save forward with an empty circuit record', () => {
+    const save = migrate({ version: 2, settings: { lastRacer: 'boneyard' }, bests: {} });
+    expect(save.circuits).toEqual({});
+    expect(save.settings.lastRacer).toBe('boneyard');
+    expect(save.settings.lastSpeedClass).toBe('reclaim');
   });
 
   it('drops nonsense best times without discarding the good ones', () => {

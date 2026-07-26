@@ -18,6 +18,7 @@ import { el } from './dom';
 export interface TouchControlsOptions {
   input: InputManager;
   onPause: () => void;
+  onCamera: () => void;
 }
 
 export class TouchControls {
@@ -27,7 +28,6 @@ export class TouchControls {
   private pointerId: number | null = null;
   private trackRect: DOMRect | null = null;
   private readonly input: InputManager;
-  private visible = false;
 
   constructor(options: TouchControlsOptions) {
     this.input = options.input;
@@ -113,7 +113,18 @@ export class TouchControls {
         el(
           'div',
           { class: 'touch__row' },
-          pad('Brake', 'touch__pad--brake', (down) => this.input.setTouchState({ brake: down })),
+          /*
+           * Brake cuts the auto-throttle while held.
+           *
+           * With a permanent auto-throttle, "brake" was a tug of war the engine
+           * won: holding it stabilised at about +0.5 m/s and never reached
+           * reverse, so a touch player who ran out of road had no way back.
+           * Releasing it restores the throttle, so the pad reads as a brake
+           * pedal and doubles as reverse exactly as the keyboard's does.
+           */
+          pad('Brake', 'touch__pad--brake', (down) =>
+            this.input.setTouchState({ brake: down, accelerate: !down }),
+          ),
           pad('Hop', 'touch__pad--hop', (down) => this.input.setTouchState({ hop: down })),
         ),
         el(
@@ -122,12 +133,24 @@ export class TouchControls {
           pad('Drift', 'touch__pad--drift', (down) => this.input.setTouchState({ drift: down })),
           pad('Surge', 'touch__pad--boost', (down) => this.input.setTouchState({ boost: down })),
         ),
+        // Recover has to exist on touch: the HUD tells a stuck player to
+        // recover, and until now it named a key a phone does not have.
+        el(
+          'div',
+          { class: 'touch__row' },
+          pad('Recover', 'touch__pad--recover', (down) => this.input.setTouchState({ respawn: down })),
+        ),
       ),
-      el('button', { type: 'button', class: 'touch__pause', 'aria-label': 'Pause' }, 'II'),
+      el(
+        'div',
+        { class: 'touch__utility' },
+        el('button', { type: 'button', class: 'touch__icon touch__camera', 'aria-label': 'Change camera' }, 'CAM'),
+        el('button', { type: 'button', class: 'touch__icon touch__pause', 'aria-label': 'Pause' }, 'II'),
+      ),
     );
 
-    const pause = this.root.querySelector('.touch__pause');
-    pause?.addEventListener('click', options.onPause);
+    this.root.querySelector('.touch__pause')?.addEventListener('click', options.onPause);
+    this.root.querySelector('.touch__camera')?.addEventListener('click', options.onCamera);
   }
 
   private onPointerDown = (event: PointerEvent): void => {
@@ -177,23 +200,30 @@ export class TouchControls {
     this.steerTrack.setAttribute('aria-valuenow', String(Math.round(value * 100)));
   }
 
-  /** Shows the pads and turns on the auto-throttle they depend on. */
+  /**
+   * Shows the pads and turns on the auto-throttle they depend on.
+   *
+   * Deliberately *not* guarded by `visible`. The guard was a critical defect:
+   * restarting from the pause menu disables input, which clears the touch
+   * state, and then `show()` no-opped because the pads were already on screen —
+   * so the restarted race had no throttle at all, no way to reverse, and a
+   * keyboard-only recovery prompt. A touch player could not finish. Asserting
+   * the state every time costs nothing and cannot go stale.
+   */
   show(): void {
-    if (this.visible) return;
-    this.visible = true;
     this.root.hidden = false;
     this.input.setTouchState({ accelerate: true });
   }
 
   hide(): void {
-    if (!this.visible) return;
-    this.visible = false;
     this.root.hidden = true;
     this.input.setTouchState({
       accelerate: false,
       brake: false,
       drift: false,
+      hop: false,
       boost: false,
+      respawn: false,
       strike: 0,
       steer: 0,
     });

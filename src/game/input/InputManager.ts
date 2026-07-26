@@ -24,6 +24,7 @@ export interface TouchState {
   drift: boolean;
   hop: boolean;
   boost: boolean;
+  respawn: boolean;
   strike: -1 | 0 | 1;
 }
 
@@ -34,6 +35,7 @@ const EMPTY_TOUCH: TouchState = {
   drift: false,
   hop: false,
   boost: false,
+  respawn: false,
   strike: 0,
 };
 
@@ -140,11 +142,28 @@ export class InputManager {
     this.pressedThisFrame.add(event.code);
 
     const action = this.actionFor(event.code);
-    if (action) {
-      // Space and the arrows scroll the page; the game owns them while bound.
-      if (event.code === 'Space' || event.code.startsWith('Arrow')) event.preventDefault();
-      this.onAction?.(action);
+    if (!action) return;
+
+    /*
+     * Outside a race the game owns nothing except Pause.
+     *
+     * This listener is on `window`, so it saw every key press on every menu —
+     * and because Space and the arrows are bound to driving actions it called
+     * `preventDefault` on them there too. That cancelled the *native* arrow-key
+     * behaviour of a radio group, so a keyboard player could move through the
+     * course, crew and difficulty cards, watch the selection appear to change,
+     * and then start a race with none of their choices applied. Silently
+     * starting a different race than the one someone selected is the sort of
+     * defect that makes every accessibility claim nominal.
+     */
+    if (!this.enabled) {
+      if (action === 'pause') this.onAction?.(action);
+      return;
     }
+
+    // Space and the arrows scroll the page; the game owns them while driving.
+    if (event.code === 'Space' || event.code.startsWith('Arrow')) event.preventDefault();
+    this.onAction?.(action);
   };
 
   private handleKeyUp = (event: KeyboardEvent): void => {
@@ -288,6 +307,7 @@ export class InputManager {
     if (this.touch.drift) drift = true;
     if (this.touch.hop) hop = true;
     if (this.touch.boost) boost = true;
+    if (this.touch.respawn) respawn = true;
     if (this.touch.strike !== 0) strike = this.touch.strike;
     if (this.touch.steer !== 0) analogueSteer = this.touch.steer;
 
@@ -317,5 +337,16 @@ export class InputManager {
   /** True if any gamepad is currently connected. */
   hasGamepad(): boolean {
     return this.readGamepad() !== null;
+  }
+
+  /**
+   * The active pad, for the menu navigation layer.
+   *
+   * Exposed rather than duplicated: the navigator must read the same device the
+   * driving path reads, or "the pad works in a race but not in a menu" becomes
+   * two separate bugs instead of one behaviour.
+   */
+  activeGamepad(): Gamepad | null {
+    return this.readGamepad();
   }
 }

@@ -56,6 +56,8 @@ export class Hud {
   private reducedMotion = false;
   /** Label for the recover control, kept in sync with the player's bindings. */
   private recoverKey = 'R';
+  /** True when thumb pads are on screen, so prompts name controls that exist. */
+  private touch = false;
 
   constructor() {
     this.position = el('span', { class: 'hud__big', text: '1' });
@@ -163,6 +165,17 @@ export class Hud {
     this.recoverKey = label;
   }
 
+  /**
+   * Whether the player is on touch.
+   *
+   * Prompts have to name a control the device actually has. Telling a phone
+   * player to "press R" — with no Recover control anywhere on screen — was how
+   * a stuck touch player learned the game had no way out.
+   */
+  setTouch(value: boolean): void {
+    this.touch = value;
+  }
+
   setReducedMotion(value: boolean): void {
     this.reducedMotion = value;
     this.root.classList.toggle('hud--reduced', value);
@@ -259,7 +272,9 @@ export class Hud {
     const stuck = simulation.phase === 'running' && !player.finished && player.wedgeTimer > 1.2;
     if (stuck) {
       this.warning.hidden = false;
-      this.warning.textContent = `Stuck — press ${this.recoverKey} to recover`;
+      this.warning.textContent = this.touch
+        ? 'Stuck — tap Recover'
+        : `Stuck — press ${this.recoverKey} to recover`;
       this.warning.classList.add('hud__warning--hint');
     } else if (wrongWay) {
       this.warning.hidden = false;

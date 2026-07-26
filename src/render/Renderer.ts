@@ -60,6 +60,11 @@ export class GameRenderer {
   private particles: ParticleSystem;
   private sky: SkyResult | null = null;
   private scenery: SceneryResult | null = null;
+  /** Meshes the camera ray tests against; scenery and obstacles only. */
+  private occluders: THREE.Object3D[] = [];
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly rayOrigin = new THREE.Vector3();
+  private readonly rayDirection = new THREE.Vector3();
   private lighting: LightingResult | null = null;
   private quality: QualityId;
   private reducedMotion: boolean;
@@ -251,7 +256,17 @@ export class GameRenderer {
       this.scenery = scenery;
       this.world.add(scenery.group);
       this.world.add(buildHorizon(track));
-      this.world.add(buildObstacles(track));
+      const obstacles = buildObstacles(track);
+      this.world.add(obstacles);
+      /*
+       * The camera ray tests a *list*, not a second group.
+       *
+       * Reparenting these into an `occluders` group would remove them from the
+       * world — an Object3D has exactly one parent — and the scenery would stop
+       * being drawn. A flat list of the meshes costs nothing and leaves the
+       * scene graph alone.
+       */
+      this.occluders = [...scenery.group.children, ...obstacles.children];
       this.world.add(buildHazardMarkers(track));
 
       this.dustColor = new THREE.Color(theme.dustColor);
@@ -305,6 +320,7 @@ export class GameRenderer {
       this.sky = null;
     }
     this.scenery = null;
+    this.occluders = [];
     if (this.lighting) {
       this.scene.remove(this.lighting.group);
       this.lighting = null;
@@ -437,6 +453,11 @@ export class GameRenderer {
       const roughness = focus.onTrack
         ? SURFACES[focus.surface].roughness * clamp01(Math.hypot(focus.velocity.x, focus.velocity.z) / 40)
         : SURFACES[focus.surface].roughness;
+      // The road's own direction, so the camera can keep the next apex framed
+      // however sideways the skiff is.
+      const projection = simulation.track.project(focus.pos, focus.path);
+      this.chase.setTrackYaw(Math.atan2(projection.tangent.z, projection.tangent.x));
+      this.chase.setClearance(this.measureClearance(focus));
       this.chase.update(focus, elapsed, this.reducedMotion ? 0 : roughness);
       this.lighting?.follow(focus.pos.x, focus.y, focus.pos.z);
       if (this.sky) {
@@ -478,6 +499,33 @@ export class GameRenderer {
     const info = this.renderer.info.render;
     this.sceneStats.drawCalls = info.calls;
     this.sceneStats.triangles = info.triangles;
+  }
+
+  /**
+   * How much of the camera's ideal boom is unobstructed, 0-1.
+   *
+   * A ray from the racer back along the boom against the scenery and obstacle
+   * meshes. This exists because the review found the chase view repeatedly
+   * filled by a tree canopy or a near-plane slab — including a case where the
+   * road disappeared entirely on a phone while the player was trying to recover
+   * from an excursion. A camera that hides the road at exactly the moment the
+   * player has lost the road is worse than no camera at all.
+   *
+   * Deliberately one ray, on the focused racer only, against a small set of
+   * candidate meshes: this runs every frame and must not cost more than the
+   * thing it protects.
+   */
+  private measureClearance(focus: RacerState): number {
+    if (this.occluders.length === 0) return 1;
+    const origin = this.rayOrigin.set(focus.pos.x, focus.y + 1.6, focus.pos.z);
+    const yaw = this.chase.listenerYaw;
+    this.rayDirection.set(-Math.cos(yaw), 0.12, -Math.sin(yaw)).normalize();
+    this.raycaster.set(origin, this.rayDirection);
+    this.raycaster.far = 16;
+    const hits = this.raycaster.intersectObjects(this.occluders, false);
+    const nearest = hits[0];
+    if (!nearest) return 1;
+    return clamp01(nearest.distance / 16);
   }
 
   /** Continuous per-racer effects: tyre dust, boost flare, drift smoke. */

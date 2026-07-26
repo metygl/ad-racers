@@ -25,6 +25,7 @@ import { emptyInput } from '../game/sim/state';
 import type { ControlInput, SimEvent } from '../game/sim/state';
 import { getTrack, TRACK_DEFINITIONS } from '../game/track/tracks';
 import { GameRenderer } from '../render/Renderer';
+import { CAMERA_MODES } from '../render/camera/ChaseCamera';
 import { AdaptiveQuality, detectInitialQuality } from '../render/quality';
 import type { QualityId } from '../render/quality';
 import { buildSettingsScreen } from './screens/SettingsScreen';
@@ -33,6 +34,7 @@ import { buildTitleScreen } from './screens/TitleScreen';
 import { buildControlsCard, buildMessagePanel, buildPauseOverlay, buildResultsScreen } from './screens/panels';
 import { Hud } from './ui/Hud';
 import { TouchControls, shouldUseTouch } from './ui/TouchControls';
+import { GamepadNavigator } from './ui/gamepadNav';
 import { clear, el, trapFocus } from './ui/dom';
 
 /**
@@ -120,6 +122,7 @@ export class App {
   private lastResultRecords = { race: false, lap: false };
   private lastUnlock: string | null = null;
   private detachInput: (() => void) | null = null;
+  private readonly gamepadNav: GamepadNavigator;
   private lastPlayerInput: ControlInput = emptyInput();
 
   constructor(options: AppOptions) {
@@ -132,9 +135,18 @@ export class App {
     this.hud = new Hud();
     this.hud.root.hidden = true;
     this.perfOverlay = el('div', { class: 'perf', hidden: true, 'aria-hidden': 'true' });
-    this.touch = new TouchControls({ input: this.input, onPause: () => this.togglePause(true) });
+    this.touch = new TouchControls({
+      input: this.input,
+      onPause: () => this.togglePause(true),
+      onCamera: () => this.cycleCamera(),
+    });
 
     this.root.append(this.hud.root, this.ui, this.touch.root, this.perfOverlay);
+
+    this.gamepadNav = new GamepadNavigator({
+      root: this.ui,
+      onBack: () => this.handleMenuBack(),
+    });
 
     this.adaptive = new AdaptiveQuality(this.save.settings.autoQuality ? detectInitialQuality() : this.save.settings.quality);
   }
@@ -167,6 +179,10 @@ export class App {
 
     window.addEventListener('resize', this.handleResize);
     document.addEventListener('visibilitychange', this.handleVisibility);
+    // A race must not keep running behind a notification, another window, or a
+    // focused address bar. `visibilitychange` alone misses every case where the
+    // tab stays visible but stops being the thing the player is looking at.
+    window.addEventListener('blur', this.handleVisibility);
 
     try {
       this.renderer = new GameRenderer({
@@ -203,6 +219,7 @@ export class App {
     cancelAnimationFrame(this.frameHandle);
     window.removeEventListener('resize', this.handleResize);
     document.removeEventListener('visibilitychange', this.handleVisibility);
+    window.removeEventListener('blur', this.handleVisibility);
     this.detachInput?.();
     this.audio.dispose();
     this.renderer?.dispose();
@@ -256,6 +273,32 @@ export class App {
   /** True until the player has interacted; suppresses the initial auto-focus. */
   private firstPaint = true;
 
+  /**
+   * The single place race visibility is decided.
+   *
+   * Every route that reaches or leaves a race goes through here, and it is
+   * idempotent: calling it twice is calling it once. That is not tidiness, it
+   * is the fix for a critical defect. `showPause` used to set `screen = 'race'`
+   * directly without touching HUD or touch visibility, so Pause → Settings →
+   * Back → Resume returned to a *running* race with the HUD hidden and every
+   * touch control gone — a total loss of control on a phone, and a total loss
+   * of information everywhere else. WebGL context restoration took the same
+   * route and produced the same result.
+   */
+  private applyRaceSurface(): void {
+    const inRace = this.screen === 'race' && this.simulation !== null;
+    const driving = inRace && !this.paused && !this.contextLost;
+    this.hud.root.hidden = !inRace;
+    this.ui.hidden = driving;
+    this.input.setEnabled(driving);
+    const touchDriving = driving && shouldUseTouch();
+    if (touchDriving) this.touch.show();
+    else this.touch.hide();
+    // The HUD gives ground to the thumbs only while they are actually there.
+    document.documentElement.classList.toggle('touch-active', touchDriving);
+    this.hud.setTouch(shouldUseTouch());
+  }
+
   private showScreen(name: ScreenName, content?: HTMLElement): void {
     this.input.cancelCapture();
     this.releaseTrap?.();
@@ -263,13 +306,7 @@ export class App {
     this.screen = name;
     clear(this.ui);
     this.ui.dataset.screen = name;
-
-    const inRace = name === 'race';
-    this.hud.root.hidden = !inRace;
-    this.ui.hidden = inRace && !this.paused;
-    this.input.setEnabled(inRace && !this.paused);
-    if (inRace && shouldUseTouch()) this.touch.show();
-    else this.touch.hide();
+    this.applyRaceSurface();
 
     if (content) {
       this.ui.append(content);
@@ -592,12 +629,13 @@ export class App {
   private showPause(): void {
     this.input.cancelCapture();
     this.paused = true;
-    this.input.setEnabled(false);
     this.audio.suspend();
-    this.ui.hidden = false;
     clear(this.ui);
     this.ui.dataset.screen = 'pause';
     this.screen = 'race';
+    // Restores the HUD and hides the thumb pads in one call, whichever route
+    // arrived here — including Pause → Settings → Back and a restored context.
+    this.applyRaceSurface();
     this.ui.append(
       buildPauseOverlay({
         onResume: () => this.togglePause(false),
@@ -622,8 +660,7 @@ export class App {
       this.releaseTrap = null;
       this.paused = false;
       clear(this.ui);
-      this.ui.hidden = true;
-      this.input.setEnabled(true);
+      this.applyRaceSurface();
       void this.audio.resume();
       // Drop any accumulated time so the race does not lurch on resume.
       this.accumulator = 0;
@@ -724,20 +761,54 @@ export class App {
     if (this.input.isCapturing) return;
     switch (action) {
       case 'pause':
+        // Escape means "pause" in a race and "back" everywhere else. Having it
+        // do nothing on a menu is the sort of inconsistency that makes a
+        // keyboard player stop trusting the whole interface.
         if (this.screen === 'race') this.togglePause();
+        else this.handleMenuBack();
         break;
       case 'camera':
-        if (this.renderer && this.screen === 'race' && !this.paused) {
-          const next = this.renderer.chase.mode === 'chase' ? 'close' : 'chase';
-          this.renderer.chase.mode = next;
-          this.save.settings.cameraMode = next;
-          this.persist();
-        }
+        this.cycleCamera();
         break;
       default:
         break;
     }
   };
+
+  /**
+   * The back/cancel action, shared by the pad's B button and by Escape outside
+   * a race. Always goes somewhere sensible rather than nowhere.
+   */
+  private handleMenuBack(): void {
+    switch (this.screen) {
+      case 'race':
+        if (this.paused) this.togglePause(false);
+        break;
+      case 'settings':
+        if (this.previousScreen === 'race' && this.simulation) this.showPause();
+        else this.showTitle();
+        break;
+      case 'setup':
+      case 'controls':
+      case 'results':
+        this.showTitle();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Steps through the chase camera modes, from any input device. */
+  private cycleCamera(): void {
+    if (!this.renderer || this.screen !== 'race' || this.paused) return;
+    const ids = CAMERA_MODES.map((mode) => mode.id);
+    const index = ids.indexOf(this.renderer.chase.mode);
+    const next = ids[(index + 1) % ids.length] ?? 'chase';
+    this.renderer.chase.mode = next;
+    this.save.settings.cameraMode = next;
+    this.persist();
+    this.hud.notify(`Camera: ${CAMERA_MODES.find((m) => m.id === next)?.label ?? next}`, 'info');
+  }
 
   private handleResize = (): void => {
     const width = Math.max(1, this.root.clientWidth || window.innerWidth);
@@ -746,7 +817,7 @@ export class App {
   };
 
   private handleVisibility = (): void => {
-    if (document.hidden) {
+    if (document.hidden || !document.hasFocus()) {
       // Pausing a race when the tab is hidden is both correct and the cheapest
       // possible power saving: nothing simulates, nothing renders.
       if (this.screen === 'race' && !this.paused && this.simulation) this.togglePause(true);
@@ -780,6 +851,9 @@ export class App {
     // path is rare enough that the extra second does not matter.
     if (this.simulation && this.renderer) {
       this.renderer.buildWorld(this.simulation);
+      this.hud.prepare(this.simulation);
+      // Through the same atomic path as any other resume, so a restored context
+      // returns a complete race surface rather than a bare world.
       this.showPause();
     } else {
       this.showTitle();
@@ -797,6 +871,12 @@ export class App {
 
     const simulation = this.simulation;
     const renderer = this.renderer;
+
+    // Menus and the pause dialog are navigable with a pad, which is what makes
+    // the game operable on a controller-only device from first launch.
+    if (this.screen !== 'race' || this.paused) {
+      this.gamepadNav.update(this.input.activeGamepad(), elapsed);
+    }
 
     if (!simulation || !renderer || this.screen !== 'race') {
       this.runAttract(renderer, elapsed);

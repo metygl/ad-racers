@@ -24,6 +24,20 @@ import type { RacerState } from '../../game/sim/state';
 
 export type CameraMode = 'chase' | 'close' | 'far' | 'orbit';
 
+/**
+ * How much the camera favours the road's direction over the skiff's.
+ *
+ * The number that decides whether a drift is readable. At zero the view is
+ * welded to the velocity and swings to a side-on shot mid-slide; at one it
+ * ignores the car entirely and never conveys rotation. Two thirds keeps the
+ * apex in frame while still showing the slide.
+ */
+const TRACK_YAW_WEIGHT = 0.62;
+/** Hard limit on how far the view may sit from the road's direction. */
+const MAX_TRACK_OFFSET = 0.62;
+/** Closest the camera may ever be pulled, so the skiff stays in frame. */
+const MIN_DISTANCE = 4.2;
+
 const MODE_SETTINGS: Record<CameraMode, { distance: number; height: number; look: number; fov: number }> = {
   chase: { distance: 10.6, height: 4.0, look: 6, fov: 62 },
   close: { distance: 7.2, height: 2.9, look: 5, fov: 66 },
@@ -57,6 +71,12 @@ export class ChaseCamera {
   private kick = 0;
   private clock = 0;
   private previousSpeed = 0;
+  /** Heading of the road under the racer, supplied by the renderer. */
+  private trackYaw: number | null = null;
+  /** 0-1 blend into the reverse view, so it eases rather than snapping. */
+  private reverse = 0;
+  /** 0-1 how far the camera has been pulled in to clear an occluder. */
+  private occlusion = 0;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(62, aspect, 0.5, 4200);
@@ -108,12 +128,42 @@ export class ChaseCamera {
     this.roll = 0;
     this.orbitAngle = 0;
     this.initialised = false;
+    this.reverse = 0;
+    this.occlusion = 0;
+    this.trackYaw = null;
     this.previousSpeed = Math.hypot(racer.velocity.x, racer.velocity.z);
     this.apply(racer, 1 / 60, true);
   }
 
+  /**
+   * Tells the camera which way the road runs here.
+   *
+   * The camera is not allowed to read the track itself — that would put game
+   * knowledge in the renderer — so the caller, which already has the
+   * projection, hands it over.
+   */
+  setTrackYaw(yaw: number): void {
+    this.trackYaw = yaw;
+  }
+
+  /**
+   * How far the camera may sit behind the racer before something solid is in
+   * the way. The renderer measures this against the world; the camera only
+   * has to respect it.
+   */
+  setClearance(fraction: number): void {
+    // Eased towards, and released faster than it is applied: snapping in on a
+    // thin trunk and out again is worse than the occlusion.
+    const target = clamp01(1 - fraction);
+    this.occlusion = target > this.occlusion ? Math.min(target, this.occlusion + 0.25) : target;
+  }
+
   update(racer: RacerState, elapsed: number, roughness: number): void {
     this.clock += elapsed;
+    // A skiff travelling backwards gets a rear view, eased over ~200 ms.
+    const alongNose = racer.velocity.x * Math.cos(racer.heading) + racer.velocity.z * Math.sin(racer.heading);
+    const wantsReverse = alongNose < -2 ? 1 : 0;
+    this.reverse = damp(this.reverse, wantsReverse, 6, elapsed);
     this.shake = Math.max(0, this.shake - elapsed * 2.4);
     this.kick = Math.max(0, this.kick - elapsed * 3.4);
     this.dip = Math.max(0, this.dip - elapsed * 4.2);
@@ -135,10 +185,29 @@ export class ChaseCamera {
       return;
     }
 
-    // Aim the camera down the direction of travel once there is any, falling
-    // back to the heading at a standstill.
+    /*
+     * Yaw is a blend of where the skiff is going and where the *road* goes, and
+     * it is clamped against the track tangent.
+     *
+     * Following raw velocity alone swung the view to a wide side-on shot during
+     * a drift and left the player low and left of frame with the track-forward
+     * composition gone entirely, which is disorienting and a genuine
+     * motion-sickness risk. Weighting the track tangent keeps the next apex in
+     * the middle of the screen, which is the information the player needs
+     * precisely when the car is sideways.
+     *
+     * Reversing gets its own target rather than a forward view held for four
+     * seconds while the car travels backwards at the cap.
+     */
     const travelling = speed > 3;
-    const desiredYaw = travelling ? Math.atan2(racer.velocity.z, racer.velocity.x) : racer.heading;
+    const velocityYaw = travelling ? Math.atan2(racer.velocity.z, racer.velocity.x) : racer.heading;
+    const trackYaw = this.trackYaw ?? velocityYaw;
+    const blended = velocityYaw + wrapAngle(trackYaw - velocityYaw) * TRACK_YAW_WEIGHT;
+    // Never more than this far from the road's direction, however sideways the
+    // skiff gets. This is the hard side-angle limit a drift used to blow past.
+    const clampedToTrack = trackYaw + clamp(wrapAngle(blended - trackYaw), -MAX_TRACK_OFFSET, MAX_TRACK_OFFSET);
+    const reversing = this.reverse > 0.5;
+    const desiredYaw = reversing ? wrapAngle(clampedToTrack + Math.PI) : clampedToTrack;
     if (snap || !this.initialised) {
       this.yaw = desiredYaw;
       this.initialised = true;
@@ -167,7 +236,13 @@ export class ChaseCamera {
     // touching the field of view. The kick is a short additional pull on top.
     const speedFactor = clamp01(speed / 50);
     const surge = racer.boosting ? 1.1 : 0;
-    const distance = settings.distance + speedFactor * 2.1 + surge + this.kick * 1.6;
+    /*
+     * Occlusion pulls the camera *in* towards the racer rather than fading the
+     * offending geometry, because at this art direction a half-transparent tree
+     * reads worse than a closer camera. The floor keeps the skiff in frame.
+     */
+    const wanted = settings.distance + speedFactor * 2.1 + surge + this.kick * 1.6;
+    const distance = Math.max(MIN_DISTANCE, wanted * (1 - this.occlusion * 0.72));
     const height = settings.height + speedFactor * 0.55 - this.dip * 0.9;
 
     const behindX = -Math.cos(this.yaw);

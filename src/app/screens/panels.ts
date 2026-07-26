@@ -107,55 +107,78 @@ export interface ResultsActions {
 }
 
 /** The championship table, shared by the results screen and the standings view. */
+/*
+ * A real `table`, not a grid of `div`s.
+ *
+ * The visual layout is identical — the columns are laid out with CSS grid
+ * either way — but the accessibility tree is not. As a div grid, a screen
+ * reader emitted every row as an unassociated run of static text: a listener
+ * heard a crew name, a time, a gap and "0/3" with no idea which column any of
+ * them belonged to. Race results are tabular data and there is a element for
+ * tabular data.
+ */
 export function buildStandingsTable(
   standings: readonly CircuitStanding[],
   playerProfileId: string,
   rounds: number,
 ): HTMLElement {
-  const rows = el('ol', { class: 'standings-table__list' });
+  const body = el('tbody', { class: 'standings-table__list' });
   standings.forEach((standing, index) => {
     const profile = getRacer(standing.profileId);
+    const isPlayer = standing.profileId === playerProfileId;
     const row = el(
-      'li',
-      {
-        class: `standings-table__row ${standing.profileId === playerProfileId ? 'standings-table__row--player' : ''}`,
-      },
-      el('span', { class: 'standings-table__place', text: String(index + 1) }),
-      el('span', { class: 'standings-table__crew', text: profile.crew }),
+      'tr',
+      { class: `standings-table__row ${isPlayer ? 'standings-table__row--player' : ''}` },
+      el('td', { class: 'standings-table__place', text: String(index + 1) }),
       el(
-        'span',
-        { class: 'standings-table__finishes' },
-        ...Array.from({ length: rounds }, (_, round) =>
-          el('span', {
-            class: `standings-table__pip ${standing.finishes[round] === 1 ? 'standings-table__pip--win' : ''}`,
-            text: standing.finishes[round] === undefined ? '–' : String(standing.finishes[round]),
-          }),
-        ),
+        'th',
+        { class: 'standings-table__crew', scope: 'row' },
+        el('span', { text: profile.crew }),
+        // Announced, not merely coloured: the player's own row has to be
+        // findable without seeing the highlight.
+        isPlayer ? el('span', { class: 'sr-only', text: ' (your crew)' }) : null,
       ),
-      el('span', { class: 'standings-table__points', text: String(standing.points) }),
+      el(
+        'td',
+        { class: 'standings-table__finishes' },
+        ...Array.from({ length: rounds }, (_, round) => {
+          const place = standing.finishes[round];
+          return el('span', {
+            class: `standings-table__pip ${place === 1 ? 'standings-table__pip--win' : ''}`,
+            title: place === undefined ? `Round ${round + 1}: not yet raced` : `Round ${round + 1}: ${ordinal(place)}`,
+            text: place === undefined ? '–' : String(place),
+          });
+        }),
+      ),
+      el('td', { class: 'standings-table__points', text: String(standing.points) }),
     );
     row.style.setProperty('--crew', `#${profile.colors.body.toString(16).padStart(6, '0')}`);
-    rows.append(row);
+    body.append(row);
   });
 
   return el(
-    'div',
+    'table',
     { class: 'standings-table' },
+    el('caption', { class: 'sr-only', text: 'Circuit standings' }),
     el(
-      'div',
-      { class: 'standings-table__head', 'aria-hidden': 'true' },
-      el('span', { text: '#' }),
-      el('span', { text: 'Crew' }),
-      el('span', { text: 'Rounds' }),
-      el('span', { text: 'Pts' }),
+      'thead',
+      { class: 'standings-table__head' },
+      el(
+        'tr',
+        {},
+        el('th', { scope: 'col', text: '#' }),
+        el('th', { scope: 'col', text: 'Crew' }),
+        el('th', { scope: 'col', text: 'Rounds' }),
+        el('th', { scope: 'col', text: 'Points' }),
+      ),
     ),
-    rows,
+    body,
   );
 }
 
 export function buildResultsScreen(actions: ResultsActions): HTMLElement {
   const player = actions.results.find((r) => r.index === actions.playerIndex);
-  const rows = el('ol', { class: 'results__list' });
+  const rows = el('tbody', { class: 'results__list' });
 
   const leader = actions.results[0];
   for (const racer of actions.results) {
@@ -164,21 +187,28 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
       leader?.completed && racer.completed && racer !== leader
         ? `+${(racer.finishTime - leader.finishTime).toFixed(2)}s`
         : '—';
+    const isPlayer = racer.index === actions.playerIndex;
     const row = el(
-      'li',
-      { class: `results__row ${racer.index === actions.playerIndex ? 'results__row--player' : ''}` },
-      el('span', { class: 'results__place', text: String(racer.finishPosition) }),
-      el('span', { class: 'results__crew' },
+      'tr',
+      { class: `results__row ${isPlayer ? 'results__row--player' : ''}` },
+      el('td', { class: 'results__place', text: String(racer.finishPosition) }),
+      el('th', { class: 'results__crew', scope: 'row' },
         el('span', { class: 'results__name', text: profile.crew }),
         el('span', { class: 'results__pilots', text: `${profile.pilot} & ${profile.wrench}` }),
+        isPlayer ? el('span', { class: 'sr-only', text: ' (your crew)' }) : null,
       ),
-      el('span', { class: 'results__time', text: racer.completed ? formatLapTime(racer.finishTime) : 'DNF' }),
-      el('span', { class: 'results__gap', text: gap }),
-      el('span', {
+      el('td', { class: 'results__time', text: racer.completed ? formatLapTime(racer.finishTime) : 'DNF' }),
+      el('td', { class: 'results__gap', text: gap }),
+      el('td', {
         class: 'results__best',
         text: Number.isFinite(racer.bestLap) ? formatLapTime(racer.bestLap) : '—',
       }),
-      el('span', { class: 'results__strikes', text: `${racer.strikesLanded}/${racer.strikesTaken}` }),
+      // The two-number form was unexplained: it is strikes landed and taken.
+      el('td', {
+        class: 'results__strikes',
+        'aria-label': `${racer.strikesLanded} landed, ${racer.strikesTaken} taken`,
+        text: `${racer.strikesLanded}/${racer.strikesTaken}`,
+      }),
     );
     row.style.setProperty('--crew', `#${profile.colors.body.toString(16).padStart(6, '0')}`);
     rows.append(row);
@@ -224,17 +254,22 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
         })
       : null,
     el(
-      'div',
+      'table',
       { class: 'results__table' },
+      el('caption', { class: 'sr-only', text: 'Race classification' }),
       el(
-        'div',
-        { class: 'results__head', 'aria-hidden': 'true' },
-        el('span', { text: '#' }),
-        el('span', { text: 'Crew' }),
-        el('span', { text: 'Time' }),
-        el('span', { text: 'Gap' }),
-        el('span', { text: 'Best lap' }),
-        el('span', { text: 'Hits' }),
+        'thead',
+        { class: 'results__head' },
+        el(
+          'tr',
+          {},
+          el('th', { scope: 'col', text: '#' }),
+          el('th', { scope: 'col', text: 'Crew' }),
+          el('th', { scope: 'col', text: 'Time' }),
+          el('th', { scope: 'col', text: 'Gap' }),
+          el('th', { scope: 'col', text: 'Best lap' }),
+          el('th', { scope: 'col', title: 'Strikes landed / taken', text: 'Hits' }),
+        ),
       ),
       rows,
     ),

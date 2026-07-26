@@ -649,6 +649,20 @@ body {
   gap: 0.3rem;
 }
 
+.bindings__status {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--amber);
+  min-height: 1.2em;
+}
+
+.bindings__change {
+  /* Was 85x36: below the 44 px minimum touch target, on the one screen a
+     player is most likely to be using with a thumb. */
+  min-height: 44px;
+  min-width: 44px;
+}
+
 .bindings__row {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -726,9 +740,29 @@ body {
 
 .results__table {
   overflow-x: auto;
+  /* A real <table> laid out on a grid: the element carries the semantics, the
+     CSS carries the composition. */
+  display: block;
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.results__head,
+.results__table thead,
+.results__table tbody {
+  display: block;
+}
+
+.results__head th {
+  text-align: left;
+  font-weight: 600;
+}
+
+.results__crew {
+  text-align: left;
+  font-weight: inherit;
+}
+
+.results__head tr,
 .results__row {
   display: grid;
   grid-template-columns: 2.4rem minmax(8rem, 1fr) 6.5rem 5rem 6.5rem 4rem;
@@ -747,7 +781,6 @@ body {
 }
 
 .results__list {
-  list-style: none;
   margin: 0;
   padding: 0;
 }
@@ -1173,15 +1206,30 @@ body {
   border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
+  /* A real <table> laid out on a grid: the semantics come from the element,
+     the composition from CSS. */
+  display: block;
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.standings-table__head,
+.standings-table thead,
+.standings-table tbody {
+  display: block;
+}
+
+.standings-table__head tr,
 .standings-table__row {
   display: grid;
   grid-template-columns: 2.2rem 1fr auto 3rem;
   align-items: center;
   gap: 0.7rem;
   padding: 0.45rem 0.8rem;
+}
+
+.standings-table__head th {
+  text-align: left;
+  font-weight: 600;
 }
 
 .standings-table__head {
@@ -1193,7 +1241,6 @@ body {
 }
 
 .standings-table__list {
-  list-style: none;
   margin: 0;
   padding: 0;
 }
@@ -1375,10 +1422,16 @@ body {
 }
 
 .perf {
+  /* Never over the position/time/lap row: this is a player-facing setting, not
+     an external profiler, and it used to cover the top HUD entirely on a
+     phone. */
+  pointer-events: none;
   position: absolute;
   left: calc(0.6rem + var(--safe-left));
-  top: calc(0.6rem + var(--safe-top));
+  /* Below the position panel rather than on top of it. */
+  bottom: calc(0.6rem + var(--safe-bottom));
   z-index: 5;
+  max-width: min(22rem, 60vw);
   padding: 0.4rem 0.6rem;
   background: rgba(0, 0, 0, 0.7);
   border-radius: 6px;
@@ -1453,6 +1506,17 @@ body {
   pointer-events: none;
 }
 
+/*
+ * Touch race composition.
+ *
+ * Three reserved zones that never overlap at 320x568, 390x844 or 844x390:
+ * the steering strip bottom-left, the action cluster bottom-right, and a
+ * utility column top-left. The HUD keeps the top-right corner (lap), the
+ * top-centre (time) and the right edge above the pads (minimap) to itself.
+ *
+ * The previous layout put Pause directly on top of Lap, the action cluster on
+ * top of the minimap, and the Drift pad 15 px into the speed panel.
+ */
 .touch__right {
   position: absolute;
   right: calc(0.6rem + var(--safe-right));
@@ -1461,6 +1525,32 @@ body {
   display: grid;
   gap: 0.4rem;
   justify-items: end;
+}
+
+.touch__utility {
+  position: absolute;
+  /* Top *left*: the top right belongs to the lap counter. */
+  top: calc(0.6rem + var(--safe-top));
+  left: calc(0.6rem + var(--safe-left));
+  display: flex;
+  gap: 0.5rem;
+}
+
+.touch__icon {
+  width: 2.9rem;
+  height: 2.9rem;
+  border-radius: 50%;
+  background: rgba(6, 10, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: var(--ink);
+  font-weight: 800;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+}
+
+.touch__pad--recover {
+  min-width: 8.4rem;
+  background: rgba(30, 20, 10, 0.72);
 }
 
 .touch__pad--drift,
@@ -1497,18 +1587,27 @@ body {
   border-color: var(--signal);
 }
 
-.touch__pause {
-  position: absolute;
-  top: calc(0.6rem + var(--safe-top));
-  right: calc(0.6rem + var(--safe-right));
-  width: 2.9rem;
-  height: 2.9rem;
-  border-radius: 50%;
-  background: rgba(6, 10, 14, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: var(--ink);
-  font-weight: 800;
-  letter-spacing: 0.08em;
+/*
+ * With touch controls on screen the HUD gives up the left half of its top row
+ * and the bottom-right corner, because those are where thumbs live.
+ */
+.touch-active .hud__panel--position {
+  margin-left: 3.4rem;
+}
+
+.touch-active .hud__side {
+  /* Above the action cluster rather than behind it. */
+  bottom: auto;
+  top: calc(4.5rem + var(--safe-top));
+}
+
+.touch-active .minimap {
+  width: 5.5rem;
+  height: 5.5rem;
+}
+
+.touch-active .hud__meters {
+  display: none;
 }
 
 /* ------------------------------------------------------------ animation --- */
@@ -1632,13 +1731,27 @@ body {
     bottom: calc(11rem + var(--safe-bottom));
   }
 
-  .results__head,
+  .results__head tr,
   .results__row {
     grid-template-columns: 2rem minmax(6rem, 1fr) 5.5rem 4.5rem 5.5rem 3.5rem;
     min-width: 28rem;
   }
 
-  .bindings__row {
+  .bindings__status {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--amber);
+  min-height: 1.2em;
+}
+
+.bindings__change {
+  /* Was 85x36: below the 44 px minimum touch target, on the one screen a
+     player is most likely to be using with a thumb. */
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.bindings__row {
     grid-template-columns: 1fr auto;
     row-gap: 0.3rem;
   }

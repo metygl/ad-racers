@@ -117,3 +117,98 @@ test.describe('touch controls', () => {
     expect(speed.y + speed.height, 'speed readout overlaps the steering strip').toBeLessThanOrEqual(steerStrip.y + 2);
   });
 });
+
+/*
+ * The complete touch journey.
+ *
+ * Reproduces the critical defect where restarting from the pause menu removed
+ * the only source of throttle: the restarted race reported `throttle=0`, there
+ * was no throttle control on screen, and the HUD then told the player to press
+ * a key their device does not have. A touch player could not finish.
+ */
+test.describe('touch journey', () => {
+  const inputState = async (page: import('@playwright/test').Page) =>
+    page.evaluate(() => window.adRacers?.input() as { throttle: number; brake: boolean } | undefined);
+
+  test('restart preserves the automatic throttle', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+    expect((await inputState(page))?.throttle).toBe(1);
+
+    await page.getByRole('button', { name: 'Pause' }).tap();
+    await page.getByRole('button', { name: 'Restart race' }).click();
+    await waitForGreenLight(page);
+
+    // The whole defect in one assertion.
+    expect((await inputState(page))?.throttle).toBe(1);
+    await expect(page.getByTestId('touch-controls')).toBeVisible();
+  });
+
+  test('offers Recover and Camera, and names controls the device has', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    await expect(page.getByRole('button', { name: 'Recover' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Change camera' })).toBeVisible();
+
+    // The stuck prompt must not name a keyboard key on a phone.
+    const prompt = await page.evaluate(() => {
+      const hud = document.querySelector('.hud__warning');
+      return hud?.textContent ?? '';
+    });
+    expect(prompt).not.toMatch(/press R/i);
+  });
+
+  test('brake cuts the auto-throttle so reverse is reachable', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    const brake = page.getByRole('button', { name: 'Brake' });
+    const box = await brake.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(400);
+    const held = await inputState(page);
+    await page.mouse.up();
+
+    expect(held?.brake).toBe(true);
+    // With the throttle still open, braking never reached reverse.
+    expect(held?.throttle).toBe(0);
+  });
+
+  test('no control overlaps the HUD it has to be read alongside', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    const boxes = await page.evaluate(() => {
+      const pick = (selector: string): { name: string; r: DOMRect } | null => {
+        const node = document.querySelector(selector);
+        return node ? { name: selector, r: node.getBoundingClientRect().toJSON() as DOMRect } : null;
+      };
+      const controls = [...document.querySelectorAll('.touch__pad, .touch__icon, .touch__steer')].map((node) => ({
+        name: node.className,
+        r: node.getBoundingClientRect().toJSON() as DOMRect,
+      }));
+      const hud = ['.hud__panel--lap', '.hud__panel--time', '.minimap', '.hud__panel--speed']
+        .map(pick)
+        .filter((x): x is { name: string; r: DOMRect } => x !== null);
+      return { controls, hud };
+    });
+
+    const overlaps = (a: DOMRect, b: DOMRect): boolean =>
+      a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+    const collisions: string[] = [];
+    for (const control of boxes.controls) {
+      for (const panel of boxes.hud) {
+        if (overlaps(control.r, panel.r)) collisions.push(`${control.name} over ${panel.name}`);
+      }
+    }
+    expect(collisions).toEqual([]);
+  });
+});

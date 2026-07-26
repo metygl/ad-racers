@@ -241,3 +241,96 @@ test.describe('performance', () => {
     expect(postPasses).toBeLessThanOrEqual(4);
   });
 });
+
+/*
+ * Race-surface transitions.
+ *
+ * Every one of these reproduces a defect found in live production play, where
+ * an ordinary menu action left the player in a running race with no HUD and, on
+ * a phone, no controls at all. They assert the *surface*, not the screen name:
+ * the screen said "race" the whole time it was broken.
+ */
+test.describe('race surface transitions', () => {
+  const surface = async (page: import('@playwright/test').Page) =>
+    page.evaluate(() => ({
+      screen: window.adRacers?.screen(),
+      hudHidden: document.querySelector<HTMLElement>('.hud')?.hidden ?? true,
+      uiHidden: document.querySelector<HTMLElement>('.ui')?.hidden ?? true,
+      uiChildren: document.querySelector('.ui')?.children.length ?? -1,
+    }));
+
+  test('Pause → Settings → Back → Resume returns a complete race surface', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Back' }).click();
+    await page.getByRole('button', { name: 'Resume' }).click();
+
+    const state = await surface(page);
+    expect(state.screen).toBe('race');
+    // The HUD must come back. It used to stay hidden for the rest of the race.
+    expect(state.hudHidden).toBe(false);
+    expect(state.uiHidden).toBe(true);
+    expect(state.uiChildren).toBe(0);
+  });
+
+  test('Pause → Settings → Back → Escape also returns a complete race surface', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Back' }).click();
+    await page.keyboard.press('Escape');
+
+    const state = await surface(page);
+    expect(state.screen).toBe('race');
+    expect(state.hudHidden).toBe(false);
+  });
+
+  test('a restored graphics context returns a complete race surface', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    await page.evaluate(() => {
+      const canvas = document.querySelector('canvas');
+      const gl = canvas?.getContext('webgl2') ?? canvas?.getContext('webgl');
+      const ext = (gl as WebGLRenderingContext | null)?.getExtension('WEBGL_lose_context');
+      ext?.loseContext();
+      setTimeout(() => ext?.restoreContext(), 60);
+    });
+    await page.getByRole('button', { name: 'Resume' }).click({ timeout: 20_000 });
+
+    const state = await surface(page);
+    expect(state.screen).toBe('race');
+    expect(state.hudHidden).toBe(false);
+  });
+
+  test('keyboard radio selection is the race that actually starts', async ({ page }) => {
+    await openGame(page);
+    await goToSetup(page);
+
+    // Native arrow-key navigation inside the crew radiogroup. The input manager
+    // used to preventDefault these on every screen, so the selection appeared
+    // to change and the started race ignored it.
+    await page.getByRole('radio', { name: /Thornline/i }).first().focus();
+    await page.keyboard.press('ArrowRight');
+    const chosen = await page.evaluate(() =>
+      (document.querySelector('input[name="racer"]:checked') as HTMLInputElement | null)?.id ?? '',
+    );
+    expect(chosen).not.toBe('racer-thornline');
+
+    await page.getByRole('button', { name: /Start (race|circuit)/ }).click();
+    await expect(page.getByTestId('hud')).toBeVisible();
+    const playerId = await page.evaluate(() => {
+      const sim = window.adRacers?.simulation() as { player?: { profileId: string } } | null;
+      return sim?.player?.profileId ?? '';
+    });
+    expect(`racer-${playerId}`).toBe(chosen);
+  });
+});

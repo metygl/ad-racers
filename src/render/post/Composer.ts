@@ -231,6 +231,10 @@ const COMPOSITE_FRAGMENT = /* glsl */ `
 
 /** Ratio of the bloom targets to the main one. */
 const BLOOM_SCALE = 0.25;
+/** Bloom intensity retained under reduced motion. */
+const REDUCED_MOTION_BLOOM = 0.35;
+/** Extra threshold under reduced motion, so only true emitters bloom. */
+const REDUCED_MOTION_THRESHOLD_LIFT = 0.45;
 
 function fullscreenGeometry(): THREE.BufferGeometry {
   // A single oversized triangle rather than a quad: no diagonal seam, one fewer
@@ -428,6 +432,21 @@ export class PostComposer {
     u.vignette.value = settings.vignette;
     u.speed.value = settings.speed * 0.11 * settings.motion;
     u.fringe.value = settings.speed * 0.0035 * settings.motion;
+    /*
+     * Reduced motion is a designed mode, not a switch that removes one effect.
+     *
+     * The warp and the fringe going to zero left the large bloom pulses fully
+     * intact, which are the highest-risk thing in the frame for sensory
+     * overload and photosensitivity. Bloom is therefore budgeted independently:
+     * it stays — an unlit night course needs it to be readable at all — but at
+     * a fraction of the intensity and with a higher threshold, so it marks
+     * emissive surfaces instead of flooding the frame.
+     */
+    if (settings.motion < 1) {
+      u.bloomIntensity.value = settings.bloomIntensity * REDUCED_MOTION_BLOOM;
+      u.threshold.value = settings.bloomThreshold + REDUCED_MOTION_THRESHOLD_LIFT;
+      u.vignette.value = settings.vignette * 0.6;
+    }
 
     this.quad.material = this.composite;
     renderer.setRenderTarget(null);

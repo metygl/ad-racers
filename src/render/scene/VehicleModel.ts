@@ -339,35 +339,110 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   disposables.push(armGeometry);
 
   /*
-   * Drift charge, shown on the skiff itself rather than only on the HUD.
+   * ## The drift ladder, in AD Racers' own language
    *
    * A player mid-corner is looking at the road and the car, not at a gauge in
-   * the corner, so the tier ladder has to be legible *on the machine*. Two
-   * additive sparks either side of the tail step through the tier colours as
-   * the charge banks, which is the anticipation beat the payoff needs.
+   * the corner, so the tier ladder has to be legible *on the machine*.
+   *
+   * The first version of this stepped through cyan, then orange, then magenta,
+   * and an independent art review flagged that progression as uncomfortably
+   * close to a recognisable one from another game. It was also lazy: a colour
+   * ramp says nothing about what a salvage skiff is actually doing.
+   *
+   * What it does instead is mechanical, and it is the same fiction as the rest
+   * of the machine — a wrench in an outrigger pod, winding a counterweight:
+   *
+   *   Tier 1, *wound*      — the counterweight draws back and locks. One steady
+   *                          band of light along the pod spar.
+   *   Tier 2, *loaded*     — scrap the skiff has picked up starts orbiting the
+   *                          pod's magnetic clamp, and the flank slots begin to
+   *                          vent. Two bands, and the debris ring appears.
+   *   Tier 3, *overpressure* — the vents blow properly, the debris ring snaps
+   *                          tight, and the whole rig shudders. Three bands,
+   *                          fast pulse.
+   *
+   * Every tier is the *crew's own trim colour*. The tier is carried by how many
+   * bands are lit, whether debris is orbiting, and the pulse rate — never by
+   * hue. That makes it original, it makes it read in fog and at distance, and
+   * it makes it colour-blind safe by construction rather than by exception.
    */
-  const sparkMaterial = new THREE.MeshBasicMaterial({
-    color: 0x9fd8ff,
-    map: glowSprite,
+  const chargeMaterial = new THREE.MeshBasicMaterial({
+    color: profile.colors.trim,
     transparent: true,
     opacity: 0,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     fog: false,
   });
-  const sparkGeometry = mergeGeometries(
+  disposables.push(chargeMaterial);
+
+  /** One lit band per tier, stacked up the pod spar. */
+  const chargeBands = [0, 1, 2].map((tier) => {
+    const geometry = new THREE.BoxGeometry(0.62, 0.05, 0.1);
+    const band = new THREE.Mesh(geometry, chargeMaterial);
+    band.position.set(-0.3, 0.5 + tier * 0.17, POD_OFFSET * 0.55);
+    band.visible = false;
+    disposables.push(geometry);
+    group.add(band);
+    return band;
+  });
+
+  /*
+   * Conductive scrap, held in the pod's clamp field. Six chips on a ring that
+   * tightens and spins faster as the charge builds — the mechanical tell that
+   * the machine is storing something, rather than a light getting brighter.
+   */
+  const debrisMaterial = new THREE.MeshStandardMaterial({
+    color: profile.colors.trim,
+    emissive: new THREE.Color(profile.colors.glow),
+    emissiveIntensity: 0.5,
+    roughness: 0.4,
+    metalness: 0.6,
+    flatShading: true,
+    transparent: true,
+    opacity: 0,
+  });
+  disposables.push(debrisMaterial);
+  const debris = new THREE.Group();
+  debris.position.set(-0.3, 0.68, POD_OFFSET);
+  group.add(debris);
+  const chipGeometry = new THREE.TetrahedronGeometry(0.11, 0);
+  disposables.push(chipGeometry);
+  const chips = Array.from({ length: 6 }, (_, i) => {
+    const chip = new THREE.Mesh(chipGeometry, debrisMaterial);
+    chip.userData.phase = (i / 6) * Math.PI * 2;
+    debris.add(chip);
+    return chip;
+  });
+
+  /*
+   * Pressure venting from the flank slots. Two flat plumes that only appear at
+   * the top tier and on release — the loudest thing the rig does, and the
+   * anticipation for the payout.
+   */
+  const ventMaterial = new THREE.MeshBasicMaterial({
+    color: 0xdfe8ea,
+    map: glowSprite,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.NormalBlending,
+    depthWrite: false,
+    fog: false,
+  });
+  disposables.push(ventMaterial);
+  const ventGeometry = mergeGeometries(
     [-1, 1].map(
       (side): MergePart => ({
-        geometry: new THREE.PlaneGeometry(1.1, 1.1),
-        position: [-HULL_LENGTH / 2 - 0.1, 0.4, side * (halfWidth + 0.12)],
+        geometry: new THREE.PlaneGeometry(0.9, 0.6),
+        position: [-0.4, 0.75, side * (halfWidth + 0.45)],
         rotation: [-HALF_PI, 0, 0],
       }),
     ),
   );
-  const sparks = new THREE.Mesh(sparkGeometry, sparkMaterial);
-  sparks.renderOrder = 2;
-  group.add(sparks);
-  disposables.push(sparkGeometry, sparkMaterial);
+  const vents = new THREE.Mesh(ventGeometry, ventMaterial);
+  vents.renderOrder = 2;
+  group.add(vents);
+  disposables.push(ventGeometry);
 
   // --- animation state ----------------------------------------------------
   let roll = 0;
@@ -378,8 +453,6 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   let damage = 0;
   let phase = profile.id.length * 0.7;
 
-  const TIER_COLORS = [0x9fd8ff, 0xffc46b, 0xff7ad9];
-  const tierColor = new THREE.Color();
 
   const update = (racer: RacerState, elapsed: number): void => {
     const dt = Math.min(0.1, elapsed);
@@ -431,19 +504,27 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     pitch = damp(pitch, targetPitch, 8, dt);
     chassis.rotation.z = pitch;
 
-    // Exhaust brightness and size track the throttle and the boost.
-    const thrustScale = racer.boosting ? 1.9 : 0.7 + speedFactor * 0.6;
+    /*
+     * Exhaust brightness and size track the throttle and the boost, and the
+     * boost core is deliberately small.
+     *
+     * The previous version produced a white-green bloom that covered most of
+     * the lower half of the frame and hid the skiff inside it. Energy has to
+     * originate from a readable emitter and leave the player's silhouette and
+     * the road visible; a payoff the player cannot see through is not a payoff.
+     */
+    const thrustScale = racer.boosting ? 1.35 : 0.7 + speedFactor * 0.5;
     // A little flicker, so the flame is alive rather than a decal.
     const flicker = 1 + Math.sin(phase * 37) * 0.06;
     thrust.scale.set(1, thrustScale * flicker, thrustScale * flicker);
-    thrustMaterial.opacity = racer.boosting ? 0.85 : 0.16 + speedFactor * 0.26;
+    thrustMaterial.opacity = racer.boosting ? 0.6 : 0.14 + speedFactor * 0.22;
     thrust.visible = speed > 1.5 || racer.boosting;
     thrust.position.y = hover;
 
     // The hover cushion brightens under load and while boosting, and fades out
     // entirely in the air — where, self-evidently, there is nothing to hover on.
-    cushionMaterial.opacity = racer.airborne ? 0 : 0.09 + speedFactor * 0.06 + (racer.boosting ? 0.14 : 0);
-    cushion.scale.setScalar(1 + Math.sin(phase * 9) * 0.03 + (racer.boosting ? 0.25 : 0));
+    cushionMaterial.opacity = racer.airborne ? 0 : 0.08 + speedFactor * 0.05 + (racer.boosting ? 0.08 : 0);
+    cushion.scale.setScalar(1 + Math.sin(phase * 9) * 0.03 + (racer.boosting ? 0.14 : 0));
 
     // The tow cone: invisible until there is charge worth spending.
     const towReady = clamp01((racer.towCharge - TOW.minCharge) / Math.max(0.01, 1 - TOW.minCharge));
@@ -451,26 +532,43 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     wake.visible = wakeMaterial.opacity > 0.005;
     wake.scale.set(1, 0.7 + towReady * 0.5, 1);
 
-    // Drift charge ladder, on the machine.
+    /*
+     * The drift ladder: bands, debris, vents. Tier is carried by *count and
+     * rhythm*, never by hue — see the note where these are built.
+     */
     const tier = racer.drift.active
       ? DRIFT.tiers.reduce((best, threshold, index) => (racer.drift.charge >= threshold ? index : best), -1)
       : -1;
-    if (tier >= 0) {
-      tierColor.setHex(TIER_COLORS[Math.min(tier, TIER_COLORS.length - 1)] ?? 0xffffff);
-      sparkMaterial.color.copy(tierColor);
-      // Pulse faster at higher tiers: the rhythm alone tells the player which
-      // tier they are on without reading a colour.
-      sparkMaterial.opacity = 0.34 + Math.sin(phase * (18 + tier * 10)) * 0.18;
-      sparks.visible = true;
-    } else if (racer.drift.active) {
-      // Charging, but not yet worth anything: a dim ember, so the player can see
-      // the drift is registering.
-      sparkMaterial.color.setHex(0x6fa8cc);
-      sparkMaterial.opacity = 0.08 + racer.drift.charge * 0.28;
-      sparks.visible = true;
-    } else {
-      sparks.visible = false;
+    const charging = racer.drift.active;
+    const pulse = 0.5 + Math.sin(phase * (14 + Math.max(0, tier) * 11)) * 0.5;
+    chargeMaterial.opacity = charging ? 0.35 + pulse * 0.45 : 0;
+    chargeBands.forEach((band, index) => {
+      // Below the first tier the lowest band glows faintly, so the player can
+      // see the drift is registering before it is worth anything.
+      band.visible = charging && (index <= tier || (index === 0 && tier < 0));
+      band.scale.setScalar(index <= tier ? 1 : 0.55);
+    });
+
+    const clampField = charging ? clamp01((racer.drift.charge - (DRIFT.tiers[0] ?? 0.34)) / 0.4) : 0;
+    debrisMaterial.opacity = clampField * 0.95;
+    debris.visible = clampField > 0.02;
+    if (debris.visible) {
+      // The ring tightens and spins faster the more the rig is holding.
+      const radius = 0.62 - clampField * 0.22;
+      const spin = phase * (4 + clampField * 14);
+      for (const chip of chips) {
+        const angle = spin + (chip.userData.phase as number);
+        chip.position.set(Math.cos(angle) * radius, Math.sin(angle * 1.7) * 0.08, Math.sin(angle) * radius);
+        chip.rotation.set(angle * 1.3, angle, 0);
+      }
     }
+
+    // Venting is the top tier only: the loudest thing the rig does, and the
+    // anticipation the payout needs.
+    const overpressure = tier >= 2 ? 1 : 0;
+    ventMaterial.opacity = overpressure * (0.12 + pulse * 0.16);
+    vents.visible = ventMaterial.opacity > 0.01;
+    vents.scale.setScalar(1 + pulse * 0.25);
 
     // Grapple arm: back during windup, snapped out during the active frames,
     // easing home through recovery.

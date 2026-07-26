@@ -393,3 +393,36 @@ test.describe('audio', () => {
     expect(await page.evaluate(() => (window as unknown as { __audioContexts: number }).__audioContexts)).toBe(1);
   });
 });
+
+/*
+ * Completion screens on a phone.
+ *
+ * The championship completion screen is the payoff for four races, and it used
+ * to arrive at 320 px with a horizontal scrollbar and its last columns off the
+ * edge — while the checkpoint notes claimed zero overflow at that width. The
+ * claim was true of the *document* and false of the table inside it, so this
+ * asserts both.
+ */
+test.describe('completion screens fit a phone', () => {
+  for (const width of [320, 390]) {
+    test(`${width}: results reflow without a horizontal scrollbar`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 640 });
+      await openGame(page);
+      await startSeededRace(page, 77);
+      await page.evaluate(() => window.adRacers?.skipToFinish());
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+
+      const overflow = await page.evaluate(() => {
+        const scrolled = [...document.querySelectorAll<HTMLElement>('.results__table, .standings-table, .screen')]
+          .filter((node) => node.scrollWidth - node.clientWidth > 1)
+          .map((node) => `${node.className}: ${node.scrollWidth} > ${node.clientWidth}`);
+        return {
+          document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          scrolled,
+        };
+      });
+      expect(overflow.document).toBeLessThanOrEqual(0);
+      expect(overflow.scrolled).toEqual([]);
+    });
+  }
+});

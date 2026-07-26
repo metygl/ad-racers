@@ -30,6 +30,15 @@ import { disposeTextures } from './textures/procedural';
  * frame rate, and it is what lets the whole simulation be tested without a GPU.
  */
 
+/**
+ * How much of an effect budget a rival gets, against the player's one.
+ *
+ * The player's own payoff must be the loudest thing on screen. Rivals sharing
+ * that budget is what turned a busy grid into a screen of orbs with the road
+ * and the player's skiff somewhere behind them.
+ */
+const RIVAL_EFFECT_SCALE = 0.4;
+
 export interface RendererOptions {
   canvas: HTMLCanvasElement;
   quality: QualityId;
@@ -365,14 +374,18 @@ export class GameRenderer {
         case 'driftRelease': {
           const racer = simulation.racers[event.racer];
           if (!racer) break;
-          const colors = [0x9fd8ff, 0xffc46b, 0xff7ad9];
-          this.particles.emit(
-            'boost',
-            racer.pos.x, racer.y + 0.5, racer.pos.z,
-            colors[Math.min(event.tier, colors.length) - 1] ?? 0xffffff,
-            10 + event.tier * 5,
-            1,
-          );
+          /*
+           * A pressure release, not a coloured flare.
+           *
+           * The payout is grit and vented pressure thrown out along the ground
+           * in the crew's own colour — the same salvage language the bands and
+           * the debris ring on the skiff use. Tier is carried by how much is
+           * thrown, never by hue. See `VehicleModel`.
+           */
+          const scale = racer.isPlayer ? 1 : RIVAL_EFFECT_SCALE;
+          const trim = getRacer(racer.profileId).colors.trim;
+          this.particles.emit('dust', racer.pos.x, racer.y + 0.18, racer.pos.z, this.dustColor, Math.round((6 + event.tier * 6) * scale), (0.9 + event.tier * 0.4) * scale);
+          this.particles.emit('spark', racer.pos.x, racer.y + 0.55, racer.pos.z, trim, Math.round((4 + event.tier * 3) * scale), (0.7 + event.tier * 0.3) * scale);
           // The camera punch scales with the tier, so the third tier is
           // physically bigger news than the first rather than just a different
           // colour of spark.
@@ -380,7 +393,26 @@ export class GameRenderer {
           break;
         }
         case 'boostStart': {
-          if (simulation.racers[event.racer]?.isPlayer) this.chase.addKick(0.45);
+          const racer = simulation.racers[event.racer];
+          if (!racer) break;
+          /*
+           * A rival's boost gets a fraction of the player's budget.
+           *
+           * At equal intensity, five rivals boosting on a grid produced white
+           * and purple orbs covering a third to a half of the lower frame and
+           * concealing the player's own skiff, the road and the braking point.
+           * The player's payoff has to be the loudest thing on screen; nobody
+           * else's does.
+           */
+          const scale = racer.isPlayer ? 1 : RIVAL_EFFECT_SCALE;
+          this.particles.emit(
+            'boost',
+            racer.pos.x, racer.y + 0.5, racer.pos.z,
+            getRacer(racer.profileId).colors.glow,
+            Math.round(10 * scale),
+            scale,
+          );
+          if (racer.isPlayer) this.chase.addKick(0.45);
           break;
         }
         case 'towSnap': {

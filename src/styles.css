@@ -1116,21 +1116,23 @@ body {
   transition: background-color 90ms linear, box-shadow 90ms linear;
 }
 
-/* The tier colours match the sparks on the skiff itself, so the HUD and the
-   machine are telling the player the same thing in the same language. */
-.drift__pip--lit:nth-child(1) {
-  background: #9fd8ff;
-  box-shadow: 0 0 8px rgba(159, 216, 255, 0.7);
-}
-
-.drift__pip--lit:nth-child(2) {
-  background: #ffc46b;
-  box-shadow: 0 0 8px rgba(255, 196, 107, 0.7);
+/*
+ * One colour — the crew's own — for all three tiers, exactly as on the skiff.
+ *
+ * The previous cyan → amber → magenta ramp was flagged by an independent art
+ * review as uncomfortably close to a recognisable progression from another
+ * game, and it was also carrying the tier entirely in hue. Count and glow carry
+ * it now, which is original, colour-blind safe, and consistent with the bands
+ * on the machine.
+ */
+.drift__pip--lit {
+  background: var(--crew, var(--signal));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--crew, var(--signal)) 70%, transparent);
 }
 
 .drift__pip--lit:nth-child(3) {
-  background: #ff7ad9;
-  box-shadow: 0 0 10px rgba(255, 122, 217, 0.8);
+  /* The top tier is wider as well as lit: shape, not just brightness. */
+  width: 1.5rem;
 }
 
 .drift__pip--charging {
@@ -1780,5 +1782,109 @@ body {
 @media (min-width: 1600px) {
   .screen {
     width: min(80rem, 100%);
+  }
+}
+
+/*
+ * Results and standings on a phone.
+ *
+ * A six-column table cannot be made to fit 320 px, and the previous attempt did
+ * not try: it kept the desktop grid and let the container scroll sideways, so
+ * the championship completion screen — the payoff for four races — arrived with
+ * a horizontal scrollbar and its last columns off the edge.
+ *
+ * Below this width each row becomes a card. The element stays a real `table`,
+ * so the semantics the accessibility tree needs are unchanged; only the
+ * presentation reflows. Rank, crew and the outcome stay on the first line,
+ * where they belong, and the detail wraps underneath with its column name
+ * attached via `::before`.
+ */
+@media (max-width: 40rem) {
+  .results__table,
+  .standings-table {
+    overflow-x: visible;
+  }
+
+  .results__head,
+  .standings-table__head {
+    display: none;
+  }
+
+  .results__row,
+  .standings-table__row {
+    display: grid;
+    grid-template-columns: 2.2rem 1fr auto;
+    grid-template-areas:
+      'place crew time'
+      'detail detail detail';
+    gap: 0.15rem 0.6rem;
+    min-width: 0;
+    padding: 0.6rem 0.7rem;
+  }
+
+  .results__place,
+  .standings-table__place {
+    grid-area: place;
+  }
+
+  .results__crew,
+  .standings-table__crew {
+    grid-area: crew;
+    min-width: 0;
+  }
+
+  .results__time {
+    grid-area: time;
+    text-align: right;
+  }
+
+  .standings-table__points {
+    grid-area: time;
+  }
+
+  .results__gap,
+  .results__best,
+  .results__strikes,
+  .standings-table__finishes {
+    grid-area: detail;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+  }
+
+  /* Three detail cells share the second line, so they are laid out as a row. */
+  .results__row {
+    grid-template-areas:
+      'place crew time'
+      'detail detail detail'
+      'detail2 detail2 detail2';
+  }
+
+  .results__gap::before {
+    content: 'Gap ';
+  }
+
+  .results__best {
+    grid-area: detail2;
+  }
+
+  .results__best::before {
+    content: 'Best lap ';
+  }
+
+  .results__strikes {
+    grid-area: detail2;
+    justify-self: end;
+  }
+
+  .results__strikes::before {
+    content: 'Hits ';
+  }
+
+  .standings-table__pip {
+    min-width: 1.2rem;
+    height: 1.2rem;
   }
 }

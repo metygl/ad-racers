@@ -36,6 +36,7 @@ export class Hud {
   private readonly surgeFill: HTMLElement;
   private readonly surgeTier: HTMLElement;
   private readonly driftPips: HTMLElement[] = [];
+  private readonly driftMeter: HTMLElement;
   private readonly towFill: HTMLElement;
   private readonly towPanel: HTMLElement;
   private readonly gapAhead: HTMLElement;
@@ -78,6 +79,19 @@ export class Hud {
      * and three lights answer it in peripheral vision.
      */
     for (let i = 0; i < 3; i++) this.driftPips.push(el('span', { class: 'drift__pip' }));
+    this.driftMeter = el(
+      'div',
+      {
+        class: 'drift',
+        role: 'meter',
+        'aria-label': 'Drift charge',
+        'aria-valuemin': '0',
+        'aria-valuemax': '3',
+        'aria-valuenow': '0',
+        'aria-valuetext': 'No drift',
+      },
+      ...this.driftPips,
+    );
     this.towFill = el('div', { class: 'tow__fill' });
     this.towPanel = el(
       'div',
@@ -151,7 +165,7 @@ export class Hud {
           el(
             'div',
             { class: 'hud__meters' },
-            el('div', { class: 'drift', 'aria-label': 'Drift charge' }, ...this.driftPips),
+            this.driftMeter,
             this.towPanel,
           ),
         ),
@@ -236,6 +250,12 @@ export class Hud {
     this.surgeTier.style.transform = `scaleX(${clamp01(player.drift.charge)})`;
     this.surgeTier.classList.toggle('surge__tier--charging', player.drift.active);
 
+    /*
+     * The drift ladder mirrors the machine exactly: three bands in the crew's
+     * own colour, and the *number lit* is the tier. It never changes hue, which
+     * is what makes it original rather than a borrowed colour ramp, and what
+     * makes it readable without colour vision.
+     */
     const tier = player.drift.active
       ? DRIFT.tiers.reduce((best, threshold, index) => (player.drift.charge >= threshold ? index : best), -1)
       : -1;
@@ -243,6 +263,14 @@ export class Hud {
       pip.classList.toggle('drift__pip--lit', index <= tier);
       pip.classList.toggle('drift__pip--charging', player.drift.active && index === tier + 1);
     });
+    // Equivalent semantics to Surge and Tow, which both already had them.
+    const tierNames = ['No drift', 'Wound', 'Loaded', 'Overpressure'];
+    this.driftMeter.setAttribute('aria-valuenow', String(tier + 1));
+    this.driftMeter.setAttribute('aria-valuetext', tierNames[tier + 1] ?? 'No drift');
+    this.driftMeter.style.setProperty(
+      '--crew',
+      `#${getRacer(player.profileId).colors.trim.toString(16).padStart(6, '0')}`,
+    );
 
     const tow = clamp01(player.towCharge);
     this.towFill.style.transform = `scaleX(${tow})`;

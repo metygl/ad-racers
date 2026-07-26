@@ -52,7 +52,8 @@ the game worse rather than merely different.
 
 ## Deployment
 
-Blocked on an account decision, not on code. See `docs/DEPLOYMENT.md`.
+The public repository has GitHub Pages enabled with GitHub Actions as its
+source. See `docs/DEPLOYMENT.md`.
 
 ## Maintaining this file
 

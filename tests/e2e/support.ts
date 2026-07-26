@@ -131,7 +131,7 @@ export async function playerSnapshot(page: Page): Promise<RacerSnapshot | null> 
  */
 export async function holdKey(page: Page, key: string, milliseconds: number): Promise<void> {
   await page.keyboard.down(key);
-  await page.waitForTimeout(milliseconds);
+  await waitForSteps(page, Math.max(1, Math.ceil((milliseconds / 1000) * 120)));
   await page.keyboard.up(key);
 }
 

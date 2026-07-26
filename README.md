@@ -128,8 +128,8 @@ npm run dev          # http://localhost:5173
 | `npm run preview` | Serve the production build |
 | `npm run typecheck` | TypeScript, strict |
 | `npm run lint` | ESLint with type-aware rules |
-| `npm test` | 158 unit tests, including whole races simulated headlessly |
-| `npm run test:e2e` | 45 browser tests against the production build |
+| `npm test` | 162 unit tests, including whole races simulated headlessly |
+| `npm run test:e2e` | 47 browser tests against the production build |
 | `npm run check:assets` | Fail if an undocumented binary asset exists |
 | `npm run check:budget` | Fail if the download exceeds its budget |
 | `npm run licenses` | Dependency licence table |

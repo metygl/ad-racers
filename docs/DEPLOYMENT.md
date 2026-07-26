@@ -68,16 +68,16 @@ stale one.
 
 Pull requests are verified by `ci.yml` but never published.
 
-### Enabling it, once the plan allows
+### Re-enabling after an administrative reset
 
-Either flip **Settings → Pages → Source → GitHub Actions** in the repository
-settings, or:
+Pages is already enabled. If repository administration ever disables it,
+restore **Settings → Pages → Source → GitHub Actions**, or run:
 
 ```bash
 gh api -X POST repos/metygl/ad-racers/pages -f build_type=workflow
 ```
 
-Then push to `main`. The site appears at
+The next push to `main` republishes the site at
 `https://metygl.github.io/ad-racers/`.
 
 ## Serving it anywhere else

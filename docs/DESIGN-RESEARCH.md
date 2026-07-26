@@ -166,7 +166,7 @@ MCP, scripted glTF export, image-to-3D — would materially improve quality.
 WebGPU support via `WebGPURenderer` with automatic WebGL fallback, and reports
 of 2-10× gains on draw-call-heavy scenes ([utsubo][three2026],
 [AppScale][appscale]). That is real, but it is not this game's bottleneck: AD
-Racers runs at **88 draw calls**, well inside the ~100 guideline those same
+Racers runs at **58 draw calls**, well inside the ~100 guideline those same
 sources give ([utsubo tips][threetips]), because scenery is instanced and the
 road is a handful of merged ribbons. WebGPU would buy nothing measurable here
 while costing a second render path to test and a less reliable headless story

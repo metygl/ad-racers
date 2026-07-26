@@ -31,7 +31,7 @@ test.describe('menu to finish', () => {
     await expect(page.getByRole('button', { name: 'Controls' })).toBeVisible();
 
     // The demonstration race behind the menu proves the renderer is alive.
-    await page.waitForTimeout(1500);
+    await measureFrames(page, 60);
     expect(watcher.errors).toEqual([]);
   });
 
@@ -154,7 +154,7 @@ test.describe('pause and resume', () => {
     expect(await currentScreen(page)).toBe('pause');
 
     const frozen = await page.evaluate(() => (window.adRacers?.simulation() as { raceTime: number }).raceTime);
-    await page.waitForTimeout(1200);
+    await measureFrames(page, 60);
     const stillFrozen = await page.evaluate(() => (window.adRacers?.simulation() as { raceTime: number }).raceTime);
     expect(stillFrozen).toBe(frozen);
 

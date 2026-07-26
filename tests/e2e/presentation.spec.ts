@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import {
   currentScreen,
   goToSetup,
+  measureFrames,
   openGame,
   startSeededRace,
   waitForGreenLight,
@@ -127,7 +128,7 @@ test.describe('accessibility', () => {
 
     // Enter activates it, and focus lands inside the next screen.
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(300);
+    await expect(page.getByRole('button', { name: /Continue|Back/ }).first()).toBeVisible();
     const focusedTag = await page.evaluate(() => document.activeElement?.tagName ?? '');
     expect(['BUTTON', 'INPUT', 'A']).toContain(focusedTag);
   });
@@ -236,12 +237,11 @@ test.describe('accessibility', () => {
     // Emulating zoom by halving the CSS viewport is the same problem the layout
     // has to solve, and is what Playwright can actually drive.
     await page.setViewportSize({ width: 640, height: 400 });
-    await page.waitForTimeout(400);
 
     await expect(page.getByRole('button', { name: 'Race', exact: true })).toBeVisible();
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
-    ).toBeLessThanOrEqual(1);
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+      .toBeLessThanOrEqual(1);
   });
 });
 
@@ -349,12 +349,12 @@ test.describe('audio', () => {
     });
 
     await openGame(page);
-    await page.waitForTimeout(2500);
+    await measureFrames(page, 120);
     expect(await page.evaluate(() => (window as unknown as { __audioContexts: number }).__audioContexts)).toBe(0);
 
     // ...and exactly one once the player asks for a race.
     await page.getByRole('button', { name: 'Race', exact: true }).click();
-    await page.waitForTimeout(800);
+    await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
     expect(await page.evaluate(() => (window as unknown as { __audioContexts: number }).__audioContexts)).toBe(1);
   });
 });

@@ -68,7 +68,7 @@ export class GameRenderer {
     const tier = QUALITY_TIERS[this.quality];
 
     this.renderer = this.createRenderer(tier.antialias);
-    this.configureRenderer(tier);
+    this.configureRenderer(this.renderer, tier);
 
     this.scene.add(this.world);
     this.chase = new ChaseCamera(1);
@@ -92,13 +92,13 @@ export class GameRenderer {
     });
   }
 
-  private configureRenderer(tier: (typeof QUALITY_TIERS)[QualityId]): void {
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.maxPixelRatio));
-    this.renderer.shadowMap.enabled = tier.shadowMapSize > 0;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+  private configureRenderer(renderer: THREE.WebGLRenderer, tier: (typeof QUALITY_TIERS)[QualityId]): void {
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.maxPixelRatio));
+    renderer.shadowMap.enabled = tier.shadowMapSize > 0;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
   }
 
   private handleContextLost = (event: Event): void => {
@@ -133,13 +133,14 @@ export class GameRenderer {
   setQuality(quality: QualityId, simulation: Simulation | null): void {
     if (quality === this.quality) return;
     const previousQuality = this.quality;
-    this.quality = quality;
     const tier = QUALITY_TIERS[quality];
     const previousTier = QUALITY_TIERS[previousQuality];
     if (tier.antialias !== previousTier.antialias) {
       const size = this.renderer.getSize(new THREE.Vector2());
       const replacement = this.canvas.cloneNode(false) as HTMLCanvasElement;
       const nextRenderer = this.createRenderer(tier.antialias, replacement);
+      this.configureRenderer(nextRenderer, tier);
+      nextRenderer.setSize(size.x, size.y, false);
       const previousRenderer = this.renderer;
       const previousCanvas = this.canvas;
       this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
@@ -150,15 +151,14 @@ export class GameRenderer {
       this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
       this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
       this.renderer = nextRenderer;
-      this.configureRenderer(tier);
-      this.renderer.setSize(size.x, size.y, false);
       previousRenderer.forceContextLoss();
       previousRenderer.dispose();
       previousCanvas.width = 1;
       previousCanvas.height = 1;
     } else {
-      this.configureRenderer(tier);
+      this.configureRenderer(this.renderer, tier);
     }
+    this.quality = quality;
 
     for (const mesh of this.particles.meshes) this.scene.remove(mesh);
     this.particles.dispose();

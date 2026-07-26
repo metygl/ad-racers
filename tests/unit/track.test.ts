@@ -6,6 +6,8 @@ import { Simulation } from '../../src/game/sim/simulation';
 import { emptyInput } from '../../src/game/sim/state';
 import type { RacerState } from '../../src/game/sim/state';
 import { TRACK_DEFINITIONS, getTrack } from '../../src/game/track/tracks';
+import { SURFACES } from '../../src/game/track/types';
+import { runHeadlessRace } from '../support/headless';
 import type { Path, PathSample } from '../../src/game/track/types';
 import { buildSetup } from '../support/headless';
 
@@ -430,4 +432,88 @@ describe('landmarks', () => {
       }
     });
   }
+});
+
+describe('branches are worth taking and survivable', () => {
+  /**
+   * The round-2 race-design review's headline finding was that Glasshouse's
+   * Rootway was "a race-ending trap that also destabilizes every opponent
+   * field": it saved 25 m of distance while taxing three quarters of its length
+   * at a 38% speed cap, every crew took it anyway, and multiple crews came to a
+   * near stop inside it. A shortcut nobody should choose is not a decision, and
+   * one the field chooses regardless is a trap.
+   *
+   * Two properties make a branch a decision rather than a trap, and both are
+   * measured here rather than asserted in prose.
+   */
+
+  for (const definition of TRACK_DEFINITIONS) {
+    const track = getTrack(definition.id);
+    for (const branch of track.branches) {
+      it(`${definition.name}: ${branch.id} is faster than the road it cuts`, () => {
+        /*
+         * Compared on ideal time, not on distance. A branch that is shorter and
+         * slower is the exact failure this closes, so the surface each metre is
+         * driven on has to be part of the comparison.
+         */
+        const base = 46;
+        const entry = (branch.samples[0] as PathSample).mainDistance;
+        const span = track.forwardGap(entry, (branch.samples[branch.samples.length - 1] as PathSample).mainDistance);
+
+        const timeOf = (samples: readonly PathSample[]): number => {
+          let total = 0;
+          for (let i = 1; i < samples.length; i++) {
+            const step = (samples[i] as PathSample).distance - (samples[i - 1] as PathSample).distance;
+            total += step / (base * SURFACES[(samples[i] as PathSample).surface].speedCap);
+          }
+          return total;
+        };
+
+        let mainTime = 0;
+        for (let d = 1.5; d <= span; d += 1.5) {
+          mainTime += 1.5 / (base * SURFACES[track.sampleMain((entry + d) % track.length).surface].speedCap);
+        }
+        const gain = mainTime - timeOf(branch.samples);
+
+        // Worth taking, and not so much that ignoring it is a mistake.
+        expect(gain, `${branch.id} ideal gain, seconds`).toBeGreaterThan(0.2);
+        expect(gain, `${branch.id} ideal gain, seconds`).toBeLessThan(2.5);
+      });
+    }
+  }
+
+  it('a full field can drive every branch without stalling', () => {
+    /*
+     * The field-level assertion, because the failure was a field-level one: the
+     * review found "minimum speeds included Boneyard 0.4 m/s and Emberworks
+     * 0.2 m/s" with every crew in the branch at once. Ace is included because
+     * that is where it was worst.
+     */
+    for (const [trackId, difficultyId] of [
+      ['glasshouse-vigil', 'pro'],
+      ['glasshouse-vigil', 'ace'],
+      ['emberfall-quarry', 'pro'],
+    ] as const) {
+      const slowest = new Map<number, number>();
+      const result = runHeadlessRace({
+        trackId,
+        difficultyId,
+        playerIndex: null,
+        maxSeconds: 400,
+        onStep: (sim) => {
+          for (const racer of sim.racers) {
+            if (racer.finished || racer.path === sim.track.main) continue;
+            const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
+            slowest.set(racer.index, Math.min(slowest.get(racer.index) ?? Infinity, speed));
+          }
+        },
+      });
+
+      for (const [index, speed] of slowest) {
+        expect(speed, `${trackId} ${difficultyId}: racer ${index} crawled inside a branch`).toBeGreaterThan(8);
+      }
+      // And the branch did not cost anyone the race.
+      expect(result.results.filter((r) => r.finishTime > 0).length).toBe(6);
+    }
+  }, 600000);
 });

@@ -20,6 +20,16 @@ const SAMPLE_SPACING = 1.5;
 const FINE_SUBDIVISIONS = 32;
 /** Cell size of the broadphase grid used by `project`. */
 const GRID_CELL = 12;
+/**
+ * How far either side of a branch mouth the main line's barrier is removed.
+ *
+ * Generous, because the window has to cover the whole span over which the two
+ * corridors overlap and a racer can be handed between them — and because the
+ * cost of being wrong in the safe direction is a few metres of open edge,
+ * while the cost of being wrong the other way is a car delivered into a wall
+ * at racing speed with nothing it could have done differently.
+ */
+const JUNCTION_CLEARANCE = 45;
 
 interface FineSample {
   pos: Vec2;
@@ -320,6 +330,36 @@ export class Track {
       }
       return buildPath(branch.id, branch.points, false, { entry, exit });
     });
+    /*
+     * A junction cannot be walled.
+     *
+     * Where a branch leaves or rejoins, two corridors occupy the same ground
+     * and a racer's projection may legitimately be on either. If the main line
+     * happens to carry a barrier through that window, a car completing the
+     * branch is delivered into it: a review measured a centred, correctly
+     * driven Conveyor exit arriving at the wall at 48 m/s, dropping to 1.7 m/s,
+     * and then reversing back down the road. It was not a driver error and no
+     * line could avoid it, because the trapping face was on the path the car
+     * was being handed *to*.
+     *
+     * So the barrier is removed from both sides of every mouth, at build time,
+     * from the one place that knows where the mouths are. The corridor is still
+     * bounded — leaving it is still off-track — but there is nothing solid to
+     * be delivered into. This is the same "one route source" rule the rest of
+     * the junction follows.
+     */
+    for (const branch of this.branches) {
+      const first = branch.samples[0] as PathSample;
+      const last = branch.samples[branch.samples.length - 1] as PathSample;
+      for (const mouth of [first.mainDistance, last.mainDistance]) {
+        for (const sample of this.main.samples) {
+          if (Math.abs(this.forwardGap(mouth, sample.mainDistance)) <= JUNCTION_CLEARANCE) {
+            sample.edge = 'open';
+          }
+        }
+      }
+    }
+
     this.allPaths = [this.main, ...this.branches];
     this.grid = new SampleGrid(this.allPaths);
 
@@ -383,6 +423,8 @@ export class Track {
     const candidates = this.grid.query(point.x, point.z, 2);
     let best: Projection | null = null;
     let bestScore = Infinity;
+    /** Containment rank of the incumbent: 2 preferred, 1 containing, 0 neither. */
+    let bestRank = -1;
 
     const consider = (path: Path, index: number): void => {
       const n = path.samples.length;
@@ -421,9 +463,50 @@ export class Track {
       const clampedAtEnd =
         !path.closed && ((index === 0 && t <= 0) || (nextIndex === n - 1 && t >= 1));
       const preferred = preferredPath === path && !clampedAtEnd;
+
+      /*
+       * Containment beats proximity. This is the route-truth rule.
+       *
+       * Scoring purely by distance to a centreline picks whichever line happens
+       * to run nearest, and near a branch that is *narrower than the road it
+       * runs beside* that is the wrong answer: a skiff in the middle of
+       * Overgrown's main corridor projected onto the slip road at a lateral of
+       * -11.85 m against a 9.99 m half-width, so the simulation reported
+       * off-track, sand grip and stuck logic while the picture showed painted
+       * kerbs and tarmac underneath the car. No line discipline can solve a
+       * surface boundary that contradicts what the player can see.
+       *
+       * A path that actually contains the point therefore always wins over one
+       * that does not, and distance only breaks ties inside each class. A path
+       * that has run out cannot claim containment at all, because past the end
+       * of an open path `closestPointOnSegment` clamps and `lateral` stops
+       * meaning anything — which is the other half of the same bug, and what
+       * made a finished branch keep hold of a racer through a merge.
+       *
+       * `tests/unit/route-truth.test.ts` audits every corridor of every course
+       * against this rule in both directions.
+       */
+      const contains = !clampedAtEnd && Math.abs(lateral) <= halfWidth;
+      /*
+       * Three ranks, and the top one is what makes a merge stable.
+       *
+       * Where two corridors overlap — which is the whole of a branch mouth —
+       * both contain the racer and whichever centreline happens to be nearer
+       * wins. That flips from step to step: a trace through the Conveyor exit
+       * switched main, main, main, conveyor, main across five frames, and every
+       * switch moved the reported main-line distance by up to fourteen metres.
+       * The AI steers off that number, the HUD's gaps are computed from it, and
+       * the run-off logic reads the lateral that comes with it.
+       *
+       * So while the corridor a racer is *already on* still contains them, they
+       * stay on it. The handoff then happens exactly once, at the point where
+       * the old corridor genuinely runs out, which is what a merge means.
+       */
+      const rank = contains ? (preferred ? 2 : 1) : 0;
       const score =
         Math.hypot(point.x - center.x, point.z - center.z) - (preferred ? halfWidth * 0.25 : 0);
-      if (score >= bestScore) return;
+      if (rank < bestRank) return;
+      if (rank === bestRank && score >= bestScore) return;
 
       let segmentLength = b.distance - a.distance;
       if (segmentLength < 0) segmentLength += path.length;
@@ -433,6 +516,7 @@ export class Track {
       const bank = lerp(a.bank, b.bank, t);
 
       bestScore = score;
+      bestRank = rank;
       best = {
         path,
         sampleIndex: index,

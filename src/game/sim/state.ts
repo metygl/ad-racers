@@ -147,6 +147,24 @@ export interface RacerState {
   hopChain: number;
   /** Seconds of lockout before the same wall may bill another impact. */
   wallImpactLock: number;
+  /**
+   * Unbroken seconds spent overlapping a barrier.
+   *
+   * Distinct from `wallImpactLock`, which bounds what a contact may *cost*.
+   * This measures how long the hull has failed to get clear, and it is what
+   * drives the escape slide — a review measured a single understandable
+   * mistake becoming a twenty-second pin that neither neutral nor full
+   * opposite steering could break, because at three metres a second the
+   * steering has almost no yaw authority left to point the nose out with.
+   */
+  wallContactTime: number;
+  /** Unbroken seconds spent overlapping a track obstacle. */
+  obstacleContactTime: number;
+  /** Road height at take-off, and the greatest drop below it while airborne. */
+  airGroundStart: number;
+  airGroundDrop: number;
+  /** Main-line distance at the previous step, for measuring progress rate. */
+  lastProgressDistance: number;
   drift: DriftState;
   strike: StrikeState;
   /** Seconds of degraded control remaining after being struck. */

@@ -57,11 +57,27 @@ const mainLine = previewMainPath(ring.points);
  * wide, and the same mistake on Emberfall's walled Conveyor was destroying
  * cars. One authoring path means one merge guarantee.
  */
+/*
+ * The water is a *stretch* of the cut, not the whole of it.
+ *
+ * Flooding everything between the mouths made this branch 2.3 seconds slower
+ * than the road it cuts — measured, and now asserted in `track.test.ts`. Water
+ * caps top speed at 62% and takes nearly half the grip, so four hundred metres
+ * of it cannot be bought with any distance saving this course can offer. The
+ * same arithmetic had already turned Glasshouse's Rootway into a line no driver
+ * should ever take and every AI took anyway.
+ *
+ * A shortcut has to be *worth* something before its risk means anything. So the
+ * cut keeps its saved distance, and the lagoon becomes the middle third of it:
+ * long enough that carrying entry speed through without steering is the whole
+ * skill, short enough that doing it well pays.
+ */
 const lagoon = chordAlong(mainLine, 585, 1040, 9, -44, (t) => {
   const mouth = t < 0.16 || t > 0.84;
+  const wet = t > 0.38 && t < 0.62;
   return {
-    halfWidth: mouth ? 14 : 11,
-    ...(mouth ? {} : { surface: 'water' as const }),
+    halfWidth: mouth ? 14 : 11.8,
+    ...(wet ? { surface: 'water' as const } : {}),
   };
 });
 

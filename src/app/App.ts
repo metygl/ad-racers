@@ -192,6 +192,7 @@ export class App {
     this.input.setEnabled(false);
 
     window.addEventListener('resize', this.handleResize);
+    window.addEventListener('popstate', this.handleBack);
     document.addEventListener('visibilitychange', this.handleVisibility);
     // A race must not keep running behind a notification, another window, or a
     // focused address bar. `visibilitychange` alone misses every case where the
@@ -238,6 +239,7 @@ export class App {
   dispose(): void {
     cancelAnimationFrame(this.frameHandle);
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('popstate', this.handleBack);
     document.removeEventListener('visibilitychange', this.handleVisibility);
     window.removeEventListener('blur', this.handleVisibility);
     this.detachInput?.();
@@ -560,6 +562,8 @@ export class App {
       this.audio.startAmbience(track.definition.id === 'emberfall-quarry' ? 55 : 62);
     });
 
+    // One history entry to absorb the first Back. See `handleBack`.
+    history.pushState({ race: true }, '');
     this.showScreen('race');
   }
 
@@ -848,6 +852,26 @@ export class App {
     // A rotation changes both the viewport and the controls' footprint, so the
     // composition correction has to be re-measured with the new layout.
     this.renderer?.chase.setOccludedBand(this.touch.occludedFraction());
+  };
+
+  /*
+   * Browser Back must not silently destroy a race.
+   *
+   * The app already protects a run from losing focus, from the tab being
+   * hidden, and from the graphics context being lost — and then a single Back
+   * gesture threw all of it away with no pause, no confirmation and no way
+   * back. A review measured the page going straight to `about:blank` mid-race.
+   * Back is the most common accidental action on a phone there is.
+   *
+   * Starting a race pushes one history entry, so the first Back lands here
+   * instead of leaving. It pauses and re-arms, which makes the gesture mean
+   * "stop and let me decide" — and a second, deliberate Back from the pause
+   * dialog leaves as normal. Menus keep ordinary Back behaviour.
+   */
+  private handleBack = (): void => {
+    if (this.screen !== 'race' || !this.simulation) return;
+    if (!this.paused) this.togglePause(true);
+    history.pushState({ race: true }, '');
   };
 
   private handleVisibility = (): void => {

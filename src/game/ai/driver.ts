@@ -563,9 +563,23 @@ function chooseBranch(racer: RacerState, ctx: AiContext, normal: Vec2, halfWidth
    * shortcuts entirely. The aim point has to be far enough in to be somewhere
    * the main line is not.
    */
+  /*
+   * And be willing to leave the road to do it.
+   *
+   * The aim used to be clamped inside the main corridor, which quietly made
+   * branch entry impossible: a racer is handed to the corridor that *contains*
+   * it, so a driver that never steers past the road edge is never on the
+   * branch, and the AI stopped taking shortcuts entirely. Crossing the edge is
+   * not a mistake here — it is the manoeuvre.
+   *
+   * The bound is the run-off rather than the road, so a committed driver can
+   * reach a mouth that has already diverged, and still cannot aim at something
+   * halfway across the scenery.
+   */
   const mouth = sampleAt(branch, branch.length * 0.45);
   const toMouth: Vec2 = { x: mouth.pos.x - racer.pos.x, z: mouth.pos.z - racer.pos.z };
-  return clamp(dot(toMouth, normal), -halfWidth * 0.95, halfWidth * 0.95);
+  const reach = halfWidth + PHYSICS.offTrackMargin * 0.6;
+  return clamp(dot(toMouth, normal), -reach, reach);
 }
 
 /**

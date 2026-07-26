@@ -1,4 +1,4 @@
-import { atFractions, chordAlong, makeRing, scatterAlong } from '../authoring';
+import { chordAlong, makeRing, scatterAlong } from '../authoring';
 import { previewMainPath } from '../buildTrack';
 import type { RingNode } from '../authoring';
 import type { ObstacleDefinition, TrackDefinition } from '../types';
@@ -93,11 +93,33 @@ const mainLine = previewMainPath(ring.points);
  * genuinely better off taking the long way, which is the shape every shortcut
  * in this game is meant to have.
  */
-const rootway = chordAlong(mainLine, 1180, 1500, 8, 26, (t) => {
+/*
+ * The trade is *the crest*, not a speed tax.
+ *
+ * The first version flooded three quarters of the tunnel. Water caps speed at
+ * 62%, so 224 metres of it cost about three seconds against a theoretical
+ * distance saving of 0.6 — the shortcut was strictly, unconditionally slower,
+ * and a review found every crew in the field taking it anyway and the whole
+ * race falling apart in there. A line nobody should ever choose is not a
+ * decision, and one the AI chooses regardless is a trap.
+ *
+ * The straight cut across this corner is worth 39 m at most, so the geometry
+ * has to spend that carefully: a shallower arch keeps it near the true chord.
+ * The real cost is the one the fiction always described — the Rootway is flat,
+ * so it gives up the crest on the Terraces and with it the clean-landing Surge
+ * the main line pays. A driver who lands that crest well should be better off
+ * the long way round. That is a decision; a blanket 38% speed cap is a tax.
+ *
+ * What is left of the flood is one short pool near the exit: enough that a bad
+ * line through it costs more than the saving, short enough that a good one
+ * still banks about half a second.
+ */
+const rootway = chordAlong(mainLine, 1180, 1500, 30, 7, (t) => {
   const mouth = t < 0.14 || t > 0.86;
+  const pool = t > 0.62 && t < 0.70;
   return {
-    halfWidth: mouth ? 8.6 : 6.6,
-    ...(mouth ? {} : { surface: 'water' as const }),
+    halfWidth: mouth ? 9.4 : 8.2,
+    ...(pool ? { surface: 'water' as const } : {}),
   };
 });
 
@@ -112,15 +134,21 @@ const glazing: ObstacleDefinition[] = scatterAlong(ring, 160, 196, 5, () => 1.0,
   }),
 );
 
-/** Silt heaps in the Rootway, offset so a clean line through it exists. */
-const silt: ObstacleDefinition[] = atFractions(rootway, [0.45, 0.6]).map((p, i) => ({
-  x: p.x + Math.cos(i * 1.9 + 0.6) * 2.8,
-  z: p.z + Math.sin(i * 1.9 + 0.6) * 2.8,
-  radius: 1.1,
-  kind: 'crate' as const,
-  height: 1.4,
-  restitution: 0.18,
-}));
+/*
+ * The Rootway carries no obstacles, and that is a decision rather than an
+ * omission.
+ *
+ * It used to hold two silt heaps "offset so a clean line through it exists".
+ * A clean line existing is not the same as a field being able to find it: a
+ * trace of an ordinary Pro race found opponents pinned against them at 1.3 m/s,
+ * on track and on tarmac, with their distance frozen — and every crew in the
+ * field taking this branch, so the whole race came apart in a tunnel. Hard
+ * points inside a narrow corridor with no room to be avoided are a stall, not
+ * a hazard.
+ *
+ * The branch's risk is the trade it was always described by: it gives up the
+ * crest, and there is a pool on the floor to be lined up for.
+ */
 
 /** The old growth-lamp masts, standing in the infield of the Nave. */
 const masts: ObstacleDefinition[] = scatterAlong(ring, 100, 140, 3, () => 1.0, () => -18).map((p) => ({
@@ -148,7 +176,7 @@ export const GLASSHOUSE_VIGIL: TrackDefinition = {
       points: rootway,
     },
   ],
-  obstacles: [...glazing, ...silt, ...masts],
+  obstacles: [...glazing, ...masts],
   hazards: [
     // A pad at the mouth of the Nave, so the straight starts with a decision
     // already made rather than a long wait.

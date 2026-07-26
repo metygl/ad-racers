@@ -291,6 +291,15 @@ export const LANDING = {
    * where the ground falls away underneath, clears several metres.
    */
   minClearance: 1.4,
+  /**
+   * How far the road must fall away beneath the skiff, in metres, for air to
+   * count as a crest rather than a pogo.
+   *
+   * The hop impulse alone reaches the clearance threshold on flat tarmac, so
+   * clearance could never tell the two apart. This can, and it is the whole
+   * gate on the flat-hop Surge farm.
+   */
+  minCrestDrop: 0.8,
 } as const;
 
 export const DRIFT = {
@@ -510,6 +519,17 @@ export const COLLISION = {
   wallClearance: 0.6,
   /** Ceiling on the fraction of speed a single wall impact may remove. */
   maxWallSpeedLoss: 0.42,
+  /**
+   * How fast a *persisting* wall contact is walked off the barrier, in metres
+   * per second per second of unbroken contact, and its ceiling.
+   *
+   * Zero for a clean graze, which should cost speed and nothing else. A contact
+   * that survives half a second is one the driver cannot steer out of, because
+   * yaw authority falls away with speed — so the escape has to be positional
+   * and it has to grow, or the car is pinned until it is retired.
+   */
+  wallEscapeRate: 5,
+  wallEscapeMax: 6,
   /** How much of the closing speed is returned as separation. */
   restitution: 0.35,
   /** Extra separation applied per second while overlapping, to unstick pairs. */
@@ -548,6 +568,22 @@ export const RACE = {
   stuckTime: 1.6,
   /** Respawn is offered after being stuck this long, and is instant for AI. */
   respawnTime: 3.2,
+  /**
+   * How long a *player* may be trapped before the race rescues them, seconds.
+   *
+   * Longer than the AI's, because a human reversing out of a barrier on purpose
+   * registers as no forward progress and must be given room to finish the job.
+   * Short enough that nobody watches a three-lap race end at the first corner.
+   */
+  playerRespawnTime: 5.5,
+  /**
+   * How long after the green light a car that has not moved holds its grid
+   * slot against the launching pack, seconds.
+   *
+   * Long enough to cover the whole launch, short enough that it is over before
+   * anyone could use it as cover. It expires immediately once the car moves.
+   */
+  gridGrace: 4,
 } as const;
 
 export const HAZARDS = {

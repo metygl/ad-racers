@@ -7,6 +7,7 @@ import {
   HOP,
   LANDING,
   PHYSICS,
+  RACE,
   RECOVERY,
   SPEED_CLASSES,
   TOW,
@@ -595,30 +596,233 @@ describe('the body-angle bound', () => {
      * long way off the road through a corner, and the second is what a player
      * reads as coherent or broken.
      *
-     * Measured rather than assumed. Across full Ace fields on all four courses
-     * the peak sits between 0.66 and 1.14 rad and the 99.99th percentile at or
-     * under 1.2, so the tyre model already holds the body inside a readable
-     * envelope and `bodyAngleMax` is a guard rail above it rather than a
-     * clamp that shapes normal racing. This test is what keeps that true: it
-     * fails if a future tuning change lets the field sit sideways, whether or
-     * not the guard rail catches it.
+     * *Sustained* is the operative word, and it is measured rather than
+     * assumed. A car crossing the road to reach a shortcut mouth legitimately
+     * points a long way off the line for a moment, and so does one gathering up
+     * a slide; neither is the failure. What the finding describes is a machine
+     * that stays there. So this measures the longest unbroken run past the
+     * bound, which is the thing that is either readable or not.
      */
     for (const trackId of ['saltflat-reliquary', 'overgrown-interchange', 'emberfall-quarry', 'glasshouse-vigil']) {
-      let peak = 0;
+      let worstRun = 0;
+      const runs = new Map<number, number>();
       runHeadlessRace({
         trackId,
         difficultyId: 'ace',
         playerIndex: null,
         maxSeconds: 400,
         onStep: (sim) => {
-          for (const r of sim.racers) {
-            const projection = sim.track.project(r.pos, r.path);
+          for (const racer of sim.racers) {
+            const projection = sim.track.project(racer.pos, racer.path);
             const tangent = Math.atan2(projection.tangent.z, projection.tangent.x);
-            peak = Math.max(peak, Math.abs(wrapAngle(r.heading - tangent)));
+            const angle = Math.abs(wrapAngle(racer.heading - tangent));
+            const run = angle > PHYSICS.bodyAngleMax ? (runs.get(racer.index) ?? 0) + FIXED_STEP : 0;
+            runs.set(racer.index, run);
+            worstRun = Math.max(worstRun, run);
           }
         },
       });
-      expect(peak, `${trackId}: body angle against the road`).toBeLessThan(PHYSICS.bodyAngleMax);
+      expect(worstRun, `${trackId}: seconds held past the body-angle bound`).toBeLessThan(0.75);
     }
+  }, 600000);
+});
+
+describe('being trapped is always survivable', () => {
+  /**
+   * The round-2 gameplay review measured a single understandable mistake
+   * removing control for tens of seconds: a wall contact that neutral release
+   * would not break, that full opposite lock would not break, and that never
+   * offered Recover because the skiff kept creeping at three to six metres a
+   * second — above the speed the stuck affordance was gated on.
+   *
+   * The pinned state is written directly rather than driven into. Driving at a
+   * barrier produces a glance, not a pin; the pin needs the car already deep in
+   * the wall, slow, and pointing into it, which is where a bad landing or a
+   * shove from a rival leaves it and which no sequence of inputs reproduces
+   * reliably. Testing the escape means starting from the state that failed.
+   */
+
+  /** Buries the racer in the outer barrier of a walled section, nose first. */
+  function buryInWall(): { sim: Simulation; racer: RacerState; limit: number } {
+    const { sim, racer } = solo('glasshouse-vigil');
+    upToSpeed(sim, racer);
+
+    for (let i = 0; i < Math.ceil(40 / FIXED_STEP); i++) {
+      if (sim.track.project(racer.pos, racer.path).edge === 'wall') break;
+      sim.step({ ...emptyInput(), throttle: 1, steer: laneKeep(sim, racer) });
+      sim.drainEvents();
+    }
+
+    const projection = sim.track.project(racer.pos, racer.path);
+    expect(projection.edge, 'never reached a walled section').toBe('wall');
+
+    // Half a metre *past* the barrier, crawling, with the nose buried in it.
+    const side = projection.lateral >= 0 ? 1 : -1;
+    const outside = projection.halfWidth + 0.5;
+    racer.pos = {
+      x: projection.center.x + projection.normal.x * side * outside,
+      z: projection.center.z + projection.normal.z * side * outside,
+    };
+    racer.heading = Math.atan2(projection.normal.z * side, projection.normal.x * side);
+    racer.velocity = { x: Math.cos(racer.heading) * 3.5, z: Math.sin(racer.heading) * 3.5 };
+    racer.wedgeTimer = 0;
+
+    return { sim, racer, limit: projection.halfWidth };
+  }
+
+  it('walks a buried skiff back off the barrier under neutral input', () => {
+    const { sim, racer } = buryInWall();
+
+    // Neutral: the player has released everything and is waiting to be free.
+    let escaped = false;
+    for (let i = 0; i < Math.ceil(3 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1 });
+      sim.drainEvents();
+      const projection = sim.track.project(racer.pos, racer.path);
+      if (Math.abs(projection.lateral) <= projection.halfWidth) {
+        escaped = true;
+        break;
+      }
+    }
+
+    expect(escaped, 'still pinned against the wall after three seconds').toBe(true);
+    expect(racer.wallContactTime).toBeLessThan(1.5);
   });
+
+  it('counts a wall grind as stuck even while the skiff is still moving', () => {
+    /*
+     * The affordance was gated on speed, and the failure state *has* speed —
+     * three to six metres a second of going nowhere. It is progress that has
+     * stopped, so progress is what the timer now measures. This asserts the
+     * distinction directly: the timer must be running while the car is still
+     * travelling well above the old stopped-car threshold.
+     */
+    const { sim, racer } = buryInWall();
+    const side = Math.sign(sim.track.project(racer.pos, racer.path).lateral) || 1;
+
+    let countedWhileMoving = false;
+    for (let i = 0; i < Math.ceil(1.5 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1, steer: side });
+      sim.drainEvents();
+      if (racer.wedgeTimer > 0.25 && speedOf(racer) > RACE.stuckSpeed) countedWhileMoving = true;
+    }
+
+    expect(countedWhileMoving, 'a moving skiff going nowhere never registered as stuck').toBe(true);
+  });
+
+  it('rescues a player who never touches the controls', () => {
+    /*
+     * Reproduces the race-design review's start-grid ejection: an untouched
+     * player was still stranded eighty seconds later, because automatic
+     * recovery lived inside the AI branch and a human never reached it.
+     */
+    const sim = new Simulation(buildSetup({ trackId: 'glasshouse-vigil', playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+    const player = sim.player;
+    if (!player) throw new Error('no player');
+
+    let respawns = 0;
+    for (let i = 0; i < Math.ceil(30 / FIXED_STEP); i++) {
+      sim.step(emptyInput());
+      for (const event of sim.drainEvents()) {
+        if (event.type === 'respawn' && event.racer === player.index) respawns += 1;
+      }
+    }
+
+    // The race put them back on the road rather than leaving them in a hedge.
+    expect(respawns).toBeGreaterThan(0);
+    const projection = sim.track.project(player.pos, player.path);
+    expect(Math.abs(projection.lateral)).toBeLessThan(projection.halfWidth + PHYSICS.offTrackMargin);
+  });
+});
+
+describe('the start grid', () => {
+  it('does not eject a player who never launches', () => {
+    /*
+     * The race-design review's second blocker: five skiffs leaving the line at
+     * full throttle shoved a stationary sixth twenty-four metres off an eleven
+     * metre corridor before the first corner. The player had not pressed a key,
+     * so no line, reaction or skill could have avoided it.
+     */
+    const sim = new Simulation(buildSetup({ trackId: 'glasshouse-vigil', playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+    const player = sim.player;
+    if (!player) throw new Error('no player');
+
+    let worst = 0;
+    for (let i = 0; i < Math.ceil(RACE.gridGrace / FIXED_STEP); i++) {
+      sim.step(emptyInput());
+      sim.drainEvents();
+      const projection = sim.track.project(player.pos, player.path);
+      worst = Math.max(worst, Math.abs(projection.lateral) - projection.halfWidth);
+    }
+
+    // Still inside the run-off at worst — nudged, never ejected.
+    expect(worst).toBeLessThan(PHYSICS.offTrackMargin * 0.5);
+  });
+});
+
+describe('flat hopping pays nothing', () => {
+  /**
+   * The round-1 exploit had two halves. Off-road drift farming was closed; the
+   * flat-road half was not, and the round-2 review banked 0.118 Surge — nearly
+   * half an activation — from three taps on a straight, with no crest, no
+   * obstacle and nothing to read. The optimal resource loop should not be
+   * mashing a button in a straight line.
+   */
+  it('taps on flat road never bank Surge, at any point in a chain', () => {
+    const { sim, racer } = solo('saltflat-reliquary');
+    upToSpeed(sim, racer);
+
+    // Somewhere genuinely flat: the salt flat's long opening sweep.
+    const surgeBefore = racer.surge;
+    let landings = 0;
+    for (let tap = 0; tap < 6; tap++) {
+      sim.step({ ...emptyInput(), throttle: 1, steer: laneKeep(sim, racer), hop: true });
+      sim.drainEvents();
+      for (let i = 0; i < Math.ceil(0.75 / FIXED_STEP); i++) {
+        sim.step({ ...emptyInput(), throttle: 1, steer: laneKeep(sim, racer) });
+        for (const event of sim.drainEvents()) if (event.type === 'jumpLand') landings += 1;
+      }
+    }
+
+    expect(landings, 'the hops never happened, so the test proves nothing').toBeGreaterThan(2);
+    expect(racer.surge).toBeLessThanOrEqual(surgeBefore);
+  });
+
+  it('still pays for taking a real crest, and only where there is one', () => {
+    /*
+     * The other half of the gate, and the reason it measures the *road's* drop
+     * rather than banning self-generated air: hopping to extend a crest is the
+     * skill the mechanic exists for and has to keep paying.
+     *
+     * Measured across a full field rather than one lap of one car, because
+     * whether any single controller happens to take a crest well is noise. The
+     * salt flat is the control: it is flat, so nothing there may pay, and if it
+     * ever does the gate has stopped meaning anything.
+     */
+    const paidOn = (trackId: string): number => {
+      let paid = 0;
+      runHeadlessRace({
+        trackId,
+        difficultyId: 'pro',
+        playerIndex: null,
+        maxSeconds: 200,
+        onStep: (_sim, events) => {
+          for (const event of events) if (event.type === 'jumpLand' && event.quality > 0) paid += 1;
+        },
+      });
+      return paid;
+    };
+
+    expect(paidOn('glasshouse-vigil'), 'the hero course pays nothing for its crests').toBeGreaterThan(0);
+    expect(paidOn('emberfall-quarry'), 'the quarry pays nothing for its crests').toBeGreaterThan(0);
+    expect(paidOn('saltflat-reliquary'), 'the flat course paid for a landing').toBe(0);
+  }, 600000);
 });

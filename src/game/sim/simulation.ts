@@ -119,6 +119,11 @@ export class Simulation {
       airClearance: 0,
       hopChain: 0,
       wallImpactLock: 0,
+      wallContactTime: 0,
+      obstacleContactTime: 0,
+      airGroundStart: 0,
+      airGroundDrop: 0,
+      lastProgressDistance: gridDistance,
       drift: { active: false, direction: 0, charge: 0 },
       strike: { phase: 'idle', timer: 0, side: 1, cooldown: 0, hitThisSwing: [] },
       stagger: 0,
@@ -243,10 +248,29 @@ export class Simulation {
         running,
       });
 
-      const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
-      if (running && !racer.finished && speed < RACE.stuckSpeed) {
+      /*
+       * Trapped is measured by *progress*, not by speed.
+       *
+       * A skiff grinding along a barrier at three to six metres a second is
+       * moving comfortably faster than any stopped-car threshold and is going
+       * nowhere: a review measured exactly that state persisting past twenty
+       * seconds with no Recover prompt, because the affordance was gated on a
+       * speed the car never dropped below. What has actually failed is that the
+       * racer is not getting round the course, so that is what is measured.
+       *
+       * Sustained wall contact counts on its own. Being pressed against a
+       * barrier is definitionally not making progress, and waiting for the
+       * progress rate to confirm it only adds delay to a state the player is
+       * already stuck in.
+       */
+      const advanced = this.track.forwardGap(racer.lastProgressDistance, racer.mainDistance);
+      const progressRate = dt > 1e-6 ? advanced / dt : 0;
+      racer.lastProgressDistance = racer.mainDistance;
+      const trapped = progressRate < RACE.stuckSpeed || racer.wallContactTime > 0.5 || racer.obstacleContactTime > 0.5;
+
+      if (running && !racer.finished && trapped) {
         racer.wedgeTimer += dt;
-      } else if (speed > RACE.stuckSpeed * 2) {
+      } else if (progressRate > RACE.stuckSpeed * 2) {
         racer.wedgeTimer = 0;
       }
 
@@ -254,7 +278,7 @@ export class Simulation {
     }
 
     this.resolveRacerCollisions(dt);
-    this.resolveObstacles();
+    this.resolveObstacles(dt);
     if (running) this.applyHazards(dt);
 
     for (const racer of this.racers) {
@@ -359,6 +383,22 @@ export class Simulation {
         // On the grid the player may pre-load throttle but nothing else moves.
         return { ...playerInput, brake: false, boost: false, strike: 0 };
       }
+      /*
+       * The player is rescued too, after a longer grace than the AI.
+       *
+       * Automatic recovery used to live inside the AI branch, so a human who
+       * ended up stranded stayed stranded: a review left an untouched player
+       * ejected from the Glasshouse grid and found it still there eighty
+       * seconds later, with `STUCK - PRESS R TO RECOVER` on screen and nothing
+       * but dark vegetation in the camera. Requiring a keypress the race has
+       * not taught yet, to escape a state the player did not cause, is not a
+       * mechanic.
+       *
+       * The grace is deliberately longer than the AI's: a player reversing out
+       * of a wall on purpose is making progress the timer cannot see, and
+       * snatching the car away from them would be worse than the pin.
+       */
+      if (racer.wedgeTimer > RACE.playerRespawnTime) return { ...playerInput, respawn: true };
       return playerInput;
     }
     const input = driveAi(racer, {
@@ -466,6 +506,17 @@ export class Simulation {
    * impulse exchange weighted by mass, then a hard separation term so two
    * skiffs can never end up welded together.
    */
+  /**
+   * Whether a racer is still sitting on its grid slot in the opening seconds.
+   *
+   * Deliberately requires *both* that the launch window is open and that the
+   * racer has genuinely not moved, so it expires the instant anyone drives.
+   */
+  private onGrid(racer: RacerState): boolean {
+    if (this.raceTime > RACE.gridGrace) return false;
+    return Math.hypot(racer.velocity.x, racer.velocity.z) < RACE.stuckSpeed;
+  }
+
   private resolveRacerCollisions(dt: number): void {
     const minDist = COLLISION.radius * 2;
     for (let i = 0; i < this.racers.length; i++) {
@@ -479,8 +530,30 @@ export class Simulation {
         const n = normalize({ x: b.pos.x - a.pos.x, z: b.pos.z - a.pos.z });
         const overlap = minDist - dist;
         const totalMass = a.spec.mass + b.spec.mass;
-        const aShare = b.spec.mass / totalMass;
-        const bShare = a.spec.mass / totalMass;
+        let aShare = b.spec.mass / totalMass;
+        let bShare = a.spec.mass / totalMass;
+
+        /*
+         * A car that has not launched yet is not pushed off its grid slot.
+         *
+         * Five skiffs leaving the line at full throttle into a stationary sixth
+         * will shove it wherever the geometry sends them: a review left the
+         * player untouched at the green light and found them twenty-four metres
+         * off a eleven-metre corridor, stopped, in the vegetation, before the
+         * first corner. Nothing the player did caused that and nothing they
+         * could have done avoided it — they had not pressed a key.
+         *
+         * So for the opening seconds a racer who has not yet moved holds its
+         * slot, and whoever runs into it takes the whole separation and goes
+         * round. It ends the moment they move, so it cannot be used to park in
+         * the pack, and it is symmetric — the AI gets it on the grid too.
+         */
+        const aParked = this.onGrid(a);
+        const bParked = this.onGrid(b);
+        if (aParked !== bParked) {
+          aShare = aParked ? 0 : 1;
+          bShare = bParked ? 0 : 1;
+        }
 
         a.pos = { x: a.pos.x - n.x * overlap * aShare, z: a.pos.z - n.z * overlap * aShare };
         b.pos = { x: b.pos.x + n.x * overlap * bShare, z: b.pos.z + n.z * overlap * bShare };
@@ -517,18 +590,47 @@ export class Simulation {
   }
 
   /** Static obstacle collisions, resolved as a swept circle against a circle. */
-  private resolveObstacles(): void {
+  private resolveObstacles(dt: number): void {
     for (const racer of this.racers) {
+      let touching = false;
       for (const obstacle of this.track.obstacles) {
         const minDist = obstacle.radius + COLLISION.radius;
         const dx = racer.pos.x - obstacle.x;
         const dz = racer.pos.z - obstacle.z;
         const dist = Math.hypot(dx, dz);
         if (dist >= minDist || dist < 1e-6) continue;
+        touching = true;
 
         const nx = dx / dist;
         const nz = dz / dist;
-        racer.pos = { x: obstacle.x + nx * minDist, z: obstacle.z + nz * minDist };
+
+        /*
+         * Separate, then *slide around* — a rock is not a wall you can lean on.
+         *
+         * Pushing the racer back to exactly the contact surface and deleting
+         * the velocity into it looks like a resolution and is a trap: the
+         * engine puts the car back on the surface next step, the inward
+         * velocity is deleted again, and nothing ever moves. A trace of an
+         * ordinary Pro field found opponents pinned on the Rootway's silt
+         * heaps at 1.3 m/s, on track, on tarmac, with the distance frozen —
+         * which is what tore the field apart in there.
+         *
+         * The fix is the same one the barrier uses, plus the thing an obstacle
+         * has that a wall does not: a way round. A persisting contact gets a
+         * tangential slide in whichever direction the car is already
+         * travelling, so it is walked off the side of the obstacle rather than
+         * held against its face.
+         */
+        racer.obstacleContactTime += dt;
+        const escape = Math.min(COLLISION.wallEscapeMax, racer.obstacleContactTime * COLLISION.wallEscapeRate);
+        const tangentX = -nz;
+        const tangentZ = nx;
+        const along = racer.velocity.x * tangentX + racer.velocity.z * tangentZ;
+        const slide = (along >= 0 ? 1 : -1) * escape * dt;
+        racer.pos = {
+          x: obstacle.x + nx * (minDist + COLLISION.wallClearance * 0.5) + tangentX * slide,
+          z: obstacle.z + nz * (minDist + COLLISION.wallClearance * 0.5) + tangentZ * slide,
+        };
 
         const into = -(racer.velocity.x * nx + racer.velocity.z * nz);
         if (into <= 0) continue;
@@ -551,6 +653,7 @@ export class Simulation {
           });
         }
       }
+      if (!touching) racer.obstacleContactTime = 0;
     }
   }
 

@@ -1815,8 +1815,17 @@ body {
     overflow-x: visible;
   }
 
-  .results__head,
-  .standings-table__head {
+  /*
+   * Specific enough to actually win.
+   *
+   * `.results__table thead` is a two-part selector and this was a one-part
+   * selector, so on a phone the header stayed `display: block`, kept the
+   * 28 rem minimum width meant for the tablet layout, and pushed the results
+   * surface to 565 px inside a 320 px viewport. A review measured exactly that
+   * and had to pan horizontally to read a race result.
+   */
+  .results__table thead.results__head,
+  .standings-table thead.standings-table__head {
     display: none;
   }
 

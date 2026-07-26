@@ -109,6 +109,8 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
     racer.hopCooldown = HOP.cooldown;
     racer.airTime = 0;
     racer.airClearance = 0;
+    racer.airGroundStart = ctx.track.project(racer.pos, racer.path).y;
+    racer.airGroundDrop = 0;
     // Hops in quick succession are a chain, and a chain pays less each time.
     racer.hopChain = racer.sinceLanding <= HOP.chainWindow ? racer.hopChain + 1 : 0;
     vLong = Math.max(0, vLong - HOP.speedCost);
@@ -363,11 +365,17 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
      * 0.9 m by construction, and a crest reaches several.
      */
     racer.airClearance = Math.max(racer.airClearance, racer.y - projection.y);
+    /*
+     * How far the *ground* fell away underneath, which is what makes air a
+     * crest rather than a pogo.
+     */
+    racer.airGroundDrop = Math.max(racer.airGroundDrop, racer.airGroundStart - projection.y);
     if (racer.y <= groundY) {
       const impact = -racer.verticalVelocity;
       // Captured before the reset below: both are the flight that just ended.
       const airTime = racer.airTime;
       const peakClearance = racer.airClearance;
+      const crestDrop = racer.airGroundDrop;
       racer.y = groundY;
       racer.verticalVelocity = 0;
       racer.airborne = false;
@@ -408,9 +416,25 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
        * chain decay is what stops the second, third and fourth hop paying like
        * the first.
        */
+      /*
+       * And the ground has to have fallen away.
+       *
+       * Clearance alone does not distinguish a crest from a pogo: the hop
+       * impulse on its own reaches the clearance threshold on flat tarmac, so
+       * a review banked 0.118 Surge — nearly half an activation — from three
+       * taps on a straight, with no crest, no obstacle and nothing to read.
+       * The optimal resource loop should not be mashing a button on a straight.
+       *
+       * Measuring the *road's* drop between take-off and the lowest point
+       * underneath the skiff is what separates them, and it does it without
+       * caring how the air started: hopping to extend a real crest still pays,
+       * because the ground still falls away. Flat hops pay nothing at all, at
+       * any point in a chain, so the exploit cannot be slowed down into a farm.
+       */
       const eligible =
         airTime >= LANDING.minAirTime &&
         peakClearance >= LANDING.minClearance &&
+        crestDrop >= LANDING.minCrestDrop &&
         racer.onTrack &&
         Math.hypot(vLong, vLat) >= LANDING.minSpeed;
       const chainScale = 1 / (1 + racer.hopChain * HOP.chainDecay);
@@ -511,7 +535,11 @@ function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
   // Clear of the barrier by a comfortable margin: the next contact is a new
   // contact, and may bill again.
   if (over <= -COLLISION.wallClearance) racer.wallImpactLock = 0;
-  if (over <= 0) return;
+  if (over <= 0) {
+    racer.wallContactTime = 0;
+    return;
+  }
+  racer.wallContactTime += ctx.dt;
 
   const side = Math.sign(projection.lateral);
   const normal = projection.normal;
@@ -547,9 +575,28 @@ function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
    * 41 m/s down to 5 m/s while `onTrack` flickered and no recovery ever
    * started. A small guaranteed separation ends the contact.
    */
+  /*
+   * A full clearance, not half of one, plus a widening escape slide.
+   *
+   * Half a clearance leaves the hull inside the band that still counts as
+   * contact, so the lockout can never reset and every subsequent step is
+   * another contact. Combined with the fact that yaw authority falls away with
+   * speed, that is the twenty-second pin a review measured: at three metres a
+   * second neither neutral release nor full opposite lock can point the nose
+   * out, and nothing else was moving the car.
+   *
+   * So separation is guaranteed, and a contact that *persists* is walked off
+   * the barrier by an outward slide that grows the longer it lasts. This is the
+   * same positional-return trick the run-off uses, and for the same reason: a
+   * force strong enough to beat the engine settles the car at zero speed, where
+   * steering has no authority at all.
+   */
+  const escape =
+    COLLISION.wallClearance +
+    Math.min(COLLISION.wallEscapeMax, racer.wallContactTime * COLLISION.wallEscapeRate) * ctx.dt;
   racer.pos = {
-    x: racer.pos.x - normal.x * side * (over + COLLISION.wallClearance * 0.5),
-    z: racer.pos.z - normal.z * side * (over + COLLISION.wallClearance * 0.5),
+    x: racer.pos.x - normal.x * side * (over + escape),
+    z: racer.pos.z - normal.z * side * (over + escape),
   };
 
   const intoWall = dot(racer.velocity, { x: normal.x * side, z: normal.z * side });

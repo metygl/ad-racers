@@ -7,6 +7,9 @@ const base = process.env.BASE_PATH ?? (process.env.NODE_ENV === 'production' ? '
 
 export default defineConfig({
   base,
+  define: {
+    __AD_RACERS_TEST__: JSON.stringify(process.env.AD_RACERS_TEST === '1'),
+  },
   build: {
     target: 'es2022',
     // Hashed filenames everywhere so the CDN can cache aggressively and a new

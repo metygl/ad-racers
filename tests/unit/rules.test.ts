@@ -240,6 +240,16 @@ describe('restart', () => {
 });
 
 describe('race lifecycle', () => {
+  it('classifies timed-out racers as DNF without a finish time', () => {
+    const sim = new Simulation(buildSetup({ trackId: 'overgrown-interchange', entries: 2, playerIndex: 0 }));
+    startRunning(sim);
+    (sim as unknown as { endRace: () => void }).endRace();
+
+    expect(sim.results().every((racer) => racer.finished)).toBe(true);
+    expect(sim.results().every((racer) => !racer.completed)).toBe(true);
+    expect(sim.results().every((racer) => racer.finishTime === Infinity)).toBe(true);
+  });
+
   it('runs a countdown before anyone can move', () => {
     const sim = new Simulation(buildSetup({ trackId: 'overgrown-interchange' }));
     expect(sim.phase).toBe('countdown');

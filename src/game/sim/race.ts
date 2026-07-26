@@ -72,6 +72,7 @@ function onCrossLine(racer: RacerState, ctx: RaceRulesContext): void {
   ctx.events.push({ type: 'lap', racer: racer.index, lap: racer.lapsCompleted, time: lapTime });
 
   if (racer.lapsCompleted >= track.laps) {
+    racer.completed = true;
     racer.finished = true;
     racer.finishTime = raceTime;
   }

@@ -1,6 +1,8 @@
 import { App } from './app/App';
 import './styles.css';
 
+declare const __AD_RACERS_TEST__: boolean;
+
 /**
  * Entry point.
  *
@@ -57,15 +59,9 @@ function boot(): void {
 
   const app = new App({ root, canvas });
 
-  /*
-   * Test handle.
-   *
-   * The end-to-end tests need to start a race with a fixed seed and read the
-   * simulation without driving a real car for two minutes. Exposing the hooks
-   * is deliberate and harmless: they only read state and start races, there is
-   * no server to reach and nothing here that is not already on the page.
-   */
-  (window as unknown as { adRacers?: unknown }).adRacers = app.testHooks;
+  if (__AD_RACERS_TEST__) {
+    (window as unknown as { adRacers?: unknown }).adRacers = app.testHooks;
+  }
   app.start().catch((error: unknown) => {
     fatal(
       'AD Racers could not start',

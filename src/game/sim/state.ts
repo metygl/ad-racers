@@ -140,6 +140,8 @@ export interface RacerState {
   /** Monotone ordering key used for live positions. */
   progress: number;
   position: number;
+  /** True only after crossing the finish line for the final required lap. */
+  completed: boolean;
   finished: boolean;
   finishTime: number;
   /** Final classification, filled in when the racer crosses the line. */

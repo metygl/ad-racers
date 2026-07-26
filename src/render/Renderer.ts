@@ -45,7 +45,7 @@ export interface RenderStats {
 
 export class GameRenderer {
   readonly chase: ChaseCamera;
-  private readonly renderer: THREE.WebGLRenderer;
+  private renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   private readonly world = new THREE.Group();
   private readonly vehicles = new Map<number, VehicleVisual>();
@@ -58,27 +58,16 @@ export class GameRenderer {
   private trackId: string | null = null;
   private elapsedTotal = 0;
   private disposed = false;
+  private canvas: HTMLCanvasElement;
 
   constructor(private readonly options: RendererOptions) {
     this.quality = options.quality;
     this.reducedMotion = options.reducedMotion;
+    this.canvas = options.canvas;
     const tier = QUALITY_TIERS[this.quality];
 
-    this.renderer = new THREE.WebGLRenderer({
-      canvas: options.canvas,
-      antialias: tier.antialias,
-      powerPreference: 'high-performance',
-      // The game never reads the canvas back, and keeping the drawing buffer
-      // lets the browser skip a clear each frame.
-      preserveDrawingBuffer: false,
-      alpha: false,
-    });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.maxPixelRatio));
-    this.renderer.shadowMap.enabled = tier.shadowMapSize > 0;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer = this.createRenderer(tier.antialias);
+    this.configureRenderer(tier);
 
     this.scene.add(this.world);
     this.chase = new ChaseCamera(1);
@@ -86,8 +75,29 @@ export class GameRenderer {
     this.particles = new ParticleSystem(tier.particleBudget);
     for (const mesh of this.particles.meshes) this.scene.add(mesh);
 
-    options.canvas.addEventListener('webglcontextlost', this.handleContextLost);
-    options.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
+    this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
+    this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
+  }
+
+  private createRenderer(antialias: boolean): THREE.WebGLRenderer {
+    return new THREE.WebGLRenderer({
+      canvas: this.canvas,
+      antialias,
+      powerPreference: 'high-performance',
+      // The game never reads the canvas back, and keeping the drawing buffer
+      // lets the browser skip a clear each frame.
+      preserveDrawingBuffer: false,
+      alpha: false,
+    });
+  }
+
+  private configureRenderer(tier: (typeof QUALITY_TIERS)[QualityId]): void {
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.maxPixelRatio));
+    this.renderer.shadowMap.enabled = tier.shadowMapSize > 0;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
   }
 
   private handleContextLost = (event: Event): void => {
@@ -121,10 +131,26 @@ export class GameRenderer {
    */
   setQuality(quality: QualityId, simulation: Simulation | null): void {
     if (quality === this.quality) return;
+    const previousQuality = this.quality;
     this.quality = quality;
     const tier = QUALITY_TIERS[quality];
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.maxPixelRatio));
-    this.renderer.shadowMap.enabled = tier.shadowMapSize > 0;
+    const previousTier = QUALITY_TIERS[previousQuality];
+    if (tier.antialias !== previousTier.antialias) {
+      const size = this.renderer.getSize(new THREE.Vector2());
+      this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
+      this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
+      this.renderer.dispose();
+      const replacement = this.canvas.cloneNode(false) as HTMLCanvasElement;
+      this.canvas.replaceWith(replacement);
+      this.canvas = replacement;
+      this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
+      this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
+      this.renderer = this.createRenderer(tier.antialias);
+      this.configureRenderer(tier);
+      this.renderer.setSize(size.x, size.y, false);
+    } else {
+      this.configureRenderer(tier);
+    }
 
     for (const mesh of this.particles.meshes) this.scene.remove(mesh);
     this.particles.dispose();
@@ -165,6 +191,7 @@ export class GameRenderer {
       this.world.add(buildTrackMesh(track));
       this.world.add(buildScenery(track, {
         densityScale: tier.sceneryDensity,
+        visibilityDistance: tier.sceneryDistance,
         heightAt: terrain.heightAt,
         castShadows: tier.shadowMapSize > 0,
       }));
@@ -311,6 +338,13 @@ export class GameRenderer {
     }
 
     this.particles.update(elapsed, this.chase.camera.quaternion);
+    const scenery = this.world.getObjectByName('scenery');
+    if (scenery) {
+      const maxDistance = QUALITY_TIERS[this.quality].sceneryDistance;
+      for (const child of scenery.children) {
+        child.visible = child.position.distanceTo(this.chase.camera.position) <= maxDistance;
+      }
+    }
     this.renderer.render(this.scene, this.chase.camera);
   }
 
@@ -372,8 +406,8 @@ export class GameRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.options.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
-    this.options.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
+    this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
     for (const visual of this.vehicles.values()) visual.dispose();
     this.vehicles.clear();
     this.clearWorld();

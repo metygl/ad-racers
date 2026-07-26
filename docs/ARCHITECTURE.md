@@ -4,8 +4,10 @@
 
 **The simulation does not know the renderer exists.**
 
-`src/game/` imports nothing from `three`, nothing from the DOM, and calls
-neither `Math.random` nor `Date.now`. It advances in whole fixed steps of
+The simulation, track, and AI core imports nothing from `three`, nothing from
+the DOM, and calls neither `Math.random` nor `Date.now`. The browser input
+adapter under `src/game/input/` is intentionally outside that deterministic
+core. The simulation advances in whole fixed steps of
 `1/120 s` and takes a `ControlInput` — the same struct whether it came from a
 keyboard, a gamepad, a thumb pad or the opponent AI.
 
@@ -44,7 +46,7 @@ Three things fall out of that, and they are the reason the game works:
 | `src/game/track/` | Spline geometry, track definitions, projection, checkpoints. |
 | `src/game/sim/` | Vehicle physics, combat, race rules, the `Simulation` orchestrator. |
 | `src/game/ai/` | Opponent driver and difficulty profiles. |
-| `src/game/input/` | Device abstraction and rebindable bindings. |
+| `src/game/input/` | Browser-facing device adapter and rebindable bindings; deliberately outside the deterministic simulation core. |
 | `src/render/` | Three.js scene construction, camera, particles, quality tiers. |
 | `src/audio/` | Waveform synthesis and the Web Audio graph. |
 | `src/app/` | Screen flow, HUD, the game loop that ties it together. |

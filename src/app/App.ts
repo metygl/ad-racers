@@ -201,6 +201,7 @@ export class App {
   private firstPaint = true;
 
   private showScreen(name: ScreenName, content?: HTMLElement): void {
+    this.input.cancelCapture();
     this.releaseTrap?.();
     this.releaseTrap = null;
     this.screen = name;
@@ -500,7 +501,7 @@ export class App {
     this.audio.stopEngines();
 
     this.lastResultRecords = { race: false, lap: false };
-    if (player) {
+    if (player?.completed) {
       this.lastResultRecords = recordResult(
         this.save,
         simulation.track.definition.id,

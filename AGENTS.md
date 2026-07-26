@@ -9,8 +9,9 @@ AD Racers is an original browser racing game. Start with `README.md`, then
 
 ## The invariant everything depends on
 
-**`src/game/` must never import `three`, touch the DOM, or call `Math.random`
-or `Date.now`.** The simulation runs headlessly in Node, which is what lets a
+**The simulation, track, and AI core in `src/game/` must never import `three`,
+touch the DOM, or call `Math.random` or `Date.now`.** The browser input adapter
+under `src/game/input/` is the deliberate boundary exception. The simulation runs headlessly in Node, which is what lets a
 whole race be a unit test (`tests/support/headless.ts`). Breaking this does not
 fail loudly — it quietly removes the project's ability to test its own AI.
 

@@ -121,6 +121,7 @@ export class Simulation {
       lastCheckpointDistance: gridDistance,
       progress: 0,
       position: index + 1,
+      completed: false,
       finished: false,
       finishTime: 0,
       finishPosition: 0,
@@ -284,7 +285,7 @@ export class Simulation {
     const unfinished = this.racers.filter((r) => !r.finished).sort((a, b) => b.progress - a.progress);
     for (const racer of unfinished) {
       racer.finished = true;
-      racer.finishTime = this.raceTime;
+      racer.finishTime = Infinity;
       this.finishedCount += 1;
       racer.finishPosition = this.finishedCount;
     }

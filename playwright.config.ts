@@ -63,7 +63,7 @@ export default defineConfig({
     // Bound explicitly to 127.0.0.1: `vite preview` defaults to `localhost`,
     // which on macOS resolves to ::1 first, and the readiness probe then waits
     // on an IPv4 address nothing is listening on.
-    command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 41731 --strictPort',
+    command: 'AD_RACERS_TEST=1 npm run build && npm run preview -- --host 127.0.0.1 --port 41731 --strictPort',
     url: 'http://127.0.0.1:41731/ad-racers/',
     reuseExistingServer: false,
     timeout: 180_000,

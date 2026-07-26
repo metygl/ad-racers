@@ -3,6 +3,7 @@ import { SCHEMA_VERSION, __internal, defaultSave, defaultSettings, recordResult 
 import { ACTIONS, DEFAULT_KEY_BINDINGS, bindingLabel, keyLabel } from '../../src/game/input/bindings';
 import { AdaptiveQuality, QUALITY_ORDER, QUALITY_TIERS } from '../../src/render/quality';
 import { formatLapTime, ordinal } from '../../src/core/math';
+import { InputManager } from '../../src/game/input/InputManager';
 
 const { migrate } = __internal;
 
@@ -61,6 +62,11 @@ describe('save migration', () => {
     expect(save.settings.cameraMode).toBe(fallback.cameraMode);
   });
 
+  it('falls back when the saved racer id is unknown', () => {
+    const save = migrate({ version: 2, settings: { lastRacer: 'removed-racer' } });
+    expect(save.settings.lastRacer).toBe(defaultSettings().lastRacer);
+  });
+
   it('preserves best times across a migration', () => {
     const save = migrate({
       version: 1,
@@ -93,6 +99,16 @@ describe('save migration', () => {
     expect(save.settings.bindings.brake).toEqual(DEFAULT_KEY_BINDINGS.brake);
     expect(save.settings.bindings.drift).toEqual(DEFAULT_KEY_BINDINGS.drift);
     expect(save.settings.bindings.steerLeft).toEqual(DEFAULT_KEY_BINDINGS.steerLeft);
+  });
+});
+
+describe('input rebinding', () => {
+  it('can cancel a pending key capture when its screen exits', () => {
+    const input = new InputManager();
+    input.captureNextKey(() => undefined);
+    expect(input.isCapturing).toBe(true);
+    input.cancelCapture();
+    expect(input.isCapturing).toBe(false);
   });
 });
 

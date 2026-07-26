@@ -95,7 +95,7 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
   for (const racer of actions.results) {
     const profile = getRacer(racer.profileId);
     const gap =
-      leader && racer !== leader && Number.isFinite(racer.finishTime)
+      leader?.completed && racer.completed && racer !== leader
         ? `+${(racer.finishTime - leader.finishTime).toFixed(2)}s`
         : '—';
     const row = el(
@@ -106,7 +106,7 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
         el('span', { class: 'results__name', text: profile.crew }),
         el('span', { class: 'results__pilots', text: `${profile.pilot} & ${profile.wrench}` }),
       ),
-      el('span', { class: 'results__time', text: formatLapTime(racer.finishTime) }),
+      el('span', { class: 'results__time', text: racer.completed ? formatLapTime(racer.finishTime) : 'DNF' }),
       el('span', { class: 'results__gap', text: gap }),
       el('span', {
         class: 'results__best',
@@ -119,7 +119,9 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
   }
 
   const headline = player
-    ? player.finishPosition === 1
+    ? !player.completed
+      ? 'Did not finish'
+      : player.finishPosition === 1
       ? 'Race won'
       : `Finished ${ordinal(player.finishPosition)}`
     : 'Race complete';

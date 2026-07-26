@@ -64,7 +64,7 @@ jungles" ([Wikipedia][wiki]).
 
 **What AD Racers takes:** small, strongly themed courses, and difficulty as a
 first-class choice. **What it changes:** it does not inflate the course count
-by re-labelling the same track four times. Three courses that are genuinely
+by re-labelling the same track four times. Four courses that are genuinely
 different in layout, surface, width and hazard are worth more than twelve
 variations, and three laps is a better length than four for a browser session.
 
@@ -149,7 +149,7 @@ That diagnosis shaped the whole design more than any individual feature did:
 | Prehistoric / caveman setting | Not used. AD Racers is set three centuries after an industrial collapse, on reclaimed motorways. |
 | Any character, crew or vehicle name | Not used. All six crews, twelve riders and six skiffs are original. |
 | Parody names of real musicians | Not used, and not imitated. |
-| Track layouts and environments | Not used. All three courses are authored from scratch in `src/game/track/tracks/`. |
+| Track layouts and environments | Not used. Every course is authored from scratch in `src/game/track/tracks/`. |
 | Art, audio, code, screenshots | Not used. Everything is generated procedurally by this repository. |
 | Damage-based scoring overriding finishing order | Rejected on design grounds, as above. |
 | Turbo on a timer | Replaced with earned Surge. |

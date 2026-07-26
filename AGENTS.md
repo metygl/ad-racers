@@ -17,10 +17,40 @@ fail loudly — it quietly removes the project's ability to test its own AI.
 
 `tests/unit/determinism.test.ts` asserts the `Math.random` half of it.
 
+## The handedness rule
+
+**Rotating a heading by +90° on the `(x, z)` plane gives the vehicle's *right*.**
+The sim plane is three.js's plane, three.js is right-handed with +Y up, so +Z
+points at the viewer. The rule is stated once on `rotate` in `src/core/math.ts`;
+use `rightOf` / `leftOf` / `rightNormal` from there and never re-derive it.
+
+This is worth its own section because getting it backwards is *invisible*: the
+original build named that vector `leftOf`, then negated the yaw to match, then
+negated the AI's steering to match that. Every internal invariant held and the
+whole test suite passed for the life of the project. Only a human pressing
+"right" could tell. `tests/unit/handedness.test.ts` therefore asserts in screen
+space, through the camera the renderer builds — anything else can be
+self-consistently wrong.
+
 ## Sharp edges
 
 These cost real debugging time. Each is documented at its site in the code.
 
+- **Post-processing owns tone mapping and the sRGB encode.** The scene renders
+  into a half-float target in linear light with three's tone mapping *off*;
+  `src/render/post/Composer.ts` does ACES and the encode after the bloom.
+  Three.js does not encode when drawing into a linear render target, so a
+  composite that forgets it makes the whole game look like dusk.
+- **Read `renderer.info` immediately after the scene draw.** It resets on every
+  `render()` call, so anything read after the post passes describes a
+  full-screen triangle. This silently reduced the draw-call budget test to
+  "1 < 100".
+- **Skiff models use `YXZ` Euler order.** They face +X, so roll is about local X
+  and pitch about local Z; three's default `XYZ` order applies `rotation.z`
+  first and turns it into a pitch.
+- **Scenery must clear the run-off, not just the road.** Only declared obstacles
+  are collidable, so a tree two metres off the tarmac is one the player drives
+  *through*, camera and all.
 - **Track projection scores by true distance, not lateral offset.** When
   `closestPointOnSegment` clamps to a segment end, the lateral component stops
   meaning "how far away this is". Scoring by it makes progress jump tens of
@@ -45,10 +75,29 @@ These cost real debugging time. Each is documented at its site in the code.
 
 ## Tuning
 
-Physics, combat, drift and race constants live in `src/game/config.ts`. Change
-values there, never inline. After any change run `npm test` — the AI, fairness
-and balance suites are the guard rails, and they will catch a change that makes
-the game worse rather than merely different.
+Physics, combat, drift, hop, landing, tow, recovery and speed-class constants
+all live in `src/game/config.ts`. Change values there, never inline. After any
+change run `npm test` — the AI, fairness, balance and mechanics suites are the
+guard rails, and they will catch a change that makes the game worse rather than
+merely different.
+
+Two balance facts worth not rediscovering:
+
+- **Cornering is grip limited everywhere; top speed only pays on straights.**
+  So the stat mapping in `racers.ts` weights speed more heavily than grip. At a
+  14% speed spread against a 39% grip spread the low-grip crew was measurably
+  shut out of the podium entirely.
+- **Drift charge thresholds are global and must stay that way.** Making the
+  skill mechanic a stat means the player picks their skill ceiling in a menu.
+
+## Design intent
+
+`docs/DESIGN-DIRECTION.md` holds the five pillars every mechanic answers to,
+and — importantly for anything touching the look or the feel — an explicit
+table separating transferable design principles from protected expression.
+`docs/ART-BIBLE.md` holds the value hierarchy, which is enforceable rather than
+aspirational: scenery is never brighter than the road, and only racers, hazards
+and effects reach the top band.
 
 ## Deployment
 

@@ -4,15 +4,27 @@
 
 | Budget | Target | Measured | Enforced by |
 | --- | --- | --- | --- |
-| Frame time, desktop | ≤ 16.7 ms (60 fps) | **8.3 ms median, 10.0 ms p95** | Measured by hand; see below |
-| Draw calls | < 100 | **58** | `tests/e2e/race.spec.ts` |
-| Triangles | < 500 k | **344 k** | Performance overlay |
+| Frame time, desktop | ≤ 16.7 ms (60 fps) | **8.3 ms median, 9.2–9.5 ms p95** | Measured by hand; see below |
+| Draw calls, world | 10 < n < 100 | **40–73** | `tests/e2e/race.spec.ts` |
+| Draw calls, post | ≤ 4 | **4** | `tests/e2e/race.spec.ts` |
+| Triangles | < 500 k | **143 k–315 k** | Performance overlay |
 | Particles | ≤ 800 (High) | Hard cap, pre-allocated | `ParticleSystem` budget |
-| JS heap | < 150 MB | **31 MB** | Performance overlay |
-| Download, total | ≤ 260 kB gzip | **177.7 kB** | `npm run check:budget` |
-| Download, our code | ≤ 80 kB gzip | **44.0 kB** | `npm run check:budget` |
-| Simulation rate | exactly 120 Hz | **120 steps/s** | `tests/e2e/race.spec.ts` |
+| JS heap | < 150 MB | **42–48 MB** | Performance overlay |
+| Download, total | ≤ 260 kB gzip | **191.5 kB** | `npm run check:budget` |
+| Download, our code | ≤ 80 kB gzip | **57.4 kB** | `npm run check:budget` |
+| Simulation rate | exactly 120 Hz | **119–121 steps/s** | `tests/e2e/race.spec.ts` |
 | Network during a race | none | none | No `fetch` in `src/` |
+
+### The draw-call floor is part of the budget
+
+The overlay used to read `renderer.info` at the end of the frame. That works
+until there is a post-processing chain, at which point the counters describe
+the last full-screen triangle and nothing else: the overlay reported **one**
+draw call for the whole game, and the browser suite's ceiling assertion quietly
+became "1 < 100". The counters are now captured immediately after the world is
+drawn and before any post pass runs, and the test asserts a **floor** as well as
+a ceiling. A world drawn in fewer than ten calls is not a world; it is a broken
+measurement.
 
 ## Desktop measurement
 
@@ -20,11 +32,14 @@ Apple silicon laptop, Chrome, hardware WebGL, 1440 × 900, High quality,
 Overgrown Interchange, six cars, mid-race with the player at full throttle:
 
 ```
-120 fps · median 8.3 ms · p95 10.0 ms
-steps/s 120 · quality high
-draws 58 · tris 344k · particles 0
-heap 31 MB
+Overgrown Interchange   120 fps · median 8.3 ms · p95 9.5 ms · draws 73 +4 post · tris 315k · heap 43 MB
+Saltflat Reliquary      120 fps · median 8.3 ms · p95 10.2 ms · draws 41 +4 post · tris 168k · heap 46 MB
+Glasshouse Vigil        120 fps · median 8.3 ms · p95 9.2 ms · draws 40 +4 post · tris 173k · heap 48 MB
+Emberfall Quarry        120 fps · median 8.3 ms · p95 9.3 ms · draws 56 +4 post · tris 143k · heap 42 MB
 ```
+
+All four courses, six cars, mid-race at full throttle, High quality with the
+post chain on.
 
 120 fps is the display refresh rate, so the renderer is refresh-capped rather
 than GPU-bound; the 8.3 ms median against a 16.7 ms 60 fps budget is the real
@@ -54,7 +69,15 @@ What the Low tier actually changes:
 | Terrain resolution | 10 m | 6 m | 4 m |
 | Speed streaks | off | on | on |
 | Antialiasing | off | on | on |
+| Post-processing chain | **off** | on | on |
 | Attract-mode race behind menus | **not run** | run | run |
+
+The post chain is switched off on Low and not as a token gesture: it costs a
+full-screen read plus three reduced-resolution draws, which on the class of
+device that lands on Low is a meaningful fraction of the frame. The art bible
+requires the game to be readable without it, so turning it off costs atmosphere
+and nothing else — the tone mapping and the grade have equivalents in three's
+own pipeline, which the renderer switches back on when the composer is absent.
 
 Low never trades away anything the *simulation* can see, so a race plays
 identically on every tier.

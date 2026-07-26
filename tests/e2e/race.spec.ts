@@ -219,10 +219,25 @@ test.describe('performance', () => {
 
     const text = (await page.locator('.perf').textContent()) ?? '';
     const draws = Number(/draws (\d+)/.exec(text)?.[1] ?? '9999');
-    expect(draws).toBeGreaterThan(0);
+    const postPasses = Number(/\+(\d+) post/.exec(text)?.[1] ?? '-1');
+
+    /*
+     * The floor matters as much as the ceiling.
+     *
+     * The overlay used to read `renderer.info` at the end of the frame, which —
+     * once a post chain was added — described the final full-screen triangle
+     * and nothing else. It reported one draw call for the whole game, and this
+     * assertion quietly became "1 < 100". A world drawn in fewer than ten calls
+     * is not a world; it is a broken measurement.
+     */
+    expect(draws).toBeGreaterThan(10);
     // Measured at 58 on hardware with the full scene in view. The headroom
     // covers a shadow pass and a less favourable camera angle; anything near
     // this number means something has stopped being merged or instanced.
     expect(draws).toBeLessThan(100);
+    // The post chain is a fixed, small number of full-screen passes. If this
+    // grows, it grew by someone adding a pass rather than by the scene changing.
+    expect(postPasses).toBeGreaterThanOrEqual(0);
+    expect(postPasses).toBeLessThanOrEqual(4);
   });
 });

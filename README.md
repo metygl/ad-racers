@@ -4,14 +4,14 @@ An original single-player arcade racing game that runs in a browser. Three
 hundred years after the Long Quiet, the motorways are green again — and the
 salvage crews race on them.
 
-Six crews. Three courses. Two seats per skiff: a pilot on the spine and a
-wrench in the outrigger pod who can swing a grapple arm at anyone running
-alongside.
+Six crews. Four courses. Three speed classes. Two seats per skiff: a pilot on
+the spine and a wrench in the outrigger pod who can swing a grapple arm at
+anyone running alongside.
 
 **Play it:** <https://metygl.github.io/ad-racers/>
 
 No backend, no accounts, no analytics, no ads, no asset files. One runtime
-dependency. 178 kB gzipped, and it runs offline once loaded.
+dependency. 192 kB gzipped, and it runs offline once loaded.
 
 ---
 
@@ -19,17 +19,25 @@ dependency. 178 kB gzipped, and it runs offline once loaded.
 
 The Reclaim Circuit is where salvage crews settle who gets the next dig site.
 You race a two-seat hover-skiff over three laps against five opponents, on
-reclaimed motorway, a dry salt lake, or a basalt quarry at last light.
+reclaimed motorway, a dry salt lake, a collapsed arcology after dark, or a
+basalt quarry at last light.
 
-Three things decide a race:
+Four things decide a race:
 
-- **The line.** Cornering is grip-limited, so corner entry is a real decision
-  and braking is worth doing.
-- **Surge.** The only boost, and it must be earned — by drifting, by
-  slipstreaming, by landing cleanly off a crest. Nothing spawns on the road.
+- **The line.** Cornering is grip-limited, so corner entry is a real decision.
+  Braking is worth doing, and braking hard sharpens the turn-in.
+- **Surge.** The only boost, and it must be earned — by drifting, by taking a
+  crest cleanly, by working a rival's wake. Nothing spawns on the road, and
+  nothing is randomly awarded. There is no item roulette in this game.
+- **The tow.** Sit in a rival's wake and a snap charges. Pull out with it
+  banked and you get a burst — so a straight is a decision about *when*, and
+  the resource is a position you had to earn.
 - **The pod arm.** Your wrench can strike a rival alongside. It telegraphs, it
   cannot chain, and it is worth about a third of a second — enough to break a
   tow, never enough to substitute for driving.
+
+**Circuit** runs a championship across all four courses. Points every round,
+everyone scores, and finishing on the podium opens the next speed class.
 
 ## Playing
 
@@ -38,13 +46,20 @@ Three things decide a race:
 | Accelerate | `W` / `↑` | Right trigger, `A` |
 | Brake / reverse | `S` / `↓` | Left trigger, `B` |
 | Steer | `A` `D` / `←` `→` | Left stick, D-pad |
-| Drift | `Space` / `L Shift` | `X` |
+| Drift | `L Shift` / `J` | `X` |
+| Hop | `Space` / `K` | Bottom face button |
 | Surge | `L` / `L Ctrl` | `Y` |
 | Strike left | `Q` / `,` | Left bumper |
 | Strike right | `E` / `.` | Right bumper |
 | Recover | `R` | Left stick click |
 | Camera | `C` | Right stick click |
 | Pause | `Esc` / `P` | Start |
+
+**Hop has its own button and never shares one with Drift.** That is a
+considered decision: the current Mario Kart generation puts its charge jump on
+the drift button, and reviewers found any steering input turns a jump attempt
+into a drift. Overloading the highest-frequency input punishes exactly the
+players who use it most. See [docs/DESIGN-DIRECTION.md](./docs/DESIGN-DIRECTION.md).
 
 Every keyboard action except pause is rebindable in **Settings → Controls**.
 Gamepad buttons use the fixed Standard Gamepad layout. Escape always pauses.
@@ -56,9 +71,15 @@ the usual reason touch racing games are unplayable, so the game does not ask.
 
 ### Getting quicker
 
-- Hold the drift *through* the corner. Charge banks in tiers; the third pays
-  nearly three times the first.
-- Sit in a rival's wake on a straight. The tow relieves drag and fills Surge.
+- Hold the drift *through* the corner. Charge banks in three tiers, shown as
+  pips on the HUD and as sparks on the skiff itself; the third pays nearly
+  three times the first. The thresholds are identical for every crew — the
+  skill mechanic is never a stat.
+- Sit in a rival's wake on a straight. The tow relieves drag, fills Surge and
+  charges a snap; pull out with the snap banked and it fires.
+- Hop into a crest so you leave it level, and land straight. A level, aligned
+  landing pays Surge and a shove; a sideways one pays nothing.
+- Brake *into* the corner rather than before it. Load on the nose buys turn-in.
 - Spend Surge on the exit of a corner, not the entry.
 - A strike into a rival's braking zone costs them more than one on a straight.
 - Two riders swinging at once **counter** — both stagger, neither is hurt. A
@@ -70,6 +91,7 @@ the usual reason touch racing games are unplayable, so the game does not ask.
 | --- | --- | --- |
 | **Overgrown Interchange** | Wide, fast, forgiving. A flyover crest that launches you. | Collapsed Slip Road — shorter, but broken dirt with rubble in it |
 | **Saltflat Reliquary** | The top-speed course. Enormous width, long sweeps, a crosswind. | The Lagoon Line — straighter, but standing water halves your grip |
+| **Glasshouse Vigil** | Night. Long committed corners, a walled chicane, and the Nave — the longest straight on the Circuit. | The Rootway — shorter and flat, but it gives up the crest and there is water on the floor |
 | **Emberfall Quarry** | Technical. Narrow walled benches, blind crests, steep elevation. | The Conveyor — two skiffs wide, walled, with spoil on it |
 
 Every shortcut is genuinely shorter and genuinely worse in some other way. Both
@@ -81,6 +103,12 @@ halves of that are asserted by test.
 change how close to the limit an opponent drives, how quickly it reacts, how
 often it makes a mistake, and how readily it uses the pod arm — never how much
 grip or power it has. Opponents run the same physics as you.
+
+Separately, three **speed classes** — Reclaim, Cascade and Long Quiet — scale
+the pace of the whole field, player included. Difficulty changes *who you
+race*; the class changes *how fast the game is*. Cascade and Long Quiet are
+earned by finishing a Circuit on the podium in the class below, and a locked
+class is always shown with what opens it.
 
 The optional **"Keep the pack close"** assist gives trailing *opponents* up to
 3% extra engine output. It never applies to you, it is far too small to erase a
@@ -212,6 +240,11 @@ One runtime dependency: three.js (MIT).
 - [docs/DESIGN-RESEARCH.md](./docs/DESIGN-RESEARCH.md) — source-linked research
   into the mid-1990s arcade racers this takes its shape from, and what was
   deliberately *not* taken
+- [docs/DESIGN-DIRECTION.md](./docs/DESIGN-DIRECTION.md) — the pillars, and an
+  explicit table separating transferable design principles from protected
+  expression
+- [docs/ART-BIBLE.md](./docs/ART-BIBLE.md) — colour, value hierarchy,
+  silhouette, materials, motion, post-processing budget and sound identity
 
 AD Racers is an original game. It contains no names, characters, logos, track
 layouts, environments, dialogue, music, sound effects, code, screenshots,
@@ -219,9 +252,10 @@ meshes or textures from any existing title.
 
 ## Performance
 
-8.3 ms median frame time on a modern laptop, 58 draw calls, 344 k triangles,
-31 MB heap, 178 kB download. Full evidence and the lower-tier profile in
-[docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
+Budgets and measurements, including the cost of the post-processing chain, are
+in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md). `npm run check:budget` fails
+the build on a download regression, and the browser suite asserts both a frame
+time and a draw-call ceiling.
 
 ## Known limitations
 
@@ -229,8 +263,9 @@ meshes or textures from any existing title.
   SwiftShader; a real mobile GPU sits far above that, but there is no hardware
   mobile measurement in this repository yet.
 - **Single player only.** There is no local or online multiplayer.
-- **Best times are per course, not per difficulty.** The difficulty a record
-  was set on is stored and shown, but a single slot is kept per course.
+- **Best times are per course, not per difficulty or class.** The difficulty
+  and speed class a record was set on are stored and shown, but a single slot
+  is kept per course.
 - **Opponents drift only where it pays.** They use it on the technical course
   and rarely on the fast ones, which is correct but means the flashiest part of
   the driving model is mostly the player's.
@@ -240,10 +275,9 @@ meshes or textures from any existing title.
 Genuinely optional depth, not missing core gameplay — everything the game needs
 to be a complete game is present.
 
-- A championship across all three courses with aggregated standings
 - Ghost replay of your best lap, which the deterministic simulation already
   supports
-- A fourth course at night, for a lighting direction the current three do not
-  cover
-- Per-difficulty record slots
+- Per-difficulty and per-class record slots
 - Remappable gamepad buttons
+- A split-screen second player, which the fixed-step simulation would take
+  without structural change

@@ -40,8 +40,11 @@ export interface RendererOptions {
 }
 
 export interface RenderStats {
+  /** Draw calls issued while drawing the world, excluding post-processing. */
   drawCalls: number;
   triangles: number;
+  /** Full-screen post-processing passes, which are cheap but not free. */
+  postPasses: number;
   particles: number;
   programs: number;
   geometries: number;
@@ -70,6 +73,18 @@ export class GameRenderer {
   private size = { width: 1, height: 1 };
   /** Smoothed speed cue, so the warp does not snap on a single fast frame. */
   private speedCue = 0;
+  /**
+   * Scene draw counts, captured immediately after the world is drawn.
+   *
+   * `renderer.info.render` is reset at the start of every `render()` call, so
+   * once the post chain runs — three reduced-resolution passes and a composite,
+   * all of them `renderer.render` calls — the counters describe the last
+   * full-screen triangle and nothing else. Reading them at the end of the frame
+   * reported "1 draw call, 0 triangles" for the entire game, which is not just
+   * a wrong overlay: it silently turned the browser suite's draw-call budget
+   * into an assertion that 1 is less than 90.
+   */
+  private sceneStats = { drawCalls: 0, triangles: 0 };
 
   constructor(private readonly options: RendererOptions) {
     this.quality = options.quality;
@@ -443,11 +458,19 @@ export class GameRenderer {
     if (this.composer) {
       this.renderer.setRenderTarget(this.composer.target);
       this.renderer.render(this.scene, this.chase.camera);
+      this.captureSceneStats();
       this.composer.render(this.post);
     } else {
       this.renderer.setRenderTarget(null);
       this.renderer.render(this.scene, this.chase.camera);
+      this.captureSceneStats();
     }
+  }
+
+  private captureSceneStats(): void {
+    const info = this.renderer.info.render;
+    this.sceneStats.drawCalls = info.calls;
+    this.sceneStats.triangles = info.triangles;
   }
 
   /** Continuous per-racer effects: tyre dust, boost flare, drift smoke. */
@@ -496,8 +519,11 @@ export class GameRenderer {
   stats(): RenderStats {
     const info = this.renderer.info;
     return {
-      drawCalls: info.render.calls,
-      triangles: info.render.triangles,
+      // The world's counts, not the composite's. See `sceneStats`.
+      drawCalls: this.sceneStats.drawCalls,
+      triangles: this.sceneStats.triangles,
+      /** Full-screen passes the post chain adds on top of the scene. */
+      postPasses: this.composer ? 4 : 0,
       particles: this.particles.live,
       programs: info.programs?.length ?? 0,
       geometries: info.memory.geometries,

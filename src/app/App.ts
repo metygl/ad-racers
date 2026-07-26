@@ -885,7 +885,8 @@ export class App {
       `${snapshot.fps.toFixed(0)} fps · median ${snapshot.medianMs.toFixed(1)} ms · p95 ${snapshot.p95Ms.toFixed(1)} ms\n` +
       `steps/s ${snapshot.stepsPerSecond.toFixed(0)} · quality ${this.renderer?.qualityId ?? '-'}\n` +
       (stats
-        ? `draws ${stats.drawCalls} · tris ${(stats.triangles / 1000).toFixed(0)}k · particles ${stats.particles}\n`
+        ? `draws ${stats.drawCalls} +${stats.postPasses} post · tris ${(stats.triangles / 1000).toFixed(0)}k · ` +
+          `particles ${stats.particles}\n`
         : '') +
       (snapshot.heapMb !== null ? `heap ${snapshot.heapMb.toFixed(0)} MB` : '');
   }

@@ -47,12 +47,41 @@ Three things fall out of that, and they are the reason the game works:
 | `src/game/sim/` | Vehicle physics, combat, race rules, the `Simulation` orchestrator. |
 | `src/game/ai/` | Opponent driver and difficulty profiles. |
 | `src/game/input/` | Browser-facing device adapter and rebindable bindings; deliberately outside the deterministic simulation core. |
-| `src/render/` | Three.js scene construction, camera, particles, quality tiers. |
+| `src/render/` | Three.js scene construction, camera, particles, post-processing, quality tiers. |
 | `src/audio/` | Waveform synthesis and the Web Audio graph. |
 | `src/app/` | Screen flow, HUD, the game loop that ties it together. |
 
 Dependencies point strictly downwards: `app → render/audio → game → core`.
 `game` never imports from `render`, `audio` or `app`.
+
+---
+
+## Handedness, and the bug it caused
+
+**Rotating a heading by +90° on the `(x, z)` plane yields the vehicle's
+*right*, not its left.**
+
+The simulation's `(x, z)` plane *is* three.js's `(x, z)` plane — the renderer
+maps them straight across — and three.js is right-handed with +Y up, so +Z
+points towards the viewer. At heading 0 the nose is +X and the vehicle's right
+is `forward × up = X̂ × Ŷ = Ẑ`, which is exactly the +90° rotation. The same
+holds for the chase camera, whose screen-right axis `lookAt` builds as
+`up × (eye − target)`.
+
+This is the opposite of the intuition you get from sketching `(x, z)` on paper
+with z up the page, and getting it backwards is not cosmetic. The first
+simulation commit named that vector `leftOf`; `stepVehicle` then negated its
+yaw to agree with the name, and the AI negated its own steering output to agree
+with *that*. Every internal invariant held. The only observer who could tell
+was a player pressing "right" and turning left — for the entire life of the
+project until it was found.
+
+The rule now lives once, on `rotate` in `src/core/math.ts`, with `rightOf`,
+`leftOf` and `rightNormal` exported from the same place.
+`tests/unit/handedness.test.ts` pins it down in *screen space*: it builds the
+camera the renderer builds, projects world positions through it, and asserts
+which way the pixels move. That is the only frame of reference a player has,
+and it is the one that was wrong.
 
 ---
 
@@ -157,6 +186,50 @@ carries on straight.
 > 8 ms step covers 40 cm, over which even a sharp crest drops well under a
 > millimetre — less than any sane epsilon.
 
+**In the air the grip yaw cap is lifted entirely.** Nothing is touching the
+ground, so nothing limits how fast the skiff can be pointed.
+
+> Leaving the cap on is what made crests a coin flip: the cap tightens with
+> speed, and a crest is taken at speed, so precisely when air control mattered
+> most there was none. Air steering is `steerYawRate` alone, already scaled by
+> `airborneSteering`, with a slow auto-align towards the direction of travel so
+> a landing is a skill rather than a lottery.
+
+**Trail braking lifts the grip cap a little.** Load transfers onto the nose and
+it bites, which makes the brake a *steering* input as well as a speed one and
+keeps corner entry a continuous decision rather than a single yes-or-no.
+
+---
+
+## The second-generation mechanics
+
+Each has the four beats `docs/DESIGN-DIRECTION.md` requires — anticipation,
+execution, payoff, recovery — and each is pinned at its boundaries in
+`tests/unit/mechanics.test.ts`.
+
+**Hop** is on its own input and never shares one with drift. The reasoning is
+recorded at `HOP` in `config.ts`: the current Mario Kart generation shares its
+charge jump with the drift button, and reviewers found any steering input turns
+a jump attempt into a drift. Overloading the highest-frequency input punishes
+the players who use it most.
+
+**Landing quality** scores how level *and* how straight a landing was, with an
+air-time floor so it cannot be farmed by tapping hop down a straight.
+
+**The tow snap** is the game's strategic layer, and the reason there is still
+nothing on the road to pick up. Holding a rival's wake banks charge; leaving it
+inside a short window spends that charge as a burst. The resource is a
+*position*, which has to be earned by racing and which the car in front can
+deny by moving.
+
+**Impact recovery** is a short, rate-limited engine assist after a genuine hit.
+Being knocked about is only fair if getting back is possible; it is always
+worth less than the impact took, so a crash stays a net loss.
+
+**Speed classes** scale top speed and engine force for the whole field
+identically, with grip rising by less than the pace so the fast classes corner
+harder rather than merely covering ground faster.
+
 ---
 
 ## Combat
@@ -243,6 +316,42 @@ on a full sampling window of consistent evidence and never raises a tier after
 it has had to drop one — oscillating quality is worse than the frame rate it
 protects against.
 
+### The colour pipeline, which is the part that goes wrong quietly
+
+The scene draws into a **half-float target in linear light with tone mapping
+off**, and `src/render/post/Composer.ts` does bloom, ACES, the grade, the
+vignette, the radial speed warp and the chromatic fringe in one composite pass
+before encoding to sRGB.
+
+Two orderings matter and neither is obvious:
+
+1. **Tone mapping runs after the bloom, not before.** Mapping first compresses
+   every highlight to near 1 before the bright pass sees it, so the bloom has
+   no intensity information left and a thruster flares exactly like the sun.
+   That is the whole reason the target is half float.
+2. **The composite must encode to sRGB itself.** Three.js applies the encode
+   when a material draws straight to the canvas, but *not* when it draws into a
+   render target with a linear colour space. Leaving it out writes linear values
+   into an sRGB framebuffer, and the entire game comes out looking like it is
+   being viewed at dusk through a filter — which is exactly what happened on the
+   first build of this chain.
+
+The chain is three reduced-resolution draws plus one full-screen composite, and
+it is off entirely on the low tier. The art bible's rule governs every
+parameter: post supports readability and never conceals weak art. The bloom
+threshold sits above the road's value band so the road can never bloom, the
+vignette is capped, and every motion-derived term scales to exactly zero under
+reduced motion.
+
+### Model rotation order
+
+Skiff models face +X with +Y up, which makes roll a rotation about local X and
+pitch a rotation about local Z. Three's default `XYZ` Euler order composes as
+`Rx·Ry·Rz`, applying `rotation.z` first — so under the default order
+`rotation.z` is a *pitch* and `rotation.x` becomes a world-axis rotation whose
+meaning changes with heading. The models use `YXZ`, which is the only order
+where those three numbers mean what they are named.
+
 Draw calls are kept low structurally: scenery is one `InstancedMesh` per
 species, the road is a handful of merged ribbons, and particles are two
 instanced quad meshes.
@@ -295,3 +404,11 @@ outright, which is both correct and the cheapest possible power saving.
 | Nothing tunnels through an obstacle | `vehicle.test.ts` |
 | Saves migrate rather than reset | `settings.test.ts` |
 | No audio buffer clips | `audio.test.ts` |
+| Every looping bed is seamless at its join | `audio.test.ts` |
+| Steer right moves the skiff right *on screen* | `handedness.test.ts` |
+| Strike left reaches the rival on your left | `handedness.test.ts` |
+| Hop, landing quality, tow snap and recovery hold at their bounds | `mechanics.test.ts` |
+| Every opponent finishes every course at every speed class | `mechanics.test.ts` |
+| Throttle and steering alone can finish a course | `mechanics.test.ts` |
+| A championship cannot be won by one heroic round | `circuit.test.ts` |
+| A speed class opens only on a podium in the class below | `circuit.test.ts` |

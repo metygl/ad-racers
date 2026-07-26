@@ -413,6 +413,8 @@ export class Track {
       const distance = (a.distance + segmentLength * t) % (path.closed ? path.length : Infinity);
       const mainDistance = lerp(a.mainDistance, b.mainDistance + (b.mainDistance < a.mainDistance ? this.length : 0), t);
 
+      const bank = lerp(a.bank, b.bank, t);
+
       bestScore = score;
       best = {
         path,
@@ -424,8 +426,23 @@ export class Track {
         center,
         tangent,
         normal,
-        y: lerp(a.y, b.y, t),
-        bank: lerp(a.bank, b.bank, t),
+        /*
+         * Elevation of the road *at this lateral offset*, not of the
+         * centreline.
+         *
+         * Banking rotates the ribbon about its centreline, so on a 16 m
+         * half-width at 9 degrees the low edge sits 2.5 m below the centre and
+         * the high edge 2.5 m above it. Reporting the centreline height put a
+         * car two metres in the air on the low side and buried in the mesh on
+         * the high side, and — because the terrain was pinned to the centreline
+         * too — the low half of every banked road was hidden *underground*.
+         * That is what made a skiff on the inside of Saltflat's long bend look
+         * like it was on sand while the physics correctly reported road.
+         *
+         * There is one road surface. This is its height.
+         */
+        y: lerp(a.y, b.y, t) + Math.sin(bank) * lateral,
+        bank,
         curvature: lerp(a.curvature, b.curvature, t),
         surface: t < 0.5 ? a.surface : b.surface,
         edge: t < 0.5 ? a.edge : b.edge,

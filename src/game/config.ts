@@ -35,8 +35,25 @@ export const PHYSICS = {
   /** Steering authority curve: full at this speed, tapering above and below. */
   steeringPeakSpeed: 18,
   steeringHighSpeedFalloff: 0.42,
-  /** How quickly the steering input follows the raw control input. */
-  steerResponse: 9.5,
+  /**
+   * How quickly the *physics* steering command follows the raw control input.
+   *
+   * Deliberately fast. The chassis lean is smoothed separately in the renderer,
+   * which is where smoothing belongs: filtering the command itself made a tap
+   * hold 0.44 of lock 250 ms after release and left rapid countersteer stuck
+   * near zero, so the practical technique became holding full lock and reacting
+   * to the boundary. Visual smoothness must never cost input precision.
+   */
+  steerResponse: 26,
+  /**
+   * Extra response applied when the input opposes the current command.
+   *
+   * Catching a slide is the one moment where lag is unacceptable, so reversing
+   * the wheel cancels the accumulated command far faster than building it.
+   */
+  steerReversalGain: 2.6,
+  /** Response when the input returns to centre, so releasing is crisp too. */
+  steerReleaseGain: 1.8,
   /**
    * Converts a skiff's grip stat into the peak lateral acceleration it can
    * actually hold, which in turn caps yaw rate at speed.
@@ -81,6 +98,30 @@ export const PHYSICS = {
    * the air it visibly deserves, without letting every gentle rise become a jump.
    */
   airborneThreshold: 0.42,
+  /**
+   * Minimum excess over the launch threshold, as a fraction of gravity, before
+   * a rise counts as a crest at all.
+   *
+   * Every gentle undulation on a course sits just the wrong side of a bare
+   * threshold, and each one fired a launch and a landing. Requiring a margin
+   * turns "the ground is slightly convex here" into "this is a jump".
+   */
+  crestMinExcess: 0.14,
+  /**
+   * Upward shove applied at the moment a crest launches, in multiples of the
+   * excess acceleration over the threshold.
+   *
+   * Without it the "launch" is not one. Triggering below 1 g means the ballistic
+   * path never actually separates from the ground, so the skiff set itself
+   * airborne and landed again on the very next step, over and over: a headless
+   * race over the flyover produced 2,219 landings of 0.12 s each and a peak
+   * clearance of 4 cm. Nobody ever got air, and every one of those landings
+   * fired a `jumpLand` event. The impulse is what turns a modelled suspension
+   * unload into flight the player can see and score.
+   */
+  crestUnload: 9,
+  /** Ceiling on that shove, so a very sharp crest is not a catapult. */
+  crestUnloadMax: 8.5,
   /** Impact speed above which a wall hit spins the vehicle. */
   wallSpinThreshold: 22,
   /** Fraction of speed retained after a square-on wall hit. */
@@ -155,6 +196,14 @@ export const HOP = {
   impulse: 6.2,
   /** Lockout between hops. */
   cooldown: 0.45,
+  /**
+   * Consecutive hops inside this window are treated as a chain and pay less
+   * each time. Five flat hops on a straight raised Surge from 0.25 to 0.81 in
+   * under four seconds, which is a farm rather than a mechanic.
+   */
+  chainWindow: 2.6,
+  /** Reward multiplier per additional hop in a chain. */
+  chainDecay: 0.35,
   /** Minimum speed before a hop does anything; a parked skiff cannot pogo. */
   minSpeed: 4,
   /** Speed cost, so hopping down a straight is never free. */
@@ -177,20 +226,57 @@ export const HOP = {
  */
 export const LANDING = {
   /** Slip angle (radians) at or below which a landing counts as aligned. */
-  alignedSlip: 0.12,
-  /** Slip angle beyond which alignment scores nothing. */
-  sloppySlip: 0.5,
+  alignedSlip: 0.1,
+  /**
+   * Slip angle beyond which alignment scores nothing.
+   *
+   * Tightened hard: a landing 16 degrees (0.28 rad) out of line still paid, so
+   * a player could hop, hold full lock, and be rewarded for arriving crooked.
+   */
+  sloppySlip: 0.26,
+  /** Heading must be within this of the track tangent, in radians. */
+  alignedToTrack: 0.34,
+  /** Minimum ground speed for a landing to score at all. */
+  minSpeed: 20,
   /** Surge for a perfectly level, perfectly aligned landing. */
   perfectSurge: 0.2,
   /** Forward impulse (m/s) for the same. */
   perfectImpulse: 3.2,
-  /** Airborne seconds needed before a landing can score at all. */
-  minAirTime: 0.35,
+  /**
+   * Airborne seconds needed before a landing can score at all.
+   *
+   * A plain hop clears roughly 0.55 s, so this alone never gated the flat-hop
+   * farm. It is now backed by `minRise`: a landing pays for taking a *crest*
+   * well, and a crest is a place where the ground fell away.
+   */
+  minAirTime: 0.45,
+  /**
+   * Metres of clearance above the ground the flight must reach to score.
+   *
+   * A hop reaches about 0.9 m by construction (`impulse² / 2g`), so anything
+   * above that cannot be produced by tapping hop on the flat — while a crest,
+   * where the ground falls away underneath, clears several metres.
+   */
+  minClearance: 1.4,
 } as const;
 
 export const DRIFT = {
   /** Minimum speed before a drift can be initiated. */
   minSpeed: 12,
+  /**
+   * Charge only accrues on a surface a racing line actually uses.
+   *
+   * Holding drift out on the grass filled the tier ladder to maximum at 9 m/s,
+   * paid 0.57 Surge, and let the player rocket back to 37 m/s — a completely
+   * reliable way to fill the primary speed resource without solving a single
+   * corner. Reward has to require being on the road, at pace, and genuinely
+   * loaded up.
+   */
+  minChargeSpeed: 24,
+  /** Slip below this contributes nothing: a straight-line hold is not a drift. */
+  minChargeSlip: 0.12,
+  /** Charge bleeds at this rate per second while off the drivable corridor. */
+  offTrackDecay: 1.6,
   /** Lateral grip multiplier while drifting. */
   gripMultiplier: 0.44,
   /** Yaw rate multiplier while drifting. */
@@ -378,6 +464,19 @@ export const COMBAT = {
 export const COLLISION = {
   /** Racer collision radius. */
   radius: 1.35,
+  /**
+   * After a wall impact, the same wall cannot bill again until the racer has
+   * been clear of it for this long.
+   *
+   * Without it a neutral-steer graze renewed the impact every frame and bled
+   * 41 m/s down to 5 m/s over a couple of seconds of rail grinding, which is
+   * neither learnable nor recoverable. One contact is one impact.
+   */
+  wallImpactLockout: 0.8,
+  /** Metres of clearance that count as having left the wall. */
+  wallClearance: 0.6,
+  /** Ceiling on the fraction of speed a single wall impact may remove. */
+  maxWallSpeedLoss: 0.42,
   /** How much of the closing speed is returned as separation. */
   restitution: 0.35,
   /** Extra separation applied per second while overlapping, to unstick pairs. */
@@ -398,6 +497,12 @@ export const RACE = {
    * race is still classified on merit rather than by the clock.
    */
   postRaceTimeout: 75,
+  /**
+   * Continuous seconds below walking pace after which a racer still out on
+   * track counts as retired rather than merely slow. Used to end a race whose
+   * only remaining runners have genuinely stopped.
+   */
+  retirementTime: 12,
   /**
    * Corridor tolerance, in multiples of the local half-width, within which a
    * checkpoint still registers. Wider than the road so a legitimate wide line

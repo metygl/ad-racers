@@ -1,6 +1,6 @@
 import type { Rng } from '../../core/rng';
 import { clamp, clamp01, damp, dot, fromHeading, moveTowards, rightOf, wrapAngle } from '../../core/math';
-import { COMBAT, DRIFT, HOP, LANDING, PHYSICS, RECOVERY, SURGE } from '../config';
+import { COLLISION, COMBAT, DRIFT, HOP, LANDING, PHYSICS, RECOVERY, SURGE } from '../config';
 import type { Track } from '../track/buildTrack';
 import { sampleAt } from '../track/buildTrack';
 import { SURFACES } from '../track/types';
@@ -67,6 +67,7 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   racer.contactCooldown = Math.max(0, racer.contactCooldown - dt);
   racer.strike.cooldown = Math.max(0, racer.strike.cooldown - dt);
   racer.hopCooldown = Math.max(0, racer.hopCooldown - dt);
+  racer.wallImpactLock = Math.max(0, racer.wallImpactLock - dt);
   racer.recoveryBoost = Math.max(0, racer.recoveryBoost - dt);
   racer.recoveryCooldown = Math.max(0, racer.recoveryCooldown - dt);
   racer.sinceLanding += dt;
@@ -107,6 +108,9 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
     racer.verticalVelocity = HOP.impulse;
     racer.hopCooldown = HOP.cooldown;
     racer.airTime = 0;
+    racer.airClearance = 0;
+    // Hops in quick succession are a chain, and a chain pays less each time.
+    racer.hopChain = racer.sinceLanding <= HOP.chainWindow ? racer.hopChain + 1 : 0;
     vLong = Math.max(0, vLong - HOP.speedCost);
     ctx.events.push({ type: 'hop', racer: racer.index });
   }
@@ -177,8 +181,23 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   }
 
   // --- steering -----------------------------------------------------------
+  /*
+   * The physics command is *not* the smoothed thing the chassis leans by.
+   *
+   * Filtering the command made a 600 ms tap still hold 0.44 of lock a quarter
+   * of a second after release, and left rapid countersteer hovering near zero —
+   * so catching a slide was impossible and the practical technique became
+   * holding full lock. Response is now fast, and faster still when the driver
+   * is reversing the wheel or returning to centre, because those are the two
+   * moments where lag is a mistake. The renderer smooths the *pose*.
+   */
   const targetSteer = clamp(input.steer, -1, 1);
-  racer.steer = damp(racer.steer, targetSteer, PHYSICS.steerResponse, dt);
+  const opposing = targetSteer * racer.steer < 0;
+  const centring = Math.abs(targetSteer) < Math.abs(racer.steer);
+  const response =
+    PHYSICS.steerResponse *
+    (opposing ? PHYSICS.steerReversalGain : centring ? PHYSICS.steerReleaseGain : 1);
+  racer.steer = damp(racer.steer, targetSteer, response, dt);
 
   // Steering and the grip cap both key off the true speed, not the component
   // along the nose. Using `vLong` makes the yaw cap *loosen* as the skiff slides
@@ -265,10 +284,22 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
 
   // --- drift charge -------------------------------------------------------
   if (drifting) {
-    const productive = clamp01(Math.abs(racer.slip) / 0.28) * clamp01(vLong / 25);
-    // Charge only bleeds away once the slide has genuinely stopped working,
-    // otherwise a drift held through a corner exit never banks a tier.
-    const decay = productive < 0.3 ? DRIFT.chargeDecay * (0.3 - productive) : 0;
+    /*
+     * Charge is payment for solving a corner, so it requires all three parts of
+     * having solved one: being on the road, carrying pace, and holding a real
+     * slide. Off the corridor it does not merely stop accruing — it bleeds.
+     *
+     * Before this gate, holding drift out on the grass filled the tier ladder
+     * to maximum at 9 m/s and paid 0.57 Surge. That is a completely reliable
+     * way to fill the primary speed resource without ever taking a corner,
+     * which makes the tiers, the racing line and the risk/reward cosmetic.
+     */
+    const slipping = clamp01((Math.abs(racer.slip) - DRIFT.minChargeSlip) / (0.28 - DRIFT.minChargeSlip));
+    const fast = clamp01((vLong - DRIFT.minChargeSpeed) / 12);
+    const productive = racer.onTrack ? slipping * fast : 0;
+    const decay = racer.onTrack
+      ? (productive < 0.3 ? DRIFT.chargeDecay * (0.3 - productive) : 0)
+      : DRIFT.offTrackDecay;
     racer.drift.charge = clamp01(racer.drift.charge + DRIFT.chargeRate * productive * dt - decay * dt);
   }
 
@@ -293,13 +324,26 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   if (racer.airborne) {
     racer.verticalVelocity -= PHYSICS.gravity * dt;
     racer.y += racer.verticalVelocity * dt;
+    /*
+     * Peak clearance, not peak height.
+     *
+     * A crest launches the skiff because the *ground* falls away, so its
+     * absolute height usually goes down through the whole flight — measuring a
+     * rise above the take-off point scores every crest at zero and every flat
+     * hop above it. Clearance is the honest discriminator: a hop reaches about
+     * 0.9 m by construction, and a crest reaches several.
+     */
+    racer.airClearance = Math.max(racer.airClearance, racer.y - projection.y);
     if (racer.y <= groundY) {
       const impact = -racer.verticalVelocity;
+      // Captured before the reset below: both are the flight that just ended.
       const airTime = racer.airTime;
+      const peakClearance = racer.airClearance;
       racer.y = groundY;
       racer.verticalVelocity = 0;
       racer.airborne = false;
       racer.airTime = 0;
+      racer.airClearance = 0;
       racer.sinceLanding = 0;
       const clean = impact <= PHYSICS.cleanLandingSpeed;
 
@@ -312,15 +356,47 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
        * hop off a flat road is excluded by the air-time floor so the mechanic
        * cannot be farmed on a straight.
        */
-      const levelness = clamp01(1 - impact / (PHYSICS.cleanLandingSpeed * 2.2));
+      /*
+       * Levelness is measured from the *clean* landing speed, not from zero. A
+       * crest that gives real air necessarily lands at several metres a second,
+       * so scoring against zero capped even a perfect flyover landing at about
+       * a third and made the whole reward unreachable by driving well.
+       */
+      const levelness = 1 - clamp01((impact - PHYSICS.cleanLandingSpeed) / 14);
       const alignment = 1 - clamp01((Math.abs(racer.slip) - LANDING.alignedSlip) / (LANDING.sloppySlip - LANDING.alignedSlip));
-      const quality = airTime >= LANDING.minAirTime ? levelness * alignment : 0;
+      /*
+       * Landing on the track's line, not merely straight relative to your own
+       * velocity — a skiff can be perfectly aligned with where it is going and
+       * still be going somewhere the road is not.
+       */
+      const tangentHeading = Math.atan2(projection.tangent.z, projection.tangent.x);
+      const offLine = Math.abs(wrapAngle(racer.heading - tangentHeading));
+      const onLine = 1 - clamp01((offLine - LANDING.alignedToTrack) / LANDING.alignedToTrack);
+      /*
+       * A landing pays for taking a *crest* well. Air time alone never gated
+       * the flat-hop farm, because an ordinary hop clears half a second; the
+       * rise requirement is what distinguishes a crest from a pogo, and the
+       * chain decay is what stops the second, third and fourth hop paying like
+       * the first.
+       */
+      const eligible =
+        airTime >= LANDING.minAirTime &&
+        peakClearance >= LANDING.minClearance &&
+        racer.onTrack &&
+        Math.hypot(vLong, vLat) >= LANDING.minSpeed;
+      const chainScale = 1 / (1 + racer.hopChain * HOP.chainDecay);
+      const quality = eligible ? levelness * alignment * onLine * chainScale : 0;
 
+      /*
+       * Landing quality is the *only* landing reward.
+       *
+       * A separate flat "clean landing" bonus survived every other gate: ten
+       * ordinary hops down a straight paid it ten times and banked 0.9 Surge in
+       * six seconds. If a landing is not worth scoring it is not worth paying.
+       */
       if (quality > 0) {
         racer.surge = Math.min(SURGE.max, racer.surge + LANDING.perfectSurge * quality);
         vLong += LANDING.perfectImpulse * quality;
-      } else if (clean) {
-        racer.surge = Math.min(SURGE.max, racer.surge + SURGE.cleanLandingGain);
       }
       if (!clean) {
         const loss = clamp01((impact - PHYSICS.cleanLandingSpeed) / 18);
@@ -330,7 +406,15 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
         x: newForward.x * vLong + newRight.x * vLat,
         z: newForward.z * vLong + newRight.z * vLat,
       };
-      ctx.events.push({ type: 'jumpLand', racer: racer.index, clean, speed: impact, quality });
+      ctx.events.push({
+        type: 'jumpLand',
+        racer: racer.index,
+        clean,
+        speed: impact,
+        quality,
+        airTime,
+        clearance: peakClearance,
+      });
     }
   } else {
     /*
@@ -345,10 +429,24 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
      */
     const { slope, curvature } = surfaceProfile(racer.path, projection.distance, groundY);
     const requiredAccel = curvature * vLong * vLong;
-    if (vLong > 12 && requiredAccel < -PHYSICS.gravity * PHYSICS.airborneThreshold) {
+    const launchThreshold = -PHYSICS.gravity * PHYSICS.airborneThreshold;
+    const launchExcess = (launchThreshold - requiredAccel) / PHYSICS.gravity;
+    if (vLong > 12 && launchExcess > PHYSICS.crestMinExcess) {
       racer.airborne = true;
-      racer.verticalVelocity = slope * vLong;
+      /*
+       * The ground-following rate *plus* an unloading shove.
+       *
+       * The rate alone leaves the skiff on a path the ground keeps up with, so
+       * it lands again on the next step; see `crestUnload`. The shove scales
+       * with how far past the threshold the crest is, so a gentle rise gives a
+       * skim and the flyover gives real air.
+       */
+      racer.verticalVelocity =
+        slope * vLong + Math.min(PHYSICS.crestUnloadMax, PHYSICS.crestUnload * launchExcess);
       racer.y = groundY;
+      racer.airClearance = 0;
+      // A crest is not part of a hop chain; it is the thing the reward is for.
+      racer.hopChain = 0;
     } else {
       // Glued to the surface, but eased so a kerb does not snap the camera.
       racer.y = damp(racer.y, groundY, 22, dt);
@@ -380,6 +478,10 @@ function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
   const walled = projection.edge === 'wall';
   const limit = walled ? projection.halfWidth : projection.halfWidth + PHYSICS.offTrackMargin;
   const over = Math.abs(projection.lateral) - limit;
+
+  // Clear of the barrier by a comfortable margin: the next contact is a new
+  // contact, and may bill again.
+  if (over <= -COLLISION.wallClearance) racer.wallImpactLock = 0;
   if (over <= 0) return;
 
   const side = Math.sign(projection.lateral);
@@ -408,27 +510,54 @@ function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
     return;
   }
 
-  // Push back to the limit along the track normal.
+  /*
+   * Push clear of the barrier, not merely back to it.
+   *
+   * Landing exactly on the limit leaves the racer re-colliding on the next
+   * step, which is how a graze became a multi-second rail grind that bled
+   * 41 m/s down to 5 m/s while `onTrack` flickered and no recovery ever
+   * started. A small guaranteed separation ends the contact.
+   */
   racer.pos = {
-    x: racer.pos.x - normal.x * side * over,
-    z: racer.pos.z - normal.z * side * over,
+    x: racer.pos.x - normal.x * side * (over + COLLISION.wallClearance * 0.5),
+    z: racer.pos.z - normal.z * side * (over + COLLISION.wallClearance * 0.5),
   };
 
   const intoWall = dot(racer.velocity, { x: normal.x * side, z: normal.z * side });
   if (intoWall <= 0) return;
 
-  // Remove the component into the wall and scrub speed proportionally to how
-  // square-on the impact was; a graze costs almost nothing.
+  // Always remove the component into the wall — a car cannot keep driving into
+  // a barrier — but only *bill* an impact once per contact.
+  const speedBefore = Math.hypot(racer.velocity.x, racer.velocity.z);
   racer.velocity = {
     x: racer.velocity.x - normal.x * side * intoWall * (1 + PHYSICS.wallRestitution),
     z: racer.velocity.z - normal.z * side * intoWall * (1 + PHYSICS.wallRestitution),
   };
-  const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
-  const squareness = clamp01(intoWall / Math.max(4, speed));
-  const scrub = 1 - squareness * 0.45;
-  racer.velocity = { x: racer.velocity.x * scrub, z: racer.velocity.z * scrub };
 
-  if (intoWall > PHYSICS.wallSpinThreshold * 0.25) {
+  const billing = racer.wallImpactLock <= 0;
+  if (billing) {
+    const squareness = clamp01(intoWall / Math.max(4, speedBefore));
+    const scrub = 1 - squareness * 0.45;
+    racer.velocity = { x: racer.velocity.x * scrub, z: racer.velocity.z * scrub };
+    racer.wallImpactLock = COLLISION.wallImpactLockout;
+  }
+
+  /*
+   * A hard ceiling on what one contact may cost.
+   *
+   * Even a single square-on hit removing most of the speed is unrecoverable
+   * rather than punishing, and a sequence of them is what made boundary
+   * contact feel arbitrary. Beyond this the wall stops taking speed and simply
+   * stops the car going through it.
+   */
+  const speedAfter = Math.hypot(racer.velocity.x, racer.velocity.z);
+  const floor = speedBefore * (1 - COLLISION.maxWallSpeedLoss);
+  if (speedAfter < floor && speedAfter > 1e-3) {
+    const rescale = floor / speedAfter;
+    racer.velocity = { x: racer.velocity.x * rescale, z: racer.velocity.z * rescale };
+  }
+
+  if (billing && intoWall > PHYSICS.wallSpinThreshold * 0.25) {
     // Nudge the heading away from the barrier so the recovery is intuitive
     // rather than leaving the nose buried in it.
     const targetHeading = Math.atan2(projection.tangent.z, projection.tangent.x);
@@ -439,7 +568,7 @@ function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
     racer.drift.charge = 0;
   }
 
-  if (racer.contactCooldown <= 0) {
+  if (billing && racer.contactCooldown <= 0) {
     racer.contactCooldown = 0.12;
     ctx.events.push({ type: 'wallHit', racer: racer.index, speed: intoWall, pos: { ...racer.pos } });
   }

@@ -87,10 +87,18 @@ export function buildTerrain(track: Track, resolution: number): TerrainResult {
       const freedom = smoothstep(0, BLEND_DISTANCE, outside);
 
       const free = noise(x, z);
-      const wild = projection.y + (free - 0.5) * 2 * relief;
+      /*
+       * `projection.y` is already the height of the road surface at this
+       * lateral offset, banking included, so the terrain follows a banked road
+       * down its low side instead of shearing through it. Before this the
+       * ground stayed level with the centreline and swallowed the entire low
+       * half of every banked corner.
+       */
+      const surfaceY = projection.y;
+      const wild = surfaceY + (free - 0.5) * 2 * relief;
       // Just off the road the ground sits a touch below the tarmac so the
       // shoulder reads as a kerb rather than a seam.
-      const height = projection.y - 0.25 + (wild - (projection.y - 0.25)) * freedom;
+      const height = surfaceY - 0.25 + (wild - (surfaceY - 0.25)) * freedom;
 
       positions[i * 3] = x;
       positions[i * 3 + 1] = height;

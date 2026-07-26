@@ -50,9 +50,18 @@ function laneKeep(sim: Simulation, racer: RacerState): number {
   let error = desired - racer.heading;
   while (error > Math.PI) error -= Math.PI * 2;
   while (error < -Math.PI) error += Math.PI * 2;
+  // Pure pursuit alone leaves a standing lateral offset — the car runs parallel
+  // to the road, just beside it — and on a wide course that parks it against
+  // the edge, which is no use as a baseline for anything measured on the road.
+  const crossTrack = -projection.lateral / Math.max(4, projection.halfWidth);
   // A positive heading error means the target is to the right, and positive
   // steer turns right. See the handedness rule in `src/core/math.ts`.
-  return Math.max(-1, Math.min(1, error * 2.2));
+  return Math.max(-1, Math.min(1, error * 2.2 + crossTrack * 0.5));
+}
+
+/** Steer that drifts towards the middle of the road rather than off it. */
+function driftInward(racer: RacerState): number {
+  return racer.lateral >= 0 ? -0.85 : 0.85;
 }
 
 /** Full lock away from the centreline, whichever side the racer is on. */
@@ -157,8 +166,11 @@ describe('drifting', () => {
     const { sim, racer } = solo();
     drive(sim, racer, 20, { ...emptyInput(), throttle: 1 });
     let peakSlip = 0;
-    for (let i = 0; i < Math.ceil(3 / FIXED_STEP); i++) {
-      sim.step({ ...emptyInput(), throttle: 1, steer: -0.8, drift: true });
+    // Lane-kept, because charge now requires being on the road: a drift held
+    // out into the run-off is not a corner solved and pays nothing.
+    const steer = driftInward(racer);
+    for (let i = 0; i < Math.ceil(3 / FIXED_STEP) && racer.onTrack; i++) {
+      sim.step({ ...emptyInput(), throttle: 1, steer, drift: true });
       sim.drainEvents();
       peakSlip = Math.max(peakSlip, Math.abs(racer.slip));
     }
@@ -166,6 +178,7 @@ describe('drifting', () => {
     expect(peakSlip).toBeGreaterThan(0.2);
     // ...that never becomes a spin.
     expect(peakSlip).toBeLessThan(1.1);
+    expect(racer.onTrack).toBe(true);
     expect(racer.drift.charge).toBeGreaterThan(0.1);
     expect(speedOf(racer)).toBeGreaterThan(10);
   });
@@ -174,7 +187,15 @@ describe('drifting', () => {
     const chargeToSurge = (seconds: number): number => {
       const { sim, racer } = solo();
       drive(sim, racer, 20, { ...emptyInput(), throttle: 1 });
-      run(sim, seconds, { ...emptyInput(), throttle: 1, steer: -0.8, drift: true });
+      // Empty the tank first: twenty seconds of running the course collects
+      // Surge from boost pads and crests, and a full meter absorbs the payout
+      // this test is trying to measure.
+      racer.surge = 0;
+      const steer = driftInward(racer);
+      for (let i = 0; i < Math.ceil(seconds / FIXED_STEP) && racer.onTrack; i++) {
+        sim.step({ ...emptyInput(), throttle: 1, steer, drift: true });
+        sim.drainEvents();
+      }
       const before = racer.surge;
       run(sim, 0.1, { ...emptyInput(), throttle: 1 });
       return racer.surge - before;

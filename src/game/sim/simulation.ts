@@ -116,6 +116,9 @@ export class Simulation {
       hopCooldown: 0,
       sinceLanding: Infinity,
       airTime: 0,
+      airClearance: 0,
+      hopChain: 0,
+      wallImpactLock: 0,
       drift: { active: false, direction: 0, charge: 0 },
       strike: { phase: 'idle', timer: 0, side: 1, cooldown: 0, hitThisSwing: [] },
       stagger: 0,
@@ -283,23 +286,65 @@ export class Simulation {
        * generous timeout covers the bad-lap case properly, and a race that can
        * hang is worse than one that eventually calls time.
        */
+      /*
+       * The race keeps running after the player crosses the line.
+       *
+       * It used to stop 2.5 s later and classify everyone still on track as
+       * DNF. A player who won by a couple of seconds therefore saw a results
+       * table where all five rivals had DNF beside best laps two seconds off
+       * their own — which misrepresents the field, erases every gap, and
+       * cheapens the win. Rivals now get `rivalGrace` to finish for real, and
+       * DNF means an actual failure to finish.
+       */
+      /*
+       * The race keeps running until the field is genuinely resolved.
+       *
+       * It used to stop 2.5 s after the player crossed and classify everyone
+       * still on track as DNF — so a player who won by two seconds saw five
+       * rivals marked DNF beside best laps two seconds off their own. That
+       * misrepresents the field, erases every gap, and cheapens the win.
+       *
+       * The only early exit now is "everyone who is still moving has stopped
+       * moving", which is a real retirement rather than an impatient clock.
+       * The application fast-forwards the remaining steps after the player
+       * finishes, so waiting for a true result costs the player no real time;
+       * see `App.frame`.
+       */
       this.postRaceTimer += dt;
       const everyoneDone = this.racers.every((r) => r.finished);
-      const player = this.player;
-      const playerSettled = player !== null && player.finished && this.postRaceTimer > 2.5;
-      if (everyoneDone || playerSettled || this.postRaceTimer > RACE.postRaceTimeout) {
+      const allStragglersWedged = this.racers.every(
+        (r) => r.finished || r.wedgeTimer > RACE.retirementTime,
+      );
+      if (everyoneDone || allStragglersWedged || this.postRaceTimer > RACE.postRaceTimeout) {
         this.endRace();
       }
     }
   }
 
+  /** True once the player has crossed and only rivals are still running. */
+  get resolvingAfterPlayer(): boolean {
+    const player = this.player;
+    return this.phase === 'running' && player !== null && player.finished;
+  }
+
   private endRace(): void {
-    // Classify anyone still running by their live position, so the results
-    // screen is complete even if the timeout fired.
+    /*
+     * Anyone still running is *projected* rather than dismissed.
+     *
+     * A racer 80% of the way round when the clock runs out did not fail to
+     * finish; they were slower. Extrapolating their remaining distance at the
+     * pace they have actually been running produces a credible time and keeps
+     * the classification ordered by merit. Only a racer who has barely moved is
+     * a true DNF.
+     */
     const unfinished = this.racers.filter((r) => !r.finished).sort((a, b) => b.progress - a.progress);
+    const totalProgress = this.track.length * this.track.laps;
     for (const racer of unfinished) {
+      const fraction = clamp01(racer.progress / Math.max(1, totalProgress));
       racer.finished = true;
-      racer.finishTime = Infinity;
+      racer.completed = false;
+      racer.finishTime =
+        fraction > 0.25 && this.raceTime > 0 ? this.raceTime / fraction : Number.POSITIVE_INFINITY;
       this.finishedCount += 1;
       racer.finishPosition = this.finishedCount;
     }

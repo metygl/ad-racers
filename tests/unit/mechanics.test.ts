@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { fromHeading, wrapAngle } from '../../src/core/math';
 import {
+  COLLISION,
+  DRIFT,
   FIXED_STEP,
   HOP,
   LANDING,
@@ -57,7 +59,10 @@ function laneKeep(sim: Simulation, racer: RacerState): number {
   let error = desired - racer.heading;
   while (error > Math.PI) error -= Math.PI * 2;
   while (error < -Math.PI) error += Math.PI * 2;
-  return Math.max(-1, Math.min(1, error * 2.2));
+  // Pure pursuit alone leaves a standing lateral offset and parks the car on
+  // the edge of a wide course, which is no use as a baseline.
+  const crossTrack = -projection.lateral / Math.max(4, projection.halfWidth);
+  return Math.max(-1, Math.min(1, error * 2.2 + crossTrack * 0.5));
 }
 
 /** Runs up to racing speed on the centreline. */
@@ -153,45 +158,68 @@ describe('air control and landing quality', () => {
     expect(turn(-1)).toBeLessThan(-0.05);
   });
 
-  it('pays out for a level, aligned landing and nothing for a sideways one', () => {
-    const land = (sideways: boolean): { surge: number; quality: number } => {
-      const { sim, racer } = solo();
-      upToSpeed(sim, racer);
-      if (sideways) {
-        // Get properly out of shape first, then take off mid-slide.
-        run(sim, 1.1, { ...emptyInput(), throttle: 1, steer: -0.9, drift: true });
-      }
-      sim.step({ ...emptyInput(), throttle: 1, hop: true });
-      racer.surge = 0;
-      let quality = 0;
-      while (racer.airborne) {
-        sim.step({ ...emptyInput(), throttle: 1, steer: sideways ? -0.9 : 0, drift: sideways });
-        for (const event of sim.drainEvents()) {
-          if (event.type === 'jumpLand') quality = event.quality;
+  it('pays a real crest landing and refuses an off-road or crooked one', () => {
+    /*
+     * Measured across a full Ace field over the flyover. Every landing that
+     * scored was on the road, level and close to straight; every one that was
+     * off the road or more than about fifteen degrees out of line scored zero.
+     */
+    const scored: { quality: number; onTrack: boolean; slip: number }[] = [];
+    runHeadlessRace({
+      trackId: 'overgrown-interchange',
+      playerIndex: null,
+      difficultyId: 'ace',
+      maxSeconds: 150,
+      onStep: (sim, events) => {
+        for (const event of events) {
+          if (event.type !== 'jumpLand' || event.clearance < LANDING.minClearance) continue;
+          const racer = sim.racers[event.racer];
+          if (!racer) continue;
+          scored.push({ quality: event.quality, onTrack: racer.onTrack, slip: Math.abs(racer.slip) });
         }
+      },
+    });
+
+    expect(scored.length).toBeGreaterThan(4);
+    expect(scored.some((s) => s.quality > 0.6)).toBe(true);
+    for (const landing of scored) {
+      if (landing.quality > 0) {
+        expect(landing.onTrack).toBe(true);
+        expect(landing.slip).toBeLessThan(LANDING.sloppySlip);
       }
-      return { surge: racer.surge, quality };
-    };
+    }
+  }, 90_000);
 
-    const clean = land(false);
-    const sloppy = land(true);
-    expect(clean.quality).toBeGreaterThan(0.5);
-    expect(clean.surge).toBeGreaterThan(sloppy.surge);
-    expect(sloppy.quality).toBeLessThan(clean.quality);
-  });
-
-  it('scores nothing for a hop too short to be a jump', () => {
-    // The air-time floor is what stops the mechanic being farmed on a straight
-    // by tapping hop over and over.
+  it('pays nothing for a flat hop on a straight, however many times it is tapped', () => {
+    /*
+     * The exploit this closes: five ordinary flat hops raised Surge from 0.25 to
+     * 0.81 in under four seconds. A landing reward exists to pay for taking a
+     * *crest* well, so it now requires having actually risen — an air-time floor
+     * alone never gated this, because an ordinary hop clears half a second.
+     */
     const { sim, racer } = solo();
     upToSpeed(sim, racer);
     racer.surge = 0;
-    // A hop clipped short by forcing an immediate touchdown.
+    let paid = 0;
+    for (let i = 0; i < Math.ceil(6 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1, hop: true, steer: laneKeep(sim, racer) });
+      for (const event of sim.drainEvents()) {
+        if (event.type === 'jumpLand') paid += event.quality;
+      }
+    }
+    expect(paid).toBe(0);
+    expect(racer.surge).toBeLessThan(0.05);
+  });
+
+  it('pays nothing for a landing that arrives crooked', () => {
+    const { sim, racer } = solo();
+    upToSpeed(sim, racer);
     sim.step({ ...emptyInput(), throttle: 1, hop: true });
-    racer.verticalVelocity = 0.2;
+    racer.surge = 0;
     let quality = -1;
-    for (let i = 0; i < 200 && quality < 0; i++) {
-      sim.step({ ...emptyInput(), throttle: 1 });
+    while (racer.airborne) {
+      // Full lock in the air: this lands visibly yawed, and used to still pay.
+      sim.step({ ...emptyInput(), throttle: 1, steer: 1 });
       for (const event of sim.drainEvents()) {
         if (event.type === 'jumpLand') quality = event.quality;
       }
@@ -212,6 +240,113 @@ describe('air control and landing quality', () => {
     expect(racer.airborne).toBe(false);
     expect(air).toBeLessThan(LANDING.minAirTime + 4);
   });
+});
+
+describe('reward gating', () => {
+  /*
+   * Every one of these was a live exploit found in production play. Each is a
+   * way of filling the primary speed resource without solving a corner, and
+   * every one of them out-earned actually racing.
+   */
+
+  it('refuses drift charge off the road', () => {
+    const { sim, racer } = solo('overgrown-interchange');
+    upToSpeed(sim, racer);
+    // Drive off and keep holding the drift, which used to fill the tier ladder
+    // to maximum at 9 m/s and pay 0.57 Surge.
+    const away = racer.lateral >= 0 ? 1 : -1;
+    for (let i = 0; i < Math.ceil(6 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1, steer: away, drift: true });
+      sim.drainEvents();
+    }
+    expect(racer.onTrack).toBe(false);
+    expect(racer.drift.charge).toBe(0);
+  });
+
+  it('bleeds banked drift charge away once the skiff leaves the road', () => {
+    const { sim, racer } = solo();
+    upToSpeed(sim, racer);
+    const inward = racer.lateral >= 0 ? -0.85 : 0.85;
+    for (let i = 0; i < Math.ceil(1.6 / FIXED_STEP) && racer.onTrack; i++) {
+      sim.step({ ...emptyInput(), throttle: 1, steer: inward, drift: true });
+      sim.drainEvents();
+    }
+    const banked = racer.drift.charge;
+    expect(banked).toBeGreaterThan(0.3);
+
+    const away = racer.lateral >= 0 ? 1 : -1;
+    for (let i = 0; i < Math.ceil(4 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1, steer: away, drift: true });
+      sim.drainEvents();
+    }
+    expect(racer.onTrack).toBe(false);
+    expect(racer.drift.charge).toBeLessThan(banked * 0.5);
+  });
+
+  it('refuses drift charge below racing speed', () => {
+    const { sim, racer } = solo();
+    upToSpeed(sim, racer, 3);
+    // Brake down to a crawl on the road, then hold a drift.
+    for (let i = 0; i < Math.ceil(3 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), brake: true, steer: laneKeep(sim, racer) });
+      sim.drainEvents();
+    }
+    for (let i = 0; i < Math.ceil(2 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 0.2, steer: 1, drift: true });
+      sim.drainEvents();
+    }
+    expect(Math.hypot(racer.velocity.x, racer.velocity.z)).toBeLessThan(DRIFT.minChargeSpeed);
+    expect(racer.drift.charge).toBe(0);
+  });
+});
+
+describe('wall contact', () => {
+  it('bills one impact per contact rather than every frame of a grind', () => {
+    /*
+     * A neutral-steer graze used to renew the impact every frame and bleed
+     * 41 m/s down to about 5 m/s over a couple of seconds of rail grinding,
+     * with `onTrack` flickering and no recovery ever starting.
+     */
+    const sim = new Simulation(buildSetup({ trackId: 'emberfall-quarry', entries: 1, playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+    const racer = sim.racers[0] as RacerState;
+    for (let i = 0; i < Math.ceil(6 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1, steer: laneKeep(sim, racer) });
+      sim.drainEvents();
+    }
+
+    /*
+     * Placed hard against the barrier with speed into it, because steering into
+     * a wall on a curving course is unreliable as a fixture — and the case the
+     * review found unrecoverable was specifically "already touching the wall,
+     * wheel released, throttle held".
+     */
+    const projection = sim.track.project(racer.pos, racer.path);
+    const outward = Math.sign(racer.lateral) || 1;
+    racer.pos = {
+      x: projection.center.x + projection.normal.x * outward * (projection.halfWidth - 0.2),
+      z: projection.center.z + projection.normal.z * outward * (projection.halfWidth - 0.2),
+    };
+    const heading = Math.atan2(projection.tangent.z, projection.tangent.x) + outward * 0.25;
+    racer.heading = heading;
+    racer.velocity = { x: Math.cos(heading) * 40, z: Math.sin(heading) * 40 };
+
+    let hits = 0;
+    const speedAtContact = speedOf(racer);
+    for (let i = 0; i < Math.ceil(3 / FIXED_STEP); i++) {
+      sim.step({ ...emptyInput(), throttle: 1 });
+      hits += sim.drainEvents().filter((e) => e.type === 'wallHit').length;
+    }
+
+    // A three-second neutral run along a barrier is a handful of contacts, not
+    // three hundred.
+    expect(hits).toBeLessThanOrEqual(Math.ceil(3 / COLLISION.wallImpactLockout) + 2);
+    // And holding the throttle must leave the car going, not bled to a crawl.
+    expect(speedOf(racer)).toBeGreaterThan(Math.max(8, speedAtContact * 0.6));
+  }, 60_000);
 });
 
 describe('the tow snap', () => {

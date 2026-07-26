@@ -141,6 +141,12 @@ export interface RacerState {
   sinceLanding: number;
   /** Continuous seconds spent airborne; resets on touchdown. */
   airTime: number;
+  /** Peak clearance above the ground this flight, which distinguishes a crest. */
+  airClearance: number;
+  /** Hops taken in quick succession; each one pays less than the last. */
+  hopChain: number;
+  /** Seconds of lockout before the same wall may bill another impact. */
+  wallImpactLock: number;
   drift: DriftState;
   strike: StrikeState;
   /** Seconds of degraded control remaining after being struck. */
@@ -208,8 +214,21 @@ export type SimEvent =
   | { type: 'boostStart'; racer: number }
   | { type: 'hop'; racer: number }
   | { type: 'towSnap'; racer: number; strength: number }
-  /** `quality` is 0-1: level and aligned scores 1, a heavy sideways arrival 0. */
-  | { type: 'jumpLand'; racer: number; clean: boolean; speed: number; quality: number }
+  /**
+   * `quality` is 0-1: level and aligned scores 1, a heavy sideways arrival 0.
+   * `airTime` and `clearance` are carried because the renderer scales the
+   * landing dust by them, and because a landing that scores zero is otherwise
+   * impossible to diagnose from the outside.
+   */
+  | {
+      type: 'jumpLand';
+      racer: number;
+      clean: boolean;
+      speed: number;
+      quality: number;
+      airTime: number;
+      clearance: number;
+    }
   | { type: 'respawn'; racer: number }
   | { type: 'surfaceChange'; racer: number; surface: SurfaceId }
   | { type: 'hazard'; racer: number; kind: string; pos: Vec2 };

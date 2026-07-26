@@ -67,6 +67,14 @@ type ScreenName =
  */
 type RaceMode = 'single' | 'circuit';
 
+/**
+ * Steps per frame allowed while the field finishes behind the player.
+ *
+ * Twenty seconds of race time resolves in about a second of wall clock, which
+ * is exactly as long as a finish camera should linger anyway.
+ */
+const RESOLVE_STEPS_PER_FRAME = 160;
+
 export interface AppOptions {
   root: HTMLElement;
   canvas: HTMLCanvasElement;
@@ -803,11 +811,24 @@ export class App {
       this.accumulator += elapsed;
       // Capping the accumulator is what stops a long stall from being "paid
       // back" as a burst of simulation the player never sees.
-      const maxAccumulated = FIXED_STEP * MAX_STEPS_PER_FRAME;
+      const maxAccumulated =
+        FIXED_STEP * (simulation.resolvingAfterPlayer ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME);
       if (this.accumulator > maxAccumulated) this.accumulator = maxAccumulated;
 
+      /*
+       * Once the player has crossed the line the remaining field is resolved at
+       * speed rather than in real time.
+       *
+       * The simulation now waits for rivals to actually finish instead of
+       * marking them DNF the moment the player arrives, and a deterministic
+       * step costs microseconds — so a few hundred extra steps a frame turns
+       * "wait twenty seconds for a real result" into "about a second of finish
+       * camera". Nothing about the outcome changes; only how long the player
+       * watches it happen.
+       */
+      const maxSteps = simulation.resolvingAfterPlayer ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME;
       const events: SimEvent[] = [];
-      while (this.accumulator >= FIXED_STEP && steps < MAX_STEPS_PER_FRAME) {
+      while (this.accumulator >= FIXED_STEP && steps < maxSteps) {
         simulation.step(steps === 0 ? input : { ...input, strike: 0, respawn: false });
         this.accumulator -= FIXED_STEP;
         steps += 1;

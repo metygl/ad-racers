@@ -259,14 +259,18 @@ export class Simulation {
     updatePositions(this.racers);
 
     if (this.phase === 'running' && this.finishedCount > 0) {
+      /*
+       * The post-race clock runs from the first finisher, unconditionally.
+       *
+       * Gating it on the player having finished sounds kinder — it stops a
+       * player on a bad final lap being classified early — but it means a
+       * player who never finishes at all keeps the race alive forever. The
+       * generous timeout covers the bad-lap case properly, and a race that can
+       * hang is worse than one that eventually calls time.
+       */
+      this.postRaceTimer += dt;
       const everyoneDone = this.racers.every((r) => r.finished);
       const player = this.player;
-      if (player === null || player.finished) {
-        // Only start the post-race clock once there is no longer a human race
-        // left to run. Timing it from the leader instead would force-classify
-        // a player who is simply having a bad final lap.
-        this.postRaceTimer += dt;
-      }
       const playerSettled = player !== null && player.finished && this.postRaceTimer > 2.5;
       if (everyoneDone || playerSettled || this.postRaceTimer > RACE.postRaceTimeout) {
         this.endRace();

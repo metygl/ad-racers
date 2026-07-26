@@ -215,8 +215,8 @@ meshes or textures from any existing title.
 
 ## Performance
 
-8.3 ms median frame time on a modern laptop, 88 draw calls, 343 k triangles,
-49 MB heap, 178 kB download. Full evidence and the lower-tier profile in
+8.3 ms median frame time on a modern laptop, 58 draw calls, 344 k triangles,
+31 MB heap, 178 kB download. Full evidence and the lower-tier profile in
 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
 
 ## Known limitations

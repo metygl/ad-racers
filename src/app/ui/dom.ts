@@ -128,7 +128,7 @@ export function clear(node: Element): void {
  * tabbing off the end of a pause menu and landing on the page behind it is a
  * dead end, because the page behind it is a canvas.
  */
-export function trapFocus(container: HTMLElement): () => void {
+export function trapFocus(container: HTMLElement, autoFocus = true): () => void {
   const previous = document.activeElement as HTMLElement | null;
 
   const focusable = (): HTMLElement[] =>
@@ -154,8 +154,11 @@ export function trapFocus(container: HTMLElement): () => void {
   };
 
   container.addEventListener('keydown', onKeyDown);
-  // Focus the first control on open, so a keyboard user is not left hunting.
-  queueMicrotask(() => focusable()[0]?.focus());
+  // Focus the first control on open, so a keyboard user is not left hunting —
+  // but only for a screen the player *asked* for. Doing it on first load drops
+  // focus into the middle of the page, which puts the skip link behind a
+  // Shift+Tab and breaks the reading order before anyone has pressed a key.
+  if (autoFocus) queueMicrotask(() => focusable()[0]?.focus());
 
   return () => {
     container.removeEventListener('keydown', onKeyDown);

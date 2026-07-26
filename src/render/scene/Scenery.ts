@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Rng, hashSeed } from '../../core/rng';
+import { mergeGeometries } from './mergeGeometry';
 import type { Track } from '../../game/track/buildTrack';
 import type { ObstacleDefinition, PathSample, SceneryKind, TrackTheme } from '../../game/track/types';
 
@@ -23,10 +24,10 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
     case 'pine': {
       // Trunk plus two stacked cones, merged into one geometry so the whole
       // species is a single instanced draw.
-      const geometry = mergeParts([
-        [new THREE.CylinderGeometry(0.22, 0.34, 2.4, 5), 0, 1.2, 0],
-        [new THREE.ConeGeometry(1.9, 4.2, 6), 0, 4.1, 0],
-        [new THREE.ConeGeometry(1.35, 3.2, 6), 0, 6.4, 0],
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.22, 0.34, 2.4, 5), position: [0, 1.2, 0] },
+        { geometry: new THREE.ConeGeometry(1.9, 4.2, 6), position: [0, 4.1, 0] },
+        { geometry: new THREE.ConeGeometry(1.35, 3.2, 6), position: [0, 6.4, 0] },
       ]);
       return {
         geometry,
@@ -34,10 +35,10 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       };
     }
     case 'broadleaf': {
-      const geometry = mergeParts([
-        [new THREE.CylinderGeometry(0.28, 0.42, 3.2, 5), 0, 1.6, 0],
-        [new THREE.IcosahedronGeometry(2.6, 0), 0, 4.9, 0],
-        [new THREE.IcosahedronGeometry(1.7, 0), 1.5, 4.1, 0.6],
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.28, 0.42, 3.2, 5), position: [0, 1.6, 0] },
+        { geometry: new THREE.IcosahedronGeometry(2.6, 0), position: [0, 4.9, 0] },
+        { geometry: new THREE.IcosahedronGeometry(1.7, 0), position: [1.5, 4.1, 0.6] },
       ]);
       return {
         geometry,
@@ -45,9 +46,9 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       };
     }
     case 'palm': {
-      const geometry = mergeParts([
-        [new THREE.CylinderGeometry(0.2, 0.34, 6, 5), 0, 3, 0],
-        [new THREE.ConeGeometry(2.4, 0.8, 5), 0, 6.2, 0],
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.2, 0.34, 6, 5), position: [0, 3, 0] },
+        { geometry: new THREE.ConeGeometry(2.4, 0.8, 5), position: [0, 6.2, 0] },
       ]);
       return {
         geometry,
@@ -57,9 +58,9 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
     case 'boulder':
       return { geometry: new THREE.DodecahedronGeometry(1.5, 0), material: stone };
     case 'monolith': {
-      const geometry = mergeParts([
-        [new THREE.CylinderGeometry(0.75, 1.35, 11, 6), 0, 5.5, 0],
-        [new THREE.ConeGeometry(0.9, 2.4, 6), 0, 12, 0],
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.75, 1.35, 11, 6), position: [0, 5.5, 0] },
+        { geometry: new THREE.ConeGeometry(0.9, 2.4, 6), position: [0, 12, 0] },
       ]);
       return {
         geometry,
@@ -67,10 +68,10 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       };
     }
     case 'pylon': {
-      const geometry = mergeParts([
-        [new THREE.CylinderGeometry(0.28, 0.6, 16, 5), 0, 8, 0],
-        [new THREE.BoxGeometry(6.5, 0.4, 0.4), 0, 14.5, 0],
-        [new THREE.BoxGeometry(4.8, 0.4, 0.4), 0, 12.2, 0],
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.28, 0.6, 16, 5), position: [0, 8, 0] },
+        { geometry: new THREE.BoxGeometry(6.5, 0.4, 0.4), position: [0, 14.5, 0] },
+        { geometry: new THREE.BoxGeometry(4.8, 0.4, 0.4), position: [0, 12.2, 0] },
       ]);
       return {
         geometry,
@@ -78,9 +79,9 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       };
     }
     case 'reed': {
-      const geometry = mergeParts([
-        [new THREE.ConeGeometry(0.5, 2.2, 4), 0, 1.1, 0],
-        [new THREE.ConeGeometry(0.36, 1.6, 4), 0.5, 0.8, 0.3],
+      const geometry = mergeGeometries([
+        { geometry: new THREE.ConeGeometry(0.5, 2.2, 4), position: [0, 1.1, 0] },
+        { geometry: new THREE.ConeGeometry(0.36, 1.6, 4), position: [0.5, 0.8, 0.3] },
       ]);
       return {
         geometry,
@@ -88,9 +89,9 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       };
     }
     case 'crystal': {
-      const geometry = mergeParts([
-        [new THREE.OctahedronGeometry(1.1, 0), 0, 1.1, 0],
-        [new THREE.OctahedronGeometry(0.7, 0), 0.8, 0.7, 0.4],
+      const geometry = mergeGeometries([
+        { geometry: new THREE.OctahedronGeometry(1.1, 0), position: [0, 1.1, 0] },
+        { geometry: new THREE.OctahedronGeometry(0.7, 0), position: [0.8, 0.7, 0.4] },
       ]);
       return {
         geometry,
@@ -104,9 +105,9 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       };
     }
     case 'chimney': {
-      const geometry = mergeParts([
-        [new THREE.CylinderGeometry(1.5, 2.6, 20, 8), 0, 10, 0],
-        [new THREE.CylinderGeometry(2.1, 1.7, 1.6, 8), 0, 20.5, 0],
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(1.5, 2.6, 20, 8), position: [0, 10, 0] },
+        { geometry: new THREE.CylinderGeometry(2.1, 1.7, 1.6, 8), position: [0, 20.5, 0] },
       ]);
       return {
         geometry,
@@ -114,35 +115,6 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       };
     }
   }
-}
-
-/** Merges translated primitives into one geometry, without an external helper. */
-function mergeParts(parts: [THREE.BufferGeometry, number, number, number][]): THREE.BufferGeometry {
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const indices: number[] = [];
-  let offset = 0;
-
-  for (const [geometry, dx, dy, dz] of parts) {
-    const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry;
-    const pos = nonIndexed.getAttribute('position');
-    const nor = nonIndexed.getAttribute('normal');
-    for (let i = 0; i < pos.count; i++) {
-      positions.push(pos.getX(i) + dx, pos.getY(i) + dy, pos.getZ(i) + dz);
-      normals.push(nor.getX(i), nor.getY(i), nor.getZ(i));
-      indices.push(offset + i);
-    }
-    offset += pos.count;
-    if (nonIndexed !== geometry) nonIndexed.dispose();
-    geometry.dispose();
-  }
-
-  const merged = new THREE.BufferGeometry();
-  merged.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  merged.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-  merged.setIndex(indices);
-  merged.computeBoundingSphere();
-  return merged;
 }
 
 export interface SceneryOptions {

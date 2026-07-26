@@ -4,11 +4,11 @@
 
 | Budget | Target | Measured | Enforced by |
 | --- | --- | --- | --- |
-| Frame time, desktop | ≤ 16.7 ms (60 fps) | **8.3 ms median, 8.9 ms p95** | Measured by hand; see below |
-| Draw calls | < 100 | **88** | `tests/e2e/race.spec.ts` (< 150 under software WebGL) |
+| Frame time, desktop | ≤ 16.7 ms (60 fps) | **8.3 ms median, 10.0 ms p95** | Measured by hand; see below |
+| Draw calls | < 100 | **58** | `tests/e2e/race.spec.ts` |
 | Triangles | < 500 k | **343 k** | Performance overlay |
 | Particles | ≤ 800 (High) | Hard cap, pre-allocated | `ParticleSystem` budget |
-| JS heap | < 150 MB | **49 MB** | Performance overlay |
+| JS heap | < 150 MB | **31 MB** | Performance overlay |
 | Download, total | ≤ 260 kB gzip | **177.6 kB** | `npm run check:budget` |
 | Download, our code | ≤ 80 kB gzip | **44.0 kB** | `npm run check:budget` |
 | Simulation rate | exactly 120 Hz | **120 steps/s** | `tests/e2e/race.spec.ts` |
@@ -20,10 +20,10 @@ Apple silicon laptop, Chrome, hardware WebGL, 1440 × 900, High quality,
 Overgrown Interchange, six cars, mid-race with the player at full throttle:
 
 ```
-120 fps · median 8.3 ms · p95 8.8 ms
+120 fps · median 8.3 ms · p95 10.0 ms
 steps/s 120 · quality high
-draws 88 · tris 343k · particles 0
-heap 49 MB
+draws 58 · tris 344k · particles 0
+heap 31 MB
 ```
 
 120 fps is the display refresh rate, so the renderer is refresh-capped rather
@@ -65,6 +65,13 @@ identically on every tier.
 per species — a thousand trees are one call. The road, shoulder and barrier are
 three merged buffer geometries per path. Particles are two instanced quad
 meshes. Adding more trees costs nothing in draw calls.
+
+> The browser tests caught this one. Each skiff was built from about twenty
+> small meshes, so six cars on a grid cost roughly a hundred and twenty draw
+> calls — more than the entire rest of the scene put together, and the reason
+> the measured figure was 160 rather than the 88 seen from a favourable camera
+> angle. Merging each skiff's static parts by material took the whole scene from
+> 160 to **58**, and the heap from 49 MB to 31 MB, for identical pixels.
 
 **Particles are pre-allocated.** The pool is fixed at construction and the
 oldest slot is recycled when it is exhausted, so nothing is allocated after

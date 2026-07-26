@@ -197,6 +197,9 @@ export class App {
 
   // --- screens ------------------------------------------------------------
 
+  /** True until the player has interacted; suppresses the initial auto-focus. */
+  private firstPaint = true;
+
   private showScreen(name: ScreenName, content?: HTMLElement): void {
     this.releaseTrap?.();
     this.releaseTrap = null;
@@ -214,7 +217,8 @@ export class App {
     if (content) {
       this.ui.append(content);
       // Menus are modal over the canvas, so focus has to be contained.
-      if (name !== 'race') this.releaseTrap = trapFocus(this.ui);
+      if (name !== 'race') this.releaseTrap = trapFocus(this.ui, !this.firstPaint);
+      this.firstPaint = false;
     } else if (name === 'loading') {
       this.ui.append(
         buildMessagePanel({

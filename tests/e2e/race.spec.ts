@@ -181,13 +181,17 @@ test.describe('pause and resume', () => {
 });
 
 test.describe('performance', () => {
+  // Software WebGL rasterises every triangle on the CPU, so a frame there can
+  // take the better part of a second. This measures far fewer frames than a
+  // real profile would and gets a generous budget to do it in.
   test('holds a smooth frame rate during a race', async ({ page }) => {
+    test.slow();
     await openGame(page);
     await startSeededRace(page);
     await waitForGreenLight(page);
     await page.keyboard.down('w');
 
-    const frames = await measureFrames(page, 90);
+    const frames = await measureFrames(page, 30);
     await page.keyboard.up('w');
 
     // CI runs on software WebGL, where the whole scene is rasterised on the
@@ -216,6 +220,9 @@ test.describe('performance', () => {
     const text = (await page.locator('.perf').textContent()) ?? '';
     const draws = Number(/draws (\d+)/.exec(text)?.[1] ?? '9999');
     expect(draws).toBeGreaterThan(0);
-    expect(draws).toBeLessThan(150);
+    // Measured at 58 on hardware with the full scene in view. The headroom
+    // covers a shadow pass and a less favourable camera angle; anything near
+    // this number means something has stopped being merged or instanced.
+    expect(draws).toBeLessThan(100);
   });
 });

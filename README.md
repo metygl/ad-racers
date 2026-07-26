@@ -245,6 +245,9 @@ One runtime dependency: three.js (MIT).
   expression
 - [docs/ART-BIBLE.md](./docs/ART-BIBLE.md) — colour, value hierarchy,
   silhouette, materials, motion, post-processing budget and sound identity
+- [docs/VERTICAL-SLICE.md](./docs/VERTICAL-SLICE.md) — the hero-slice acceptance
+  matrix, mapping every independent art and motion finding to fixed, partial or
+  not done
 
 AD Racers is an original game. It contains no names, characters, logos, track
 layouts, environments, dialogue, music, sound effects, code, screenshots,

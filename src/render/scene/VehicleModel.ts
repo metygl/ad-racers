@@ -181,7 +181,7 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
    * as running lights rather than as a glowing car.
    */
   trim.emissive = new THREE.Color(profile.colors.glow);
-  trim.emissiveIntensity = 0.55;
+  trim.emissiveIntensity = 0.42;
   /*
    * The body carries a little of it too.
    *
@@ -191,7 +191,9 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
    * and on the night course nothing but the machine's own light does that.
    */
   body.emissive = new THREE.Color(profile.colors.body);
-  body.emissiveIntensity = 0.22;
+  // Kept below the bloom threshold on every course: this exists so the hull is
+  // *visible* after dark, not so it glows.
+  body.emissiveIntensity = 0.12;
   const dark = panel(0x1b1f26, 0.7, 0.2);
   const disposables: (THREE.BufferGeometry | THREE.Material)[] = [body, trim, dark];
 
@@ -691,11 +693,11 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
      * originate from a readable emitter and leave the player's silhouette and
      * the road visible; a payoff the player cannot see through is not a payoff.
      */
-    const thrustScale = racer.boosting ? 1.35 : 0.7 + speedFactor * 0.5;
+    const thrustScale = racer.boosting ? 1.15 : 0.7 + speedFactor * 0.45;
     // A little flicker, so the flame is alive rather than a decal.
     const flicker = 1 + Math.sin(phase * 37) * 0.06;
     thrust.scale.set(1, thrustScale * flicker, thrustScale * flicker);
-    thrustMaterial.opacity = racer.boosting ? 0.6 : 0.14 + speedFactor * 0.22;
+    thrustMaterial.opacity = racer.boosting ? 0.42 : 0.12 + speedFactor * 0.18;
     thrust.visible = speed > 1.5 || racer.boosting;
     // Thrusters stay with the hull, which is what the chassis node carries.
     thrust.position.y = chassis.position.y;

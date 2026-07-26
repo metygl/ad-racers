@@ -243,10 +243,17 @@ export const GLASSHOUSE_VIGIL: TrackDefinition = {
       gain: [0.94, 0.99, 1.08],
       saturation: 1.02,
       contrast: 1.08,
-      // A low threshold, because at night the emissive accents *are* the
-      // composition and they need to carry.
-      bloomThreshold: 0.55,
-      bloomIntensity: 0.8,
+      /*
+       * High enough that only genuine emitters bloom.
+       *
+       * At 0.55 the threshold sat *below* the exposed road, so on the one
+       * course where exposure is highest everything qualified: a boost beside
+       * the player produced a white dome covering the skiff, the road and the
+       * braking point. Night needs bloom to sell the lamps and the kerbs — it
+       * does not need the tarmac to glow.
+       */
+      bloomThreshold: 1.05,
+      bloomIntensity: 0.6,
       vignette: 0.26,
     },
   },

@@ -19,22 +19,32 @@ by code in `src/`, and every name is invented. See
 
 Sources are listed at the bottom; claims below are attributed inline.
 
+**How these were consulted.** The Wikipedia article and the Sega-16 review were
+retrieved directly and quoted from their own text. MobyGames and Defunct Games
+are cited from search-result summaries — the Defunct Games page could not be
+fetched directly (it presents a self-signed TLS certificate), so material
+attributed to it is marked *via summary* and should be treated as second-hand.
+This distinction is worth keeping: a design decision resting on a
+mis-transcribed quote is a design decision resting on nothing.
+
 ### The vehicle and the companion
 
 The defining feature of the inspiration is a two-person vehicle: one character
 drives while a second "fights off opponents using clubs, punches, kicks, etc."
-([MobyGames][moby], [Wikipedia][wiki]). Both riders could attack — on the Sega
-CD version the driver could target racers on their left while the sidekick in
-the sidecar swung to the right, a symmetry that was cut down in the later ports
-so that you could only strike to one side ([MobyGames][moby]).
+([MobyGames][moby] *via summary*). Wikipedia, retrieved directly, puts it as:
+"Both of the bikes' riders can use physical attacks to injure other drivers. If
+the bike gets beaten enough, it crashes out, giving the player extra points"
+([Wikipedia][wiki]). Both riders could attack — on the Sega CD version the
+driver could target racers on their left while the sidekick swung to the right,
+a symmetry cut down in the later ports so that you could only strike to one
+side ([MobyGames][moby] *via summary*).
 
 Reviewers were consistent that the *idea* was better than the execution. The
 two-player split of driving and fighting was singled out as something that
-"should have been used more in other games" ([MobyGames][moby]), while the
-single-player attack itself was criticised as "only one offensive skill … a
-rudimentary attack at your disposal that relies on an arbitrary condition, and
-it unfortunately doesn't cause enough damage to be worthwhile"
-([Sega-16][sega16]).
+"should have been used more in other games" ([MobyGames][moby] *via summary*),
+while the single-player attack itself was criticised as offering only one
+offensive skill — a rudimentary melee assault that does not cause enough damage
+to be worthwhile ([Defunct Games][defunct] *via summary*).
 
 **What AD Racers takes:** the two-seat vehicle and the close-range,
 positional strike. **What it changes:** strikes work to *both* sides, which is
@@ -45,13 +55,12 @@ swing simultaneously, and hard diminishing returns on repeat hits. See
 
 ### Progression and track structure
 
-The inspiration advertised 32 tracks, which in practice were "eight major
-tracks with four variations of difficulty for each" ([Defunct Games][defunct]),
-across four difficulty settings — Easy, Medium, Hard and Rockhard
-([MobyGames][moby]). Races were four laps ([Wikipedia][wiki]). Each of the
-eight courses had a distinct look — "a bedrock-style neighborhood, a dense
-jungle, a creepy cave with lava pits, a desert track" ([Defunct
-Games][defunct]).
+The inspiration advertised 32 tracks, which in practice were eight courses with
+four difficulty variations each ([Defunct Games][defunct] *via summary*), across
+four difficulty settings — Easy, Medium, Hard and Rockhard ([MobyGames][moby]
+*via summary*). Wikipedia, retrieved directly, records races of "four laps to
+complete" and "eight themes, from desert wastes to active volcanoes and massive
+jungles" ([Wikipedia][wiki]).
 
 **What AD Racers takes:** small, strongly themed courses, and difficulty as a
 first-class choice. **What it changes:** it does not inflate the course count
@@ -63,8 +72,8 @@ variations, and three laps is a better length than four for a browser session.
 
 Notably, the inspiration had no Mario Kart-style pickups: "there are no
 power-ups, except for a turbo" ([Wikipedia][wiki]), and the turbo could be
-triggered "every few seconds" ([Wikipedia][wiki]) giving roughly "30% faster
-for ten seconds" ([Defunct Games][defunct]).
+triggered "every few seconds" ([Wikipedia][wiki]) — reportedly around 30% faster
+for about ten seconds ([Defunct Games][defunct] *via summary*).
 
 **What AD Racers takes:** the no-pickups stance. Nothing spawns on the road
 and nothing is randomly awarded, so a race is decided by driving.
@@ -75,8 +84,11 @@ cooldown just adds a key to press. See [ARCHITECTURE.md § Surge](./ARCHITECTURE
 
 ### Scoring
 
-Points were awarded for damaging opponents, and could place you first overall
-"even if you came in second" ([MobyGames][moby]).
+Points were awarded for damaging opponents, and could place a player first
+overall even if they crossed the line second ([MobyGames][moby] *via summary*).
+Wikipedia's phrasing of the same mechanic, retrieved directly: a bike that "gets
+beaten enough … crashes out, giving the player extra points"
+([Wikipedia][wiki]).
 
 **What AD Racers deliberately rejects:** combat outranking the race result.
 The finishing order is the result. Strikes are recorded on the results screen
@@ -86,14 +98,14 @@ than driving well").
 
 ### Camera and presentation
 
-Three viewpoints were offered, "all essentially from behind, just at different
-angles", and switching between them required pausing ([Defunct
-Games][defunct]). Presentation was the most consistently criticised aspect
-across every port: a "choppy frame rate and prominent slowdown"
-([Wikipedia][wiki]), and gameplay that looked "much worse … muddy animation,
-choppy graphics, and intangible visuals" ([Defunct Games][defunct]). The audio
-fared no better — the tyre skid sound "is so incessantly repetitive that it's
-all you can hear through most of the game" ([Sega-16][sega16]).
+Three viewpoints were offered, all from behind at different angles, and
+switching between them required pausing ([Defunct Games][defunct] *via
+summary*). Presentation was the most consistently criticised aspect across every
+port; Wikipedia records GamePro's complaint of a "choppy frame rate and
+prominent slowdown" ([Wikipedia][wiki]). The audio fared no better — Sega-16,
+retrieved directly, notes the tyre skid "is so incessantly repetitive that it's
+all you can hear through most of the game as you swerve around every corner"
+([Sega-16][sega16]).
 
 **What AD Racers takes:** a chase camera as the default, and a second, closer
 option.
@@ -106,11 +118,12 @@ surface actually is, precisely so it never becomes the only thing you hear.
 
 ### The most useful finding
 
-The harshest review summarised the game as "the very definition of a functional
-game that is absolutely no fun" ([Sega-16][sega16]), with the attack
-undermined by not mattering enough and the driving undermined by not asking
-anything of you — "all you do is skid around turn after turn without anything
-to show for it" ([Sega-16][sega16]).
+Sega-16, retrieved directly, put its finger on why the game did not work: the
+driving asked nothing of the player. "All you do is skid around turn after turn
+without anything to show for it and as a result, the game starts to feel very
+dull" ([Sega-16][sega16]). Reviewers elsewhere reached the same conclusion about
+the combat — an attack that does not cause enough damage to be worth using
+([Defunct Games][defunct] *via summary*).
 
 That diagnosis shaped the whole design more than any individual feature did:
 

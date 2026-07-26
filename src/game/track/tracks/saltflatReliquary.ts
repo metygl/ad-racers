@@ -50,12 +50,14 @@ const ring = makeRing(NODES, { scale: 1.02, aspectX: 1.2, aspectZ: 0.86 });
  * do not have to steer once you are in it.
  */
 const lagoon = [
-  ring.pointAt(112, 1.0, { halfWidth: 11 }),
-  ring.pointAt(128, 0.84, { halfWidth: 9, surface: 'water' }),
-  ring.pointAt(150, 0.76, { halfWidth: 9, surface: 'water' }),
-  ring.pointAt(172, 0.78, { halfWidth: 9, surface: 'water' }),
-  ring.pointAt(190, 0.88, { halfWidth: 10, surface: 'water' }),
-  ring.pointAt(204, 1.0, { halfWidth: 11 }),
+  ring.pointAt(112, 1.0, { halfWidth: 13 }),
+  ring.pointAt(128, 0.84, { halfWidth: 11, surface: 'water' }),
+  ring.pointAt(150, 0.76, { halfWidth: 11, surface: 'water' }),
+  ring.pointAt(172, 0.78, { halfWidth: 11, surface: 'water' }),
+  ring.pointAt(190, 0.88, { halfWidth: 12, surface: 'water' }),
+  // A generous mouth at the exit: leaving a low-grip surface at speed needs
+  // room, and a tight exit turns the shortcut into a guaranteed excursion.
+  ring.pointAt(206, 1.0, { halfWidth: 14 }),
 ];
 
 /** Rusted spires. Big, obvious, and placed to reward a tidy line, not to trap. */
@@ -74,13 +76,20 @@ const spires: ObstacleDefinition[] = [
   })),
 ];
 
-/** Crosswind across the open flat, strong enough to notice on the long straight. */
+/**
+ * Crosswind across the open flat.
+ *
+ * Tuned to be felt, not fought: at this strength it costs a bike-width of line
+ * over the length of the straight, which a driver corrects without thinking.
+ * Any stronger and it pushes a car that is doing nothing wrong off a 32 m wide
+ * course, which reads as the game misbehaving rather than as weather.
+ */
 const gusts: HazardDefinition[] = scatterAlong(ring, 150, 190, 3, () => 1.0, () => 0).map((p) => ({
   ...p,
   radius: 26,
   kind: 'gust' as const,
   direction: Math.PI * 0.35,
-  strength: 0.55,
+  strength: 0.32,
 }));
 
 export const SALTFLAT_RELIQUARY: TrackDefinition = {

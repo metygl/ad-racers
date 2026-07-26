@@ -5,7 +5,7 @@ import { COMBAT, DRIFT, PHYSICS, SURGE } from '../config';
 import type { Track } from '../track/buildTrack';
 import { sampleAt } from '../track/buildTrack';
 import { SURFACES } from '../track/types';
-import type { SurfaceId } from '../track/types';
+import type { Path, SurfaceId } from '../track/types';
 import type { ControlInput, RacerState, SimEvent } from './state';
 
 export interface VehicleStepContext {
@@ -41,12 +41,21 @@ function steeringCurve(speed: number, topSpeed: number): number {
   return rise * (1 - PHYSICS.steeringHighSpeedFalloff * over);
 }
 
-/** dy/ds of the track surface at a point, used for the airborne model. */
-function slopeAt(track: Track, racer: RacerState, distance: number): number {
-  const ahead = sampleAt(racer.path, distance + 2).y;
-  const behind = sampleAt(racer.path, distance - 2).y;
-  void track;
-  return (ahead - behind) / 4;
+/** Half-width of the stencil used to measure the surface profile, in metres. */
+const PROFILE_SPAN = 6;
+
+/**
+ * Local vertical profile of the surface: its slope (dy/ds) and how sharply
+ * that slope is changing (d²y/ds²). The second term is what decides whether a
+ * crest launches the skiff.
+ */
+function surfaceProfile(path: Path, distance: number, groundY: number): { slope: number; curvature: number } {
+  const ahead = sampleAt(path, distance + PROFILE_SPAN).y;
+  const behind = sampleAt(path, distance - PROFILE_SPAN).y;
+  return {
+    slope: (ahead - behind) / (2 * PROFILE_SPAN),
+    curvature: (ahead - 2 * groundY + behind) / (PROFILE_SPAN * PROFILE_SPAN),
+  };
 }
 
 /**
@@ -250,13 +259,21 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
       ctx.events.push({ type: 'jumpLand', racer: racer.index, clean, speed: impact });
     }
   } else {
-    const slope = slopeAt(ctx.track, racer, projection.distance);
-    const verticalSpeed = slope * vLong;
-    const nextGround = sampleAt(racer.path, projection.distance + vLong * dt).y;
-    const ballistic = groundY + verticalSpeed * dt - 0.5 * PHYSICS.gravity * dt * dt;
-    if (verticalSpeed > 1 && ballistic > nextGround + 0.02) {
+    /*
+     * Following the ground over a crest needs a downward acceleration of
+     * `d²y/ds² · v²`. Once that exceeds what gravity and the suspension can
+     * supply, the skiff simply carries on in a straight line — which is what
+     * being airborne is.
+     *
+     * Comparing predicted heights one step apart instead, as an earlier version
+     * did, cannot work: at 48 m/s a single 8 ms step covers 40 cm, over which
+     * even a sharp crest drops well under a millimetre.
+     */
+    const { slope, curvature } = surfaceProfile(racer.path, projection.distance, groundY);
+    const requiredAccel = curvature * vLong * vLong;
+    if (vLong > 12 && requiredAccel < -PHYSICS.gravity * PHYSICS.airborneThreshold) {
       racer.airborne = true;
-      racer.verticalVelocity = verticalSpeed;
+      racer.verticalVelocity = slope * vLong;
       racer.y = groundY;
     } else {
       // Glued to the surface, but eased so a kerb does not snap the camera.
@@ -297,24 +314,23 @@ function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
   if (!walled) {
     const inwardX = -normal.x * side;
     const inwardZ = -normal.z * side;
-    const push =
-      PHYSICS.runOffReturn * Math.min(1, over / PHYSICS.runOffFullReturn) +
-      Math.max(0, over - PHYSICS.runOffFullReturn) * PHYSICS.runOffHardGain;
-    racer.velocity = {
-      x: racer.velocity.x + inwardX * push * ctx.dt,
-      z: racer.velocity.z + inwardZ * push * ctx.dt,
-    };
+
+    /*
+     * The return is a *positional* slide, not a force on the velocity.
+     *
+     * An inward force has to be stronger than the engine to work at all, and
+     * once it is, a car pointed outwards at full throttle settles at exactly
+     * zero speed — where the steering has no authority either, so it is stuck
+     * for good. Sliding the car back instead never fights the throttle and
+     * cannot stall: the driver keeps full control the whole way in, and simply
+     * finds themselves back on the road.
+     */
+    const rate = Math.min(over * PHYSICS.runOffReturn, PHYSICS.runOffMaxReturnSpeed);
+    racer.pos = { x: racer.pos.x + inwardX * rate * ctx.dt, z: racer.pos.z + inwardZ * rate * ctx.dt };
+
     // Extra drag out here, so wandering off is always slower than staying on.
     const drag = Math.exp(-PHYSICS.runOffDrag * ctx.dt);
     racer.velocity = { x: racer.velocity.x * drag, z: racer.velocity.z * drag };
-
-    // A far outer clamp still exists so nothing can leave the world entirely,
-    // but it sits well beyond where the return force has already taken over.
-    const hardLimit = limit + PHYSICS.runOffMaxOvershoot;
-    const beyond = Math.abs(projection.lateral) - hardLimit;
-    if (beyond > 0) {
-      racer.pos = { x: racer.pos.x + inwardX * beyond, z: racer.pos.z + inwardZ * beyond };
-    }
     return;
   }
 

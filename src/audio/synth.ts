@@ -18,12 +18,21 @@ function noiseAt(seed: number, index: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-export interface BufferSpec {
-  channels: number;
-  length: number;
-  sampleRate: number;
-  /** Fills one channel. */
-  fill: (channel: Float32Array, channelIndex: number, sampleRate: number) => void;
+/**
+ * Scales a filled buffer to a target peak.
+ *
+ * Every generator here sums components — harmonics, a resonant filter, noise —
+ * whose worst case is not obvious from the parameters, and Web Audio hard-clips
+ * anything outside [-1, 1]. Normalising afterwards makes the peak a property of
+ * the API rather than something a tuning change can quietly break.
+ * `tests/unit/audio.test.ts` asserts nothing ever clips.
+ */
+export function normalise(channel: Float32Array, target = 0.9): void {
+  let peak = 0;
+  for (let i = 0; i < channel.length; i++) peak = Math.max(peak, Math.abs(channel[i] as number));
+  if (peak <= 1e-9) return;
+  const gain = target / peak;
+  for (let i = 0; i < channel.length; i++) channel[i] = (channel[i] as number) * gain;
 }
 
 /**
@@ -51,6 +60,7 @@ export function noiseBurst(
       const envelope = Math.exp((-i / sampleRate) * options.decay);
       channel[i] = low * envelope;
     }
+    normalise(channel);
   };
 }
 
@@ -72,6 +82,7 @@ export function tone(
       const rise = Math.min(1, t / attack);
       channel[i] = sample * rise * Math.exp(-t * options.decay);
     }
+    normalise(channel);
   };
 }
 
@@ -95,6 +106,7 @@ export function engineCycle(length: number, seed: number): (channel: Float32Arra
       const grit = (noiseAt(seed, i) * 2 - 1) * 0.12;
       channel[i] = (body * 0.62 + growl + grit) * 0.5;
     }
+    normalise(channel, 0.8);
   };
 }
 
@@ -128,12 +140,7 @@ export function ambientPad(
       }
     }
     // Normalise so the pad never clips regardless of how the partials line up.
-    let peak = 0;
-    for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(channel[i] as number));
-    if (peak > 0) {
-      const gain = 0.55 / peak;
-      for (let i = 0; i < length; i++) channel[i] = (channel[i] as number) * gain;
-    }
+    normalise(channel, 0.55);
   };
 }
 
@@ -154,5 +161,6 @@ export function sweep(
       const noise = options.noise ? (noiseAt(options.seed ?? 1, i) * 2 - 1) * options.noise : 0;
       channel[i] = (Math.sin(phase) * (1 - (options.noise ?? 0)) + noise) * Math.exp((-i / sampleRate) * options.decay);
     }
+    normalise(channel);
   };
 }

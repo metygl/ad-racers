@@ -33,7 +33,7 @@ export interface SetupActions {
 function trackCard(track: TrackDefinition, best: BestTime | undefined, selected: boolean, onSelect: () => void): HTMLElement {
   const id = `track-${track.id}`;
   const input = el('input', { type: 'radio', name: 'track', id, class: 'card__input' });
-  (input as HTMLInputElement).checked = selected;
+  input.checked = selected;
   input.addEventListener('change', onSelect);
 
   const pips = el('span', { class: 'card__pips', 'aria-label': `Technicality ${track.technicality} of 3` });
@@ -92,7 +92,7 @@ function statBar(label: string, value: number): HTMLElement {
 function racerCard(racer: RacerProfile, selected: boolean, onSelect: () => void): HTMLElement {
   const id = `racer-${racer.id}`;
   const input = el('input', { type: 'radio', name: 'racer', id, class: 'card__input' });
-  (input as HTMLInputElement).checked = selected;
+  input.checked = selected;
   input.addEventListener('change', onSelect);
 
   const swatch = el('span', { class: 'card__swatch', 'aria-hidden': 'true' });
@@ -152,7 +152,7 @@ export function buildSetupScreen(actions: SetupActions): HTMLElement {
   for (const difficulty of DIFFICULTIES) {
     const id = `difficulty-${difficulty.id}`;
     const input = el('input', { type: 'radio', name: 'difficulty', id, class: 'card__input' });
-    (input as HTMLInputElement).checked = difficulty.id === selection.difficultyId;
+    input.checked = difficulty.id === selection.difficultyId;
     input.addEventListener('change', () => {
       selection.difficultyId = difficulty.id;
       emit();

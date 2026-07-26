@@ -5,7 +5,7 @@ import { COMBAT, DRIFT, PHYSICS, RACE, SURGE } from '../config';
 import type { Track } from '../track/buildTrack';
 import { sampleAt } from '../track/buildTrack';
 import { SURFACES } from '../track/types';
-import type { Path } from '../track/types';
+import type { Path, PathSample } from '../track/types';
 import { canStartStrike, isInStrikeEnvelope } from '../sim/combat';
 import type { ControlInput, RacerState } from '../sim/state';
 import { emptyInput } from '../sim/state';
@@ -124,6 +124,21 @@ function cornerSpeed(curvature: number, limit: number): number {
 }
 
 /**
+ * Looks ahead along a path, rolling over onto the main line when a branch runs
+ * out.
+ *
+ * A shortcut is an open path, so `sampleAt` clamps at its end — which means for
+ * the last lookahead-length of a branch the AI aims at a fixed point and then
+ * sails straight past the exit onto the grass. Continuing onto the main line
+ * past `exitMainDistance` is what makes rejoining as smooth as leaving.
+ */
+function sampleAhead(track: Track, path: Path, distance: number, ahead: number): PathSample {
+  const target = distance + ahead;
+  if (path.closed || target <= path.length) return sampleAt(path, target);
+  return track.sampleMain(path.exitMainDistance + (target - path.length));
+}
+
+/**
  * Path-following gains. Exposed as one object because they are coupled: raising
  * the heading gain without lengthening the lookahead makes the controller
  * unstable, which shows up as the AI weaving off an open-edged course.
@@ -169,8 +184,6 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
   // --- recovery -----------------------------------------------------------
   if (updateRecovery(racer, ctx, input)) return input;
 
-  // --- choose a path (main line or shortcut) ------------------------------
-  chooseBranch(racer, ctx);
 
   const surfaceGrip = SURFACES[racer.surface].grip;
   const limit = corneringLimit(racer, surfaceGrip) * ai.skill;
@@ -183,7 +196,7 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
   // steering and oscillates itself off the road. At 33 m/s the grip-limited
   // radius is about 90 m, so roughly a second of travel is the floor.
   const lookaheadDistance = clamp(speed * AI_TUNING.lookaheadSeconds, 12, 46);
-  const apexCurvature = averagedCurvature(racer.path, projection.distance, lookaheadDistance * 1.4);
+  const apexCurvature = averagedCurvature(ctx.track, racer.path, projection.distance, lookaheadDistance * 1.4);
 
   // Classic outside-in line: sit wide before a corner, tighten to the apex.
   const apexPull = clamp(-Math.sign(apexCurvature) * Math.min(1, Math.abs(apexCurvature) * 42), -1, 1);
@@ -192,6 +205,13 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
 
   const overtake = planOvertake(racer, ctx, projection.halfWidth);
   if (overtake !== null) targetLateral = overtake;
+
+  // Aiming at a shortcut mouth outranks both the racing line and an overtake:
+  // the window to make the split is short, and half-committing to it is the
+  // worst of both. This has to be applied *after* the line is computed, or the
+  // line logic simply overwrites it and the skiff sails past the entrance.
+  const branchAim = chooseBranch(racer, ctx, projection.normal, projection.halfWidth);
+  if (branchAim !== null) targetLateral = branchAim;
 
   // Edge pressure: the closer the skiff already is to an edge, the more the
   // target collapses towards the centre. Without this the AI happily aims at a
@@ -224,7 +244,7 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
   const scanRange = clamp(speed * speed * 0.034 + 26, 35, 190);
   for (let i = 1; i <= scanSteps; i++) {
     const ahead = (i / scanSteps) * scanRange;
-    const sample = sampleAt(racer.path, projection.distance + ahead);
+    const sample = sampleAhead(ctx.track, racer.path, projection.distance, ahead);
     const allowed = cornerSpeed(sample.curvature, limit);
     if (!Number.isFinite(allowed)) continue;
     // How fast we may be *now* to still be at `allowed` in `ahead` metres.
@@ -284,7 +304,7 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
   input.drift = canDrift && ai.driftHold > 0;
 
   // --- surge ---------------------------------------------------------------
-  const straightAhead = Math.abs(averagedCurvature(racer.path, projection.distance, 55)) < 0.009;
+  const straightAhead = Math.abs(averagedCurvature(ctx.track, racer.path, projection.distance, 55)) < 0.009;
   const behindSomeone = racer.position > 1;
   const surgeReady = racer.surge > SURGE.triggerThreshold + (1 - ai.surgeDiscipline) * 0.1;
   if (surgeReady && (straightAhead || (behindSomeone && racer.surge > 0.65)) && !racer.airborne && !input.drift) {
@@ -310,7 +330,7 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
  */
 function steerTowardsLine(racer: RacerState, ctx: AiContext, lateral: number, lookahead: number): number {
   const projection = ctx.track.project(racer.pos, racer.path);
-  const target = sampleAt(racer.path, projection.distance + lookahead);
+  const target = sampleAhead(ctx.track, racer.path, projection.distance, lookahead);
   const point: Vec2 = {
     x: target.pos.x + target.normal.x * lateral,
     z: target.pos.z + target.normal.z * lateral,
@@ -331,11 +351,11 @@ function steerTowardsLine(racer: RacerState, ctx: AiContext, lateral: number, lo
 }
 
 /** Mean curvature over a stretch of path, used for line and boost decisions. */
-function averagedCurvature(path: Path, from: number, span: number): number {
+function averagedCurvature(track: Track, path: Path, from: number, span: number): number {
   const steps = 8;
   let sum = 0;
   for (let i = 1; i <= steps; i++) {
-    sum += sampleAt(path, from + (i / steps) * span).curvature;
+    sum += sampleAhead(track, path, from, (i / steps) * span).curvature;
   }
   return sum / steps;
 }
@@ -412,49 +432,62 @@ function planStrike(racer: RacerState, ctx: AiContext): -1 | 0 | 1 {
 }
 
 /**
- * Shortcut selection. The AI evaluates a branch once, as it approaches the
- * entry, and commits. Boldness decides how often it takes the risk; skill
- * decides whether it can actually carry the line through.
+ * Shortcut selection.
+ *
+ * The AI evaluates a branch once per lap as it approaches the entry, and
+ * commits. Boldness decides how often it takes the risk; skill decides whether
+ * it can actually carry the line through. Returns the lateral offset to aim at
+ * while lining up the mouth, or null to leave the racing line alone.
  */
-function chooseBranch(racer: RacerState, ctx: AiContext): void {
+function chooseBranch(racer: RacerState, ctx: AiContext, normal: Vec2, halfWidth: number): number | null {
   const ai = racer.ai;
-  if (!ai) return;
+  if (!ai) return null;
   const track = ctx.track;
-  if (track.branches.length === 0) return;
+  if (track.branches.length === 0) return null;
 
-  // Once on a branch, ride it out.
+  // Once on a branch, ride it out; `project` keeps the skiff latched to the
+  // branch corridor and the ordinary line-following handles the rest.
   if (racer.path.id !== 'main') {
     ai.branchChoice = racer.path.id;
-    return;
+    return null;
   }
 
   for (const branch of track.branches) {
     const gap = track.forwardGap(racer.mainDistance, branch.entryMainDistance);
-    // Decide in the window 45-25 m before the split.
-    if (gap > 45 || gap < 25) continue;
-    if (ai.branchDecidedAt === branch.entryMainDistance) continue;
-    ai.branchDecidedAt = branch.entryMainDistance;
-    ai.branchChoice = ctx.rng.chance(ai.boldness) ? branch.id : null;
-  }
 
-  if (ai.branchChoice) {
-    const branch = track.branches.find((b) => b.id === ai.branchChoice);
-    if (branch) {
-      const gap = track.forwardGap(racer.mainDistance, branch.entryMainDistance);
-      if (gap < 26 && gap > -6) {
-        // Aim at the branch mouth. Once inside, `project` will latch onto the
-        // branch corridor by itself and the AI follows it like any other path.
-        const mouth = sampleAt(branch, Math.min(12, branch.length));
-        const toMouth: Vec2 = { x: mouth.pos.x - racer.pos.x, z: mouth.pos.z - racer.pos.z };
-        ai.smoothedTargetLateral = clamp(
-          dot(toMouth, ctx.track.project(racer.pos, racer.path).normal),
-          -racer.currentHalfWidth,
-          racer.currentHalfWidth,
-        );
-      }
-      if (gap < -20) ai.branchChoice = null;
+    // Clear the "already decided" latch once well clear of the split, so the
+    // choice is made afresh on every lap. Without this an opponent decides once
+    // on lap one and is committed for the whole race, which makes a bold field
+    // and a cautious one take a shortcut exactly as often as each other.
+    if (gap > 90 || gap < -60) {
+      if (ai.branchDecidedAt === branch.entryMainDistance) ai.branchDecidedAt = -1;
+      continue;
+    }
+
+    // Decide in the window 55-25 m before the split.
+    if (gap <= 55 && gap >= 25 && ai.branchDecidedAt !== branch.entryMainDistance) {
+      ai.branchDecidedAt = branch.entryMainDistance;
+      ai.branchChoice = ctx.rng.chance(ai.boldness) ? branch.id : null;
     }
   }
+
+  if (!ai.branchChoice) return null;
+  const branch = track.branches.find((b) => b.id === ai.branchChoice);
+  if (!branch) return null;
+
+  const gap = track.forwardGap(racer.mainDistance, branch.entryMainDistance);
+  if (gap < -25) {
+    // Missed it. Give up rather than turning back across the road.
+    ai.branchChoice = null;
+    return null;
+  }
+  if (gap > 60) return null;
+
+  // Aim a little way inside the branch mouth so the skiff arrives already
+  // pointing down it, rather than clipping the entrance and bouncing off.
+  const mouth = sampleAt(branch, Math.min(18, branch.length * 0.4));
+  const toMouth: Vec2 = { x: mouth.pos.x - racer.pos.x, z: mouth.pos.z - racer.pos.z };
+  return clamp(dot(toMouth, normal), -halfWidth * 0.95, halfWidth * 0.95);
 }
 
 /**

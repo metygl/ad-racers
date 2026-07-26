@@ -73,6 +73,16 @@ export const PHYSICS = {
   gravity: 22,
   /** Vertical speed below which a landing counts as clean. */
   cleanLandingSpeed: 7,
+  /**
+   * Fraction of gravity at which a crest launches the skiff.
+   *
+   * A strictly ballistic test (the ground falling away faster than 1 g) needs a
+   * ramp sharper than a Catmull-Rom centreline through nodes tens of metres
+   * apart can produce, so a real flyover would never actually launch anyone.
+   * Triggering at half a g models the suspension unloading and gives the crest
+   * the air it visibly deserves, without letting every gentle rise become a jump.
+   */
+  airborneThreshold: 0.42,
   /** Impact speed above which a wall hit spins the vehicle. */
   wallSpinThreshold: 22,
   /** Fraction of speed retained after a square-on wall hit. */
@@ -86,23 +96,15 @@ export const PHYSICS = {
    */
   offTrackMargin: 13,
   /**
-   * Inward acceleration applied out in the run-off, in m/s². Enough to pull a
-   * car back across the grass in a couple of seconds, gentle enough that it
-   * never fights a driver who is deliberately running wide.
+   * Inward slide out in the run-off, per second per metre past the limit. A
+   * car 10 m out slides back at 6 m/s, which clears a big excursion in a couple
+   * of seconds without ever taking control away from the driver.
    */
-  runOffReturn: 11,
-  /** Distance past the limit at which the return force reaches full strength. */
-  runOffFullReturn: 8,
+  runOffReturn: 0.6,
+  /** Cap on the inward slide, so a huge excursion is not yanked back. */
+  runOffMaxReturnSpeed: 14,
   /** Extra drag out in the run-off, per second. */
   runOffDrag: 1.6,
-  /**
-   * Beyond `runOffFullReturn` the inward pull climbs steeply. It has to end up
-   * stronger than the engine, or a car pointed at the horizon with the throttle
-   * open simply drives away from the course forever.
-   */
-  runOffHardGain: 5,
-  /** Absolute outer clamp, measured past the run-off limit. */
-  runOffMaxOvershoot: 30,
   /** Steering authority retained while airborne. */
   airborneSteering: 0.22,
   /** Speed scrubbed off per unit of lateral slide, so a drift costs something. */
@@ -213,8 +215,13 @@ export const RACE = {
   gridRowSpacing: 7,
   /** Grid lateral stagger. */
   gridLateral: 2.4,
-  /** Time after the winner finishes before the race is force-ended. */
-  postRaceTimeout: 22,
+  /**
+   * Absolute safety valve, measured from the point where there is no human
+   * race left to run. It exists only so a wedged opponent cannot hang the
+   * results screen; it must be generous enough that an opponent having a bad
+   * race is still classified on merit rather than by the clock.
+   */
+  postRaceTimeout: 75,
   /**
    * Corridor tolerance, in multiples of the local half-width, within which a
    * checkpoint still registers. Wider than the road so a legitimate wide line

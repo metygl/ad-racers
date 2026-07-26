@@ -25,10 +25,17 @@ const NODES: RingNode[] = [
   { a: 135, r: 181, halfWidth: 11.5, y: 1.0 },
   { a: 150, r: 213, halfWidth: 12.5, y: 0.4 },
   { a: 165, r: 239, halfWidth: 13, y: 0 },
-  // The flyover: a fast climb to a crest that unweights the skiff.
-  { a: 180, r: 253, halfWidth: 13, y: 2.5 },
-  { a: 195, r: 251, halfWidth: 12.5, y: 8.5 },
-  { a: 210, r: 237, halfWidth: 11.5, y: 9.0 },
+  // The flyover.
+  //
+  // Control points cluster around the crest on purpose: the launch depends on
+  // how fast the ground falls away, and nodes 30 m apart smooth a crest into a
+  // gentle rise that nobody ever leaves the ground on.
+  { a: 178, r: 253, halfWidth: 13, y: 3.2 },
+  { a: 186, r: 253, halfWidth: 13, y: 7.4 },
+  { a: 192, r: 252, halfWidth: 12.8, y: 9.4 },
+  { a: 197, r: 251, halfWidth: 12.5, y: 10.1 },
+  { a: 202, r: 248, halfWidth: 12.2, y: 7.6 },
+  { a: 210, r: 237, halfWidth: 11.5, y: 4.4 },
   { a: 225, r: 206, halfWidth: 10, y: 4.5, bankDeg: 6 },
   { a: 240, r: 165, halfWidth: 9.2, y: 1.4, bankDeg: 9, surface: 'dirt' },
   { a: 255, r: 130, halfWidth: 8.6, y: 0.4, bankDeg: 10, surface: 'dirt' },
@@ -55,17 +62,26 @@ const mainLine = previewMainPath(ring.points);
 const slipRoad = chordAlong(mainLine, 755, 1125, 7, 30, (t) => {
   const mouth = t < 0.12 || t > 0.88;
   return {
-    halfWidth: mouth ? 8 : 5.8,
+    halfWidth: mouth ? 8.5 : 7,
     ...(mouth ? {} : { surface: 'dirt' as const }),
   };
 });
 
-const rubble: ObstacleDefinition[] = slipRoad.slice(2, 5).map((p, i) => ({
-  x: p.x + Math.cos(i * 2.1) * 2.2,
-  z: p.z + Math.sin(i * 2.1) * 2.2,
-  radius: 1.3 + (i % 2) * 0.4,
+/*
+ * Rubble on the slip road.
+ *
+ * Two pieces, offset to one side, leaving a clean line past them. The point of
+ * a shortcut is a choice, and a choice needs the fast option to actually be
+ * fast: with the corridor any narrower or the rubble any denser this cut is
+ * measurably *slower* than the main line, which makes taking it a mistake
+ * rather than a risk. `tests/unit/ai.test.ts` holds that line.
+ */
+const rubble: ObstacleDefinition[] = slipRoad.slice(2, 4).map((p, i) => ({
+  x: p.x + Math.cos(i * 2.1) * 3.4,
+  z: p.z + Math.sin(i * 2.1) * 3.4,
+  radius: 1.2,
   kind: 'rock' as const,
-  height: 1.8 + (i % 3) * 0.4,
+  height: 1.7 + (i % 2) * 0.4,
 }));
 
 /** Fallen bridge pillars standing in the infield of the long sweeper. */

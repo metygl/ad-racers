@@ -142,9 +142,14 @@ export function closestPointOnSegment(p: Vec2, a: Vec2, b: Vec2): number {
 /** Formats seconds as `m:ss.mmm`, the format used by the HUD and results. */
 export function formatLapTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--.---';
-  const minutes = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  const millis = Math.floor((seconds % 1) * 1000);
+  // Round to whole milliseconds *first*. Taking `seconds % 1` and flooring
+  // loses a millisecond whenever the binary representation lands just under the
+  // decimal value — 3599.999 formats as 59:59.998, which is the sort of thing
+  // that turns a personal best into a mystery.
+  const totalMillis = Math.round(seconds * 1000);
+  const minutes = Math.floor(totalMillis / 60000);
+  const secs = Math.floor((totalMillis % 60000) / 1000);
+  const millis = totalMillis % 1000;
   return `${minutes}:${secs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
 }
 

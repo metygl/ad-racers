@@ -80,8 +80,8 @@ export function toggle(label: string, value: boolean, onChange: (value: boolean)
   const id = `toggle-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   const hintId = hint ? `${id}-hint` : undefined;
   const input = el('input', { type: 'checkbox', id, class: 'field__checkbox', 'aria-describedby': hintId });
-  (input as HTMLInputElement).checked = value;
-  input.addEventListener('change', () => onChange((input as HTMLInputElement).checked));
+  input.checked = value;
+  input.addEventListener('change', () => onChange(input.checked));
   return el(
     'div',
     { class: 'field field--toggle' },
@@ -107,7 +107,7 @@ export function segmented<T extends string>(
   for (const option of options) {
     const id = `${name}-${option.value}`;
     const input = el('input', { type: 'radio', name, id, class: 'segmented__input', value: option.value });
-    (input as HTMLInputElement).checked = option.value === current;
+    input.checked = option.value === current;
     input.addEventListener('change', () => onChange(option.value));
     const labelEl = el('label', { class: 'segmented__option', for: id }, option.label);
     if (option.hint) labelEl.title = option.hint;

@@ -187,7 +187,9 @@ export class Simulation {
 
     if (this.phase === 'countdown') {
       this.countdown -= dt;
-      const announce = Math.ceil(this.countdown);
+      // `Math.ceil` on a small negative produces -0, which would reach the HUD
+      // and the tests as a distinct value from 0.
+      const announce = Math.max(0, Math.ceil(this.countdown));
       if (announce < this.lastCountdownAnnounced && announce >= 0) {
         this.lastCountdownAnnounced = announce;
         this.events.push({ type: 'countdown', value: announce });

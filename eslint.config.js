@@ -33,7 +33,9 @@ export default tseslint.config(
     },
   },
   {
-    files: ['scripts/**/*.mjs'],
+    // These are build/tooling files outside the app's tsconfig, so they are
+    // linted for correctness but not with type information.
+    files: ['eslint.config.js', 'scripts/**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
   },
 );

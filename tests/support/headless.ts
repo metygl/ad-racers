@@ -119,7 +119,8 @@ export function scriptedPlayer(skill = 'pro'): (sim: Simulation, step: number) =
 }
 
 function referenceBrain(difficultyId: string): NonNullable<RacerState['ai']> {
-  const profile = DIFFICULTIES.find((d) => d.id === difficultyId) ?? (DIFFICULTIES[1] as (typeof DIFFICULTIES)[number]);
+  const profile = DIFFICULTIES.find((d) => d.id === difficultyId) ?? DIFFICULTIES[1];
+  if (!profile) throw new Error('no difficulty profiles are defined');
   return {
     difficultyId: profile.id,
     skill: profile.skill,

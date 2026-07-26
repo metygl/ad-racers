@@ -135,7 +135,7 @@ function migrate(raw: unknown): SaveData {
     for (const action of Object.keys(save.settings.bindings) as (keyof KeyBindings)[]) {
       const value = bindings[action];
       if (Array.isArray(value) && value.every(isString) && value.length > 0) {
-        save.settings.bindings[action] = value as string[];
+        save.settings.bindings[action] = value;
       }
     }
   }

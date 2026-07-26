@@ -22,7 +22,7 @@ export const SURFACES: Record<SurfaceId, SurfaceProperties> = {
   dirt: { grip: 0.82, speedCap: 0.94, drag: 1.35, roughness: 0.45 },
   sand: { grip: 0.66, speedCap: 0.7, drag: 2.1, roughness: 0.7 },
   grass: { grip: 0.58, speedCap: 0.52, drag: 2.8, roughness: 0.85 },
-  water: { grip: 0.46, speedCap: 0.58, drag: 3.6, roughness: 0.55 },
+  water: { grip: 0.55, speedCap: 0.62, drag: 3.2, roughness: 0.55 },
   ice: { grip: 0.3, speedCap: 1.0, drag: 0.85, roughness: 0.02 },
 };
 

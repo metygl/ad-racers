@@ -96,7 +96,14 @@ export class App {
     this.adaptive = new AdaptiveQuality(this.save.settings.autoQuality ? detectInitialQuality() : this.save.settings.quality);
   }
 
-  /** Boots the game. Resolves once the first screen is on the page. */
+  /**
+   * Boots the game. Resolves once the first screen is on the page.
+   *
+   * Async only so callers can await a failure; nothing here needs to wait on
+   * anything, which is deliberate — the first frame should not be gated on a
+   * promise.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await
   async start(): Promise<void> {
     this.showScreen('loading');
 

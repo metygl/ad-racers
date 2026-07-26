@@ -177,10 +177,12 @@ test.describe('accessibility', () => {
 
   test('rebuilds the menu world when quality changes', async ({ page }) => {
     await openGame(page);
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.locator('label[for="seg-graphics-quality-medium"]').click();
+    await expect(page.getByRole('radio', { name: 'Medium' })).toBeChecked();
     await page.locator('#scene').evaluate((canvas) => {
       (canvas as HTMLCanvasElement & { originalCanvas?: boolean }).originalCanvas = true;
     });
-    await page.getByRole('button', { name: 'Settings' }).click();
     await page.locator('label[for="seg-graphics-quality-low"]').click();
     await expect
       .poll(() =>

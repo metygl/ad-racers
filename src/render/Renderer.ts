@@ -105,6 +105,16 @@ const NEAR_MISS_CONTACT = 1.9;
 /** Seconds before the same rival can trigger another. */
 const NEAR_MISS_COOLDOWN = 1.2;
 
+/**
+ * How much of the additive effect budget reduced motion keeps.
+ *
+ * Reduced motion used to scale bloom and drop the speed fringe while leaving
+ * the emitters alone, so a review found the normal and reduced boost frames
+ * "broadly washed out" in both and the readability failure unchanged. Calming
+ * the movement without calming the energy is half a setting.
+ */
+const REDUCED_MOTION_EFFECTS = 0.45;
+
 export interface RendererOptions {
   canvas: HTMLCanvasElement;
   quality: QualityId;
@@ -185,6 +195,7 @@ export class GameRenderer {
     this.chase = new ChaseCamera(1);
     this.chase.shakeScale = this.reducedMotion ? 0 : 1;
     this.particles = new ParticleSystem(tier.particleBudget);
+    this.particles.intensityScale = this.reducedMotion ? REDUCED_MOTION_EFFECTS : 1;
     for (const mesh of this.particles.meshes) this.scene.add(mesh);
     this.composer = tier.postProcessing ? new PostComposer(this.renderer) : null;
 
@@ -250,6 +261,7 @@ export class GameRenderer {
   setReducedMotion(value: boolean): void {
     this.reducedMotion = value;
     this.chase.shakeScale = value ? 0 : 1;
+    this.particles.intensityScale = value ? REDUCED_MOTION_EFFECTS : 1;
   }
 
   /**

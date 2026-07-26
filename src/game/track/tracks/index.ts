@@ -1,6 +1,7 @@
 import { Track } from '../buildTrack';
 import type { TrackDefinition } from '../types';
 import { EMBERFALL_QUARRY } from './emberfallQuarry';
+import { GLASSHOUSE_VIGIL } from './glasshouseVigil';
 import { OVERGROWN_INTERCHANGE } from './overgrownInterchange';
 import { SALTFLAT_RELIQUARY } from './saltflatReliquary';
 
@@ -8,6 +9,7 @@ import { SALTFLAT_RELIQUARY } from './saltflatReliquary';
 export const TRACK_DEFINITIONS: readonly TrackDefinition[] = [
   OVERGROWN_INTERCHANGE,
   SALTFLAT_RELIQUARY,
+  GLASSHOUSE_VIGIL,
   EMBERFALL_QUARRY,
 ];
 
@@ -33,4 +35,4 @@ export function getTrackDefinition(id: string): TrackDefinition {
   return definition;
 }
 
-export { EMBERFALL_QUARRY, OVERGROWN_INTERCHANGE, SALTFLAT_RELIQUARY };
+export { EMBERFALL_QUARRY, GLASSHOUSE_VIGIL, OVERGROWN_INTERCHANGE, SALTFLAT_RELIQUARY };

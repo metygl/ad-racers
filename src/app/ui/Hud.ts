@@ -364,9 +364,15 @@ export class Hud {
       this.speedLines.style.opacity = '0';
       return;
     }
-    // Only above two thirds of top speed, so the effect means "fast" rather
-    // than being permanent visual noise.
-    const intensity = clamp01((speed - 34) / 22) * (boosting ? 1 : 0.65);
+    /*
+     * Only near the top of the range, and quiet even there.
+     *
+     * The renderer now carries the speed cue properly — field of view, follow
+     * distance and a radial warp — so this DOM layer is punctuation rather than
+     * the effect itself. At the strength it used to run it read as scratches on
+     * the screen at night, which is the opposite of a speed cue.
+     */
+    const intensity = clamp01((speed - 38) / 20) * (boosting ? 0.55 : 0.28);
     this.speedLines.style.opacity = intensity.toFixed(3);
   }
 

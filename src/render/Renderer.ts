@@ -252,6 +252,7 @@ export class GameRenderer {
       this.post.bloomThreshold = grade.bloomThreshold;
       this.post.bloomIntensity = grade.bloomIntensity;
       this.post.vignette = grade.vignette;
+      this.post.exposure = grade.exposure;
     }
 
     // Racer models are cheap; rebuild them whenever the field changes.

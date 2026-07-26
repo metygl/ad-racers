@@ -145,6 +145,16 @@ export interface TrackTheme {
    * reads as hot or as cold. Optional; the default grade is neutral.
    */
   grade?: {
+    /**
+     * Linear exposure applied before the tone map.
+     *
+     * Separate from `gain`, and the separation matters: exposure moves the
+     * whole image through the filmic curve, so raising it recovers detail in
+     * the shadows without flattening the highlights, whereas gain applied after
+     * the curve just washes everything out. A night course needs the first and
+     * is ruined by the second.
+     */
+    exposure?: number;
     lift?: [number, number, number];
     gamma?: [number, number, number];
     gain?: [number, number, number];

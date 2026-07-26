@@ -64,6 +64,7 @@ export function inBand(color: THREE.ColorRepresentation, band: ValueBand): boole
  * gain moves the highlights, which is how it reads as hot or as cold.
  */
 export interface GradeSpec {
+  exposure: number;
   lift: number[];
   gamma: number[];
   gain: number[];
@@ -79,6 +80,7 @@ export function toColor(rgb: number[]): THREE.Color {
 }
 
 export const DEFAULT_GRADE: GradeSpec = {
+  exposure: 1.05,
   lift: [0, 0, 0],
   gamma: [1, 1, 1],
   gain: [1, 1, 1],

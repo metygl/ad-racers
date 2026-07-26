@@ -104,6 +104,18 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
 
   const body = panel(profile.colors.body);
   const trim = panel(profile.colors.trim, 0.45, 0.5);
+  /*
+   * A faint self-illumination on the trim, on every course.
+   *
+   * The art bible puts racers in the top value band *everywhere*, and on a night
+   * course a purely lit skiff is a silhouette however well the scene is exposed
+   * — six identical black shapes, which is the one thing the crew colours exist
+   * to prevent. The emissive is small enough to be invisible in daylight and
+   * decisive after dark, and it is on the trim rather than the body so it reads
+   * as running lights rather than as a glowing car.
+   */
+  trim.emissive = new THREE.Color(profile.colors.glow);
+  trim.emissiveIntensity = 0.35;
   const dark = panel(0x1b1f26, 0.7, 0.2);
   const disposables: (THREE.BufferGeometry | THREE.Material)[] = [body, trim, dark];
 

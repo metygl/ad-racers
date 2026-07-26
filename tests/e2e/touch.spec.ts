@@ -231,3 +231,117 @@ test.describe('touch journey', () => {
     expect(collisions).toEqual([]);
   });
 });
+
+/*
+ * The whole touch surface, at every required size, with safe areas.
+ *
+ * The previous overlap test ran on one device profile and checked a sample of
+ * the HUD. That is a test which only catches the collisions you already thought
+ * of, and it passed while production was broken: a review measured the Lap
+ * panel starting at x=319 in a 320 px viewport, the minimap intersecting the
+ * action pads by 88x16 px, the speed panel over them by 47x60 px, and in short
+ * landscape the speed panel over the steering strip by 266x67 px.
+ *
+ * So this measures *every* atomic element against every other and against the
+ * viewport, at the three sizes the brief names, with and without safe-area
+ * insets. Safe areas are included because they made the failure worse, which
+ * makes notched phones the worst case rather than an afterthought.
+ */
+test.describe('touch composition', () => {
+  const SIZES = [
+    { name: '320x568', width: 320, height: 568 },
+    { name: '390x844', width: 390, height: 844 },
+    { name: '844x390', width: 844, height: 390 },
+  ];
+  const INSETS = [
+    { name: 'no safe area', top: 0, right: 0, bottom: 0, left: 0 },
+    { name: 'safe areas', top: 47, right: 16, bottom: 34, left: 16 },
+  ];
+
+  for (const size of SIZES) {
+    for (const inset of INSETS) {
+      test(`${size.name} ${inset.name}: nothing overlaps and nothing is clipped`, async ({ page }) => {
+        await page.setViewportSize({ width: size.width, height: size.height });
+        await openGame(page);
+        await startSeededRace(page);
+        await waitForGreenLight(page);
+
+        // The performance overlay is part of the composition: it is a
+        // player-facing setting, and it used to cover the steering control.
+        await page.evaluate(
+          (fixture) => {
+            const settings = window.adRacers?.settings();
+            if (settings) (settings as { showPerformance?: boolean }).showPerformance = true;
+            const root = document.documentElement;
+            root.style.setProperty('--safe-top', `${fixture.top}px`);
+            root.style.setProperty('--safe-right', `${fixture.right}px`);
+            root.style.setProperty('--safe-bottom', `${fixture.bottom}px`);
+            root.style.setProperty('--safe-left', `${fixture.left}px`);
+          },
+          inset,
+        );
+        await page.waitForTimeout(400);
+
+        const report = await page.evaluate(() => {
+          const selectors = [
+            '.hud__panel--position', '.hud__panel--time', '.hud__panel--lap',
+            '.hud__gaps', '.minimap', '.hud__panel--speed', '.hud__bottom',
+            '.hud__notifications', '.perf', '.touch__steer',
+            ...Array.from({ length: 12 }, (_, i) => `.touch__pad:nth-of-type(${i + 1})`),
+            '.touch__camera', '.touch__pause',
+          ];
+          const found: { name: string; node: Element; r: DOMRect }[] = [];
+          for (const selector of selectors) {
+            for (const node of Array.from(document.querySelectorAll(selector))) {
+              const r = node.getBoundingClientRect();
+              // Hidden or zero-size elements are not part of the layout.
+              if (r.width < 1 || r.height < 1) continue;
+              found.push({ name: selector, node, r: r.toJSON() as DOMRect });
+            }
+          }
+          /*
+           * A container overlapping its own child is not a collision, it is
+           * containment. Only pairs that are unrelated in the tree compete for
+           * pixels.
+           */
+          const boxes = found.map((entry, index) => ({
+            name: entry.name,
+            r: entry.r,
+            related: found
+              .map((other, otherIndex) =>
+                otherIndex !== index && (entry.node.contains(other.node) || other.node.contains(entry.node))
+                  ? otherIndex
+                  : -1,
+              )
+              .filter((i) => i >= 0),
+          }));
+          return { boxes, width: window.innerWidth, height: window.innerHeight };
+        });
+
+        const problems: string[] = [];
+        // Nothing may sit outside the viewport it is drawn in.
+        for (const box of report.boxes) {
+          if (box.r.left < -1 || box.r.right > report.width + 1) {
+            problems.push(`${box.name} spans x ${box.r.left.toFixed(0)}..${box.r.right.toFixed(0)} in ${report.width}`);
+          }
+        }
+        // And no two of them may claim the same pixels.
+        for (let i = 0; i < report.boxes.length; i++) {
+          for (let j = i + 1; j < report.boxes.length; j++) {
+            const a = report.boxes[i]!;
+            const b = report.boxes[j]!;
+            if (a.related.includes(j)) continue;
+            const overlapX = Math.min(a.r.right, b.r.right) - Math.max(a.r.left, b.r.left);
+            const overlapY = Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top);
+            // A couple of pixels of touching border is not a collision.
+            if (overlapX > 2 && overlapY > 2) {
+              problems.push(`${a.name} over ${b.name} by ${overlapX.toFixed(0)}x${overlapY.toFixed(0)}`);
+            }
+          }
+        }
+
+        expect(problems.slice(0, 6)).toEqual([]);
+      });
+    }
+  }
+});

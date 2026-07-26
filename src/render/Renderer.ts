@@ -9,6 +9,7 @@ import { ParticleSystem } from './scene/Particles';
 import { buildHazardMarkers, buildHorizon, buildObstacles, buildScenery } from './scene/Scenery';
 import type { SceneryResult } from './scene/Scenery';
 import { buildLandmarks } from './scene/Landmarks';
+import { NearFade } from './scene/nearFade';
 import { buildCourseLife } from './scene/CourseLife';
 import type { CourseLifeResult } from './scene/CourseLife';
 import { buildLighting, buildSky } from './scene/SkyDome';
@@ -130,6 +131,7 @@ export class GameRenderer {
   private sky: SkyResult | null = null;
   private scenery: SceneryResult | null = null;
   private life: CourseLifeResult | null = null;
+  private readonly nearFade = new NearFade();
   /** Meshes the camera ray tests against; scenery and obstacles only. */
   private occluders: THREE.Object3D[] = [];
   private readonly raycaster = new THREE.Raycaster();
@@ -320,7 +322,16 @@ export class GameRenderer {
 
       const terrain = buildTerrain(track, tier.terrainResolution);
       this.world.add(terrain.mesh);
-      this.world.add(buildTrackMesh(track));
+      const trackMesh = buildTrackMesh(track);
+      this.world.add(trackMesh);
+      /*
+       * The gantry hangs over the grid, which is exactly where the chase
+       * camera starts — behind it and below it. Registering it means it is
+       * gone before it can cut across the opening frame.
+       */
+      this.nearFade.clear();
+      const gantry = trackMesh.getObjectByName('start-gantry');
+      if (gantry) this.nearFade.add(gantry);
       const scenery = buildScenery(track, {
         densityScale: tier.sceneryDensity,
         visibilityDistance: tier.sceneryDistance,
@@ -330,7 +341,10 @@ export class GameRenderer {
       this.scenery = scenery;
       this.world.add(scenery.group);
       this.world.add(buildHorizon(track));
-      this.world.add(buildLandmarks(track, terrain.heightAt));
+      const landmarks = buildLandmarks(track, terrain.heightAt);
+      this.world.add(landmarks);
+      // Big enough to fill the frame from underneath, so they yield too.
+      for (const landmark of landmarks.children) this.nearFade.add(landmark);
       const life = buildCourseLife(track, {
         density: tier.lifeDensity,
         heightAt: terrain.heightAt,
@@ -636,6 +650,7 @@ export class GameRenderer {
       this.chase.setTrackYaw(Math.atan2(projection.tangent.z, projection.tangent.x));
       this.chase.setClearance(this.measureClearance(focus));
       this.chase.update(focus, elapsed, this.reducedMotion ? 0 : roughness);
+      this.nearFade.update(this.chase.camera);
       this.detectNearMiss(focus, simulation, elapsed);
       this.lighting?.follow(focus.pos.x, focus.y, focus.pos.z);
       if (this.sky) {

@@ -922,6 +922,21 @@ body {
   justify-content: space-between;
   align-items: flex-start;
   gap: 0.5rem;
+  /*
+   * The top row must fit the viewport it is in.
+   *
+   * As a non-wrapping flex row of three fixed-content cards it did not: at
+   * 320 px the Lap panel began at x=319 and ended at x=373, entirely outside
+   * the screen, so a phone player could not see what lap they were on — and a
+   * safe-area inset made it worse. Wrapping, and letting the cards shrink, is
+   * what makes this a layout rather than three things hoping there is room.
+   */
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.hud__top > * {
+  min-width: 0;
 }
 
 .hud__panel {
@@ -1622,6 +1637,103 @@ body {
   display: none;
 }
 
+/*
+ * The narrowest supported screen, where the top row genuinely cannot hold
+ * everything.
+ *
+ * At 320 px with safe-area insets there are 288 usable pixels, the top row
+ * wraps, and Lap lands on the gap readout while the minimap sits over an
+ * action pad. Something has to go, and the minimap is the right thing: the gap
+ * readout already carries the race state a driver needs mid-corner, and a
+ * 4 rem map on a 288 px screen was never legible anyway. This is an authored
+ * decision for one size, not a scaled-down desktop.
+ */
+@media (max-width: 360px) {
+  .touch-active .minimap {
+    display: none;
+  }
+
+  .touch-active .hud__side {
+    /*
+     * On the *left*, opposite the action cluster.
+     *
+     * Below the top row is not enough on its own: the right-hand column belongs
+     * to the pads for most of the frame's height, so anything right-aligned
+     * eventually meets one. Putting the gap readout on the free side removes
+     * the competition rather than negotiating with it, and gaps read just as
+     * well left-aligned.
+     */
+    top: calc(8.6rem + var(--safe-top));
+    left: calc(0.5rem + var(--safe-left));
+    right: auto;
+    bottom: auto;
+    transform: none;
+    justify-items: start;
+  }
+
+  .touch-active .hud__gaps {
+    align-items: flex-start;
+  }
+}
+
+/*
+ * Short landscape, which is its own composition problem.
+ *
+ * At 844x390 there is not enough height for a bottom steering strip *and* a
+ * bottom speed panel *and* an action cluster: a review measured the speed panel
+ * over the steering strip by 266x67 px, the minimap over the action pads, and
+ * Lap over both the right action region and the gap readout.
+ *
+ * So the regions are declared rather than hoped for. The right tenth of the
+ * screen belongs to the action pads and nothing else may enter it; the bottom
+ * strip belongs to steering; the speed readout sits above it on the left; the
+ * minimap is dropped, because in a 390 px-tall frame it is the one piece of
+ * information the gap readout already carries.
+ */
+@media (max-height: 460px) and (orientation: landscape) {
+  .touch-active .hud__top {
+    /* Keep the top row clear of the action cluster on the right. */
+    padding-right: 11rem;
+  }
+
+  .touch-active .hud__side {
+    /* Below the top row, inboard of the action cluster. */
+    top: calc(6.2rem + var(--safe-top));
+    right: calc(11rem + var(--safe-right));
+    bottom: auto;
+    transform: none;
+  }
+
+  .touch-active .minimap {
+    display: none;
+  }
+
+  .touch-active .hud__bottom {
+    /* Above the steering strip, hard left, clear of the pads. */
+    bottom: calc(4.4rem + var(--safe-bottom));
+    left: calc(0.6rem + var(--safe-left));
+    transform: none;
+    justify-items: start;
+  }
+
+  .touch-active .hud__notifications {
+    bottom: calc(0.6rem + var(--safe-bottom));
+    left: calc(12rem + var(--safe-left));
+  }
+
+  .touch-active .perf {
+    bottom: auto;
+    top: calc(0.4rem + var(--safe-top));
+    left: 50%;
+    max-width: min(15rem, 34vw);
+    font-size: 0.6rem;
+  }
+
+  .touch__steer {
+    height: 3.4rem;
+  }
+}
+
 /* ------------------------------------------------------------ animation --- */
 
 @keyframes spin {
@@ -1740,7 +1852,58 @@ body {
 }
 
 .hud__notifications {
-    bottom: calc(11rem + var(--safe-bottom));
+    /*
+     * Above the bottom cluster, which on a phone is the speed panel *and* the
+     * pod-arm label stacked. At 11 rem a notification landed on the label.
+     */
+    bottom: calc(13.5rem + var(--safe-bottom));
+  }
+
+  /*
+   * The smallest supported screen gets its own composition, not a scaled one.
+   *
+   * At 320 px three top cards cannot coexist at full size however they are
+   * arranged, so they are compacted: the row wraps, every card gives up its
+   * padding, and the minimap shrinks. A review found Lap entirely off-screen,
+   * the minimap intersecting the action pads, and the speed panel overlapping
+   * them by 47x60 px — primary controls over primary race state, not
+   * decorative collisions.
+   */
+  .hud__panel {
+    padding: 0.22rem 0.4rem;
+  }
+
+  .touch-active .minimap {
+    width: 4.2rem;
+    height: 4.2rem;
+  }
+
+  .touch-active .hud__bottom {
+    /* Clear of the leftmost action pad at the narrowest supported width. */
+    left: calc(0.5rem + var(--safe-left));
+    bottom: calc(7.6rem + var(--safe-bottom));
+    /* Always leaves a full action column free, whatever the width. */
+    max-width: calc(100vw - 13.5rem);
+  }
+
+  .touch-active .hud__panel--speed {
+    /*
+     * Clamped in its own right, not just by its parent. A grid child whose
+     * min-content is wider than the container overflows it, and the speed
+     * readout's big numeral plus its bar is exactly that — which is how three
+     * pixels of it ended up under the first action pad.
+     */
+    max-width: calc(100vw - 13.5rem);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* The diagnostic overlay is not allowed to sit on the steering control. */
+  .touch-active .perf {
+    bottom: auto;
+    top: calc(4.6rem + var(--safe-top));
+    max-width: min(14rem, 52vw);
+    font-size: 0.6rem;
   }
 
   .results__head tr,

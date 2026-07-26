@@ -232,6 +232,7 @@ function buildRibbon(path: Path, theme: TrackTheme): THREE.Group {
 /** The start/finish gantry, so the line is unmistakable at speed. */
 function buildStartLine(track: Track, theme: TrackTheme): THREE.Group {
   const group = new THREE.Group();
+  group.name = 'start-gantry';
   const sample = track.sampleMain(0);
   const hw = sample.halfWidth;
 

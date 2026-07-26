@@ -268,6 +268,13 @@ export class GameRenderer {
       this.post.bloomIntensity = grade.bloomIntensity;
       this.post.vignette = grade.vignette;
       this.post.exposure = grade.exposure;
+      /*
+       * The low tier has no composite pass, so it cannot have the grade — but
+       * it can still have the *exposure*, for free, through three's own tone
+       * mapping. Without this a night course on Low is graded as though it were
+       * a noon one, which is not "less atmosphere", it is unreadable.
+       */
+      if (!this.composer) this.renderer.toneMappingExposure = grade.exposure;
     }
 
     // Racer models are cheap; rebuild them whenever the field changes.

@@ -12,6 +12,11 @@ export interface ControlInput {
   brake: boolean;
   drift: boolean;
   boost: boolean;
+  /**
+   * Hop. Deliberately its own input and never folded into `drift`; see the
+   * note on `HOP` in `config.ts`.
+   */
+  hop: boolean;
   /** -1 strikes to the left, 1 to the right, 0 does not strike. */
   strike: -1 | 0 | 1;
   /** Request a respawn back onto the track. */
@@ -19,7 +24,16 @@ export interface ControlInput {
 }
 
 export function emptyInput(): ControlInput {
-  return { steer: 0, throttle: 0, brake: false, drift: false, boost: false, strike: 0, respawn: false };
+  return {
+    steer: 0,
+    throttle: 0,
+    brake: false,
+    drift: false,
+    boost: false,
+    hop: false,
+    strike: 0,
+    respawn: false,
+  };
 }
 
 export type StrikePhase = 'idle' | 'windup' | 'active' | 'recovery';
@@ -113,6 +127,20 @@ export interface RacerState {
   boosting: boolean;
   /** True while sitting in a rival's wake; feeds drag relief and surge gain. */
   slipstreaming: boolean;
+  /** 0-1 charge towards a wake snap, built by holding the tow. */
+  towCharge: number;
+  /** Seconds left in which a banked tow charge can still be snapped. */
+  towRelease: number;
+  /** Seconds of post-impact engine assist remaining. */
+  recoveryBoost: number;
+  /** Seconds until another post-impact assist may be granted. */
+  recoveryCooldown: number;
+  /** Seconds until another hop is allowed. */
+  hopCooldown: number;
+  /** Seconds since the last landing, used for the hop-into-drift handshake. */
+  sinceLanding: number;
+  /** Continuous seconds spent airborne; resets on touchdown. */
+  airTime: number;
   drift: DriftState;
   strike: StrikeState;
   /** Seconds of degraded control remaining after being struck. */
@@ -178,7 +206,10 @@ export type SimEvent =
   | { type: 'wallHit'; racer: number; speed: number; pos: Vec2 }
   | { type: 'driftRelease'; racer: number; tier: number }
   | { type: 'boostStart'; racer: number }
-  | { type: 'jumpLand'; racer: number; clean: boolean; speed: number }
+  | { type: 'hop'; racer: number }
+  | { type: 'towSnap'; racer: number; strength: number }
+  /** `quality` is 0-1: level and aligned scores 1, a heavy sideways arrival 0. */
+  | { type: 'jumpLand'; racer: number; clean: boolean; speed: number; quality: number }
   | { type: 'respawn'; racer: number }
   | { type: 'surfaceChange'; racer: number; surface: SurfaceId }
   | { type: 'hazard'; racer: number; kind: string; pos: Vec2 };

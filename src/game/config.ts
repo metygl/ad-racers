@@ -103,10 +103,89 @@ export const PHYSICS = {
   runOffMaxReturnSpeed: 14,
   /** Extra drag out in the run-off, per second. */
   runOffDrag: 1.6,
-  /** Steering authority retained while airborne. */
-  airborneSteering: 0.22,
+  /**
+   * Steering authority retained while airborne.
+   *
+   * Deliberately generous compared to a ground vehicle: a crest is a skill
+   * moment, and a skiff with no air authority turns every jump into a coin
+   * flip about where you land. It is still well under ground authority, so air
+   * is not a faster way round a corner.
+   */
+  airborneSteering: 0.5,
+  /**
+   * How hard the skiff rotates towards its direction of travel while airborne.
+   *
+   * This is what makes a clean landing achievable rather than lucky: left
+   * alone, a car that took off mid-slide lands still sideways and spears off.
+   * The auto-align is slow enough that a player who does nothing still lands
+   * untidily; it removes the unfair case, not the skill.
+   */
+  airborneAlign: 1.5,
   /** Speed scrubbed off per unit of lateral slide, so a drift costs something. */
   driftScrub: 0.32,
+  /**
+   * Extra yaw authority while braking hard at speed.
+   *
+   * Trail braking: shifting load onto the nose lets it bite. Without this,
+   * braking is purely a speed control and the only reason to touch it is to
+   * avoid running wide, which makes corner entry a single decision rather than
+   * a continuous one.
+   */
+  brakeTurnBonus: 0.34,
+} as const;
+
+/**
+ * The hop.
+ *
+ * A short vertical shove off the ground, on its *own* input. It never shares a
+ * button with drift, and that is a considered decision rather than an
+ * oversight: the current Mario Kart generation puts its charge jump on the
+ * drift button, and reviewers found that any steering input turns a jump
+ * attempt into a drift, which "flummoxes muscle memory" and makes the jump feel
+ * too risky to go for. See `docs/DESIGN-DIRECTION.md`. Overloading the
+ * highest-frequency input punishes precisely the players who use it most.
+ *
+ * What it buys: clearing a kerb or a patch of spoil, reaching a raised
+ * shortcut mouth, and a tactile way into a drift — land while turning and the
+ * drift starts with a charge head start, which is the arcade-racing handshake
+ * this game was missing.
+ */
+export const HOP = {
+  /** Upward velocity imparted, m/s. */
+  impulse: 6.2,
+  /** Lockout between hops. */
+  cooldown: 0.45,
+  /** Minimum speed before a hop does anything; a parked skiff cannot pogo. */
+  minSpeed: 4,
+  /** Speed cost, so hopping down a straight is never free. */
+  speedCost: 0.6,
+  /**
+   * Charge granted to a drift begun within `landingWindow` of touching down.
+   * Not enough to reach a tier on its own — it rewards the timing, it does not
+   * pay for it.
+   */
+  landingDriftCharge: 0.14,
+  landingWindow: 0.3,
+} as const;
+
+/**
+ * Landing quality.
+ *
+ * A crest pays out for arriving level and pointed where you are going. This is
+ * the payoff beat for the air-control mechanic: without it, air time is
+ * something that happens to you rather than something you fly.
+ */
+export const LANDING = {
+  /** Slip angle (radians) at or below which a landing counts as aligned. */
+  alignedSlip: 0.12,
+  /** Slip angle beyond which alignment scores nothing. */
+  sloppySlip: 0.5,
+  /** Surge for a perfectly level, perfectly aligned landing. */
+  perfectSurge: 0.2,
+  /** Forward impulse (m/s) for the same. */
+  perfectImpulse: 3.2,
+  /** Airborne seconds needed before a landing can score at all. */
+  minAirTime: 0.35,
 } as const;
 
 export const DRIFT = {
@@ -151,6 +230,107 @@ export const SURGE = {
   /** Surge granted to the attacker on a successful strike. */
   hitGain: 0.11,
 } as const;
+
+/**
+ * The tow, and the snap out of it.
+ *
+ * Sitting in a rival's wake already relieves drag and fills Surge. The snap
+ * adds the decision on top: hold the tow long enough and pulling out of it
+ * pays a burst, so a straight becomes "when do I go" rather than "hold the
+ * throttle". It is the game's answer to strategic chaos without a single item
+ * on the road — the resource is a *position*, which you have to earn by racing
+ * and which your rival can deny by moving.
+ *
+ * Deliberately small: a snap is worth roughly a car length. It decides who
+ * gets to the corner first, never who wins the race.
+ */
+export const TOW = {
+  /** Seconds in the wake needed to fully charge a snap. */
+  chargeTime: 1.4,
+  /** Charge bleeds away this fast once out of the wake. */
+  decayRate: 0.7,
+  /** Window after leaving the wake in which the snap can still fire. */
+  releaseWindow: 0.55,
+  /** Forward impulse at full charge, m/s. */
+  impulse: 5.4,
+  /** Surge at full charge. */
+  surge: 0.16,
+  /** Charge below which nothing fires, so a brush past a rival pays nothing. */
+  minCharge: 0.55,
+} as const;
+
+/**
+ * Recovery after a heavy hit.
+ *
+ * Being knocked about is only fair if getting back is possible. For a short
+ * window after a genuine impact the engine pulls harder, which converts "I have
+ * lost this race" into "I have lost two seconds". It is rate-limited so it can
+ * never be farmed by driving into walls, and it is smaller than the speed the
+ * impact took, so a crash is always a net loss.
+ */
+export const RECOVERY = {
+  /** Closing speed above which an impact grants the assist. */
+  impactThreshold: 12,
+  /** Seconds the assist lasts. */
+  duration: 1.3,
+  /** Engine force multiplier while it lasts. */
+  forceMultiplier: 1.3,
+  /** Minimum seconds between assists. */
+  cooldown: 3.5,
+} as const;
+
+/**
+ * Speed classes.
+ *
+ * A single coherent multiplier on the pace of the whole field, applied to top
+ * speed and engine force alike. Difficulty changes *who you race*; the class
+ * changes *how fast the game is*. Keeping them separate means a player can take
+ * a familiar opponent field somewhere genuinely faster, which is the
+ * replayability the original build was missing.
+ *
+ * The classes are deliberately far apart. A 5% step is a stat; a 15% step is a
+ * different game, and the top class is meant to be intimidating.
+ */
+export interface SpeedClass {
+  id: string;
+  label: string;
+  description: string;
+  /** Multiplier on top speed and engine force, for every racer alike. */
+  scale: number;
+  /** Multiplier on grip, so the fastest class is not merely faster. */
+  gripScale: number;
+}
+
+export const SPEED_CLASSES: readonly SpeedClass[] = [
+  {
+    id: 'reclaim',
+    label: 'Reclaim',
+    description: 'The circuit as the crews run it. Fast enough to hurt, slow enough to learn.',
+    scale: 1,
+    gripScale: 1,
+  },
+  {
+    id: 'cascade',
+    label: 'Cascade',
+    description: 'Open class. A third again as quick, and the corners arrive a lot sooner.',
+    scale: 1.16,
+    // Grip rises with speed, but not proportionally: corner speed goes as the
+    // square root of grip, so matching the pace exactly would leave cornering
+    // untouched and the class would only be a longer straight.
+    gripScale: 1.1,
+  },
+  {
+    id: 'longquiet',
+    label: 'Long Quiet',
+    description: 'What the skiffs will do if you ask. Nothing about this is forgiving.',
+    scale: 1.32,
+    gripScale: 1.19,
+  },
+] as const;
+
+export function getSpeedClass(id: string): SpeedClass {
+  return SPEED_CLASSES.find((c) => c.id === id) ?? (SPEED_CLASSES[0] as SpeedClass);
+}
 
 /**
  * The rider-and-companion strike. The companion rides an outrigger pod and

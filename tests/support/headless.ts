@@ -1,4 +1,4 @@
-import { FIXED_STEP } from '../../src/game/config';
+import { FIXED_STEP, getSpeedClass } from '../../src/game/config';
 import { DIFFICULTIES, driveAi, getDifficulty } from '../../src/game/ai/driver';
 import { RACERS } from '../../src/game/racers';
 import { Simulation } from '../../src/game/sim/simulation';
@@ -20,6 +20,8 @@ import { getTrack } from '../../src/game/track/tracks';
 export interface HeadlessOptions {
   trackId: string;
   difficultyId?: string;
+  /** Speed class id; defaults to the base class. */
+  speedClassId?: string;
   seed?: number;
   /** Number of entries; defaults to the full field. */
   entries?: number;
@@ -50,6 +52,7 @@ export function buildSetup(options: HeadlessOptions): RaceSetup {
     track: getTrack(options.trackId),
     entries: RACERS.slice(0, count).map((r, i) => ({ profileId: r.id, isPlayer: i === playerIndex })),
     difficulty: getDifficulty(options.difficultyId ?? 'pro'),
+    speedClass: getSpeedClass(options.speedClassId ?? 'reclaim'),
     seed: options.seed ?? 12345,
     catchUp: options.catchUp ?? true,
   };

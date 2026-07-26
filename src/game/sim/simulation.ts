@@ -1,7 +1,8 @@
 import { Rng, hashSeed } from '../../core/rng';
-import { clamp, clamp01, distance, dot, fromHeading, normalize } from '../../core/math';
+import { clamp, clamp01, distance, dot, fromHeading, normalize, rightOf } from '../../core/math';
 import type { Vec2 } from '../../core/math';
-import { COLLISION, FIXED_STEP, HAZARDS, PHYSICS, RACE, SURGE } from '../config';
+import { COLLISION, FIXED_STEP, HAZARDS, PHYSICS, RACE, RECOVERY, SPEED_CLASSES, SURGE, TOW } from '../config';
+import type { SpeedClass } from '../config';
 import type { Track } from '../track/buildTrack';
 import { getRacer, toVehicleSpec } from '../racers';
 import type { DifficultyProfile } from '../ai/driver';
@@ -30,6 +31,12 @@ export interface RaceSetup {
   /** Racer profile ids, in grid order; index 0 is the player unless spectating. */
   entries: { profileId: string; isPlayer: boolean }[];
   difficulty: DifficultyProfile;
+  /**
+   * How fast the whole field runs. Applied identically to every racer,
+   * including the player, so it changes the *game* rather than the balance.
+   * Defaults to the base class when omitted.
+   */
+  speedClass?: SpeedClass;
   seed: number;
   /** Whether the bounded catch-up assist is enabled. */
   catchUp: boolean;
@@ -72,7 +79,7 @@ export class Simulation {
   private createRacer(entry: { profileId: string; isPlayer: boolean }, index: number): RacerState {
     const track = this.track;
     const profile = getRacer(entry.profileId);
-    const spec = toVehicleSpec(profile.stats);
+    const spec = toVehicleSpec(profile.stats, this.setup.speedClass ?? SPEED_CLASSES[0]);
 
     // Grid: two columns, staggered back from the line, all behind checkpoint 0.
     const row = Math.floor(index / 2);
@@ -102,6 +109,13 @@ export class Simulation {
       surge: 0,
       boosting: false,
       slipstreaming: false,
+      towCharge: 0,
+      towRelease: 0,
+      recoveryBoost: 0,
+      recoveryCooldown: 0,
+      hopCooldown: 0,
+      sinceLanding: Infinity,
+      airTime: 0,
       drift: { active: false, direction: 0, charge: 0 },
       strike: { phase: 'idle', timer: 0, side: 1, cooldown: 0, hitThisSwing: [] },
       stagger: 0,
@@ -331,25 +345,75 @@ export class Simulation {
     return clamp(scale, 1 - CATCHUP_LIMIT, 1 + CATCHUP_LIMIT);
   }
 
-  /** Marks racers sitting in a rival's wake, which relieves drag and builds surge. */
+  /**
+   * The tow: sitting in a rival's wake relieves drag, fills Surge, and charges
+   * a snap.
+   *
+   * The snap is the game's strategic layer and the reason there are no pickups
+   * on the road. Holding the tow banks charge; pulling out of it inside a short
+   * window spends that charge as a burst. So a straight is a decision — commit
+   * to the wake and go late, or break early and lose the charge — and the
+   * resource is a *position*, which has to be earned by racing and which the
+   * car in front can deny by moving.
+   */
   private updateSlipstream(dt: number): void {
     for (const racer of this.racers) {
+      const wasTowing = racer.slipstreaming;
       racer.slipstreaming = false;
       if (racer.finished) continue;
       const forward = fromHeading(racer.heading);
+      const right = rightOf(racer.heading);
       for (const other of this.racers) {
         if (other.index === racer.index) continue;
         const rel: Vec2 = { x: other.pos.x - racer.pos.x, z: other.pos.z - racer.pos.z };
         const ahead = dot(rel, forward);
         if (ahead < 2.5 || ahead > SURGE.slipstreamRange) continue;
-        const lateralOffset = Math.abs(rel.x * -Math.sin(racer.heading) + rel.z * Math.cos(racer.heading));
-        if (lateralOffset > SURGE.slipstreamHalfWidth) continue;
+        if (Math.abs(dot(rel, right)) > SURGE.slipstreamHalfWidth) continue;
         if (Math.abs(other.y - racer.y) > 3) continue;
         racer.slipstreaming = true;
         racer.surge = Math.min(SURGE.max, racer.surge + SURGE.slipstreamGain * dt);
         break;
       }
+
+      if (racer.slipstreaming) {
+        racer.towCharge = clamp01(racer.towCharge + dt / TOW.chargeTime);
+        racer.towRelease = TOW.releaseWindow;
+      } else {
+        // The window is what makes this a *timing*: leave the wake and the
+        // charge is live for a moment, then it bleeds away.
+        racer.towRelease = Math.max(0, racer.towRelease - dt);
+        if (racer.towRelease <= 0) racer.towCharge = Math.max(0, racer.towCharge - TOW.decayRate * dt);
+      }
+
+      // Fire on the frame the racer leaves the wake with enough banked.
+      if (wasTowing && !racer.slipstreaming && racer.towCharge >= TOW.minCharge) {
+        const strength = racer.towCharge;
+        const forwardNow = fromHeading(racer.heading);
+        racer.velocity = {
+          x: racer.velocity.x + forwardNow.x * TOW.impulse * strength,
+          z: racer.velocity.z + forwardNow.z * TOW.impulse * strength,
+        };
+        racer.surge = Math.min(SURGE.max, racer.surge + TOW.surge * strength);
+        racer.towCharge = 0;
+        racer.towRelease = 0;
+        this.events.push({ type: 'towSnap', racer: racer.index, strength });
+      }
     }
+  }
+
+  /**
+   * A short engine assist after a genuine impact.
+   *
+   * Being knocked about is only fair if getting back is possible, and the
+   * alternative — a player who has been hit watching the field disappear for
+   * ten seconds — is the single least fun state an arcade racer has. It is
+   * rate-limited so it cannot be farmed on walls, and it is always worth less
+   * than the impact took, so a crash stays a net loss.
+   */
+  private grantRecovery(racer: RacerState, closingSpeed: number): void {
+    if (closingSpeed < RECOVERY.impactThreshold || racer.recoveryCooldown > 0) return;
+    racer.recoveryBoost = RECOVERY.duration;
+    racer.recoveryCooldown = RECOVERY.cooldown;
   }
 
   /**
@@ -386,6 +450,8 @@ export class Simulation {
           if (-closing > 4 && a.contactCooldown <= 0 && b.contactCooldown <= 0) {
             a.contactCooldown = 0.2;
             b.contactCooldown = 0.2;
+            this.grantRecovery(a, -closing);
+            this.grantRecovery(b, -closing);
             this.events.push({
               type: 'collision',
               racer: a.index,
@@ -430,6 +496,7 @@ export class Simulation {
         racer.drift.charge = 0;
         if (racer.contactCooldown <= 0) {
           racer.contactCooldown = 0.2;
+          this.grantRecovery(racer, into);
           this.events.push({
             type: 'collision',
             racer: racer.index,

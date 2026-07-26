@@ -1,6 +1,6 @@
 import type { Rng } from '../../core/rng';
 import { clamp, clamp01, damp, dot, fromHeading, moveTowards, rightOf, wrapAngle } from '../../core/math';
-import { COMBAT, DRIFT, PHYSICS, SURGE } from '../config';
+import { COMBAT, DRIFT, HOP, LANDING, PHYSICS, RECOVERY, SURGE } from '../config';
 import type { Track } from '../track/buildTrack';
 import { sampleAt } from '../track/buildTrack';
 import { SURFACES } from '../track/types';
@@ -66,6 +66,11 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   racer.stagger = Math.max(0, racer.stagger - dt);
   racer.contactCooldown = Math.max(0, racer.contactCooldown - dt);
   racer.strike.cooldown = Math.max(0, racer.strike.cooldown - dt);
+  racer.hopCooldown = Math.max(0, racer.hopCooldown - dt);
+  racer.recoveryBoost = Math.max(0, racer.recoveryBoost - dt);
+  racer.recoveryCooldown = Math.max(0, racer.recoveryCooldown - dt);
+  racer.sinceLanding += dt;
+  racer.airTime = racer.airborne ? racer.airTime + dt : 0;
   for (const guard of racer.guards) guard.timer -= dt;
   if (racer.guards.some((g) => g.timer <= 0)) {
     racer.guards = racer.guards.filter((g) => g.timer > 0);
@@ -95,12 +100,26 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   // rule in `core/math.ts`.
   let vLat = dot(racer.velocity, right);
 
+  // --- hop ----------------------------------------------------------------
+  // Its own input, never shared with drift. See `HOP` in `config.ts`.
+  if (input.hop && !racer.airborne && racer.hopCooldown <= 0 && ctx.running && vLong > HOP.minSpeed) {
+    racer.airborne = true;
+    racer.verticalVelocity = HOP.impulse;
+    racer.hopCooldown = HOP.cooldown;
+    racer.airTime = 0;
+    vLong = Math.max(0, vLong - HOP.speedCost);
+    ctx.events.push({ type: 'hop', racer: racer.index });
+  }
+
   // --- drift --------------------------------------------------------------
   const wantsDrift = input.drift && vLong > DRIFT.minSpeed && !racer.airborne;
   if (wantsDrift && !racer.drift.active) {
     racer.drift.active = true;
     racer.drift.direction = Math.abs(input.steer) > 0.15 ? Math.sign(input.steer) : Math.sign(vLat) || 1;
-    racer.drift.charge = 0;
+    // Hop, land, and go straight into a slide: the charge head start is the
+    // reward for the timing. Small on purpose — it recognises the gesture, it
+    // does not pay for the corner.
+    racer.drift.charge = racer.sinceLanding <= HOP.landingWindow ? HOP.landingDriftCharge : 0;
   }
   if (racer.drift.active && (!input.drift || vLong < DRIFT.minSpeed * 0.6)) {
     releaseDrift(racer, ctx);
@@ -119,7 +138,14 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
     if (input.throttle > 0 && vLong < topSpeed) {
       const ratio = clamp01(Math.max(0, vLong) / falloffRef);
       const curve = 1 - Math.pow(ratio, PHYSICS.powerFalloff);
-      accel += spec.enginePower * ctx.engineScale * input.throttle * curve * (racer.boosting ? SURGE.forceMultiplier : 1);
+      const assist = racer.recoveryBoost > 0 ? RECOVERY.forceMultiplier : 1;
+      accel +=
+        spec.enginePower *
+        ctx.engineScale *
+        input.throttle *
+        curve *
+        assist *
+        (racer.boosting ? SURGE.forceMultiplier : 1);
     }
     if (input.brake) {
       if (vLong > 0.4) {
@@ -167,9 +193,29 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   // Grip cap: a corner cannot be taken faster than the tyres can pull the
   // skiff round it. `latAccelMax / v` is the tightest yaw the surface allows,
   // and it is what makes braking for a corner worth doing.
-  const latAccelMax = spec.grip * PHYSICS.gripToLateralAccel * surf.grip * (drifting ? PHYSICS.driftYawLimitBonus : 1);
+  //
+  // Trail braking lifts the cap a little while the brakes are on at speed: load
+  // transfers onto the nose and it bites. It is what makes the brake a
+  // *steering* input as well as a speed one, so corner entry stays a continuous
+  // decision rather than a single yes-or-no.
+  const trailBraking = input.brake && vLong > DRIFT.minSpeed ? 1 + PHYSICS.brakeTurnBonus : 1;
+  const latAccelMax =
+    spec.grip *
+    PHYSICS.gripToLateralAccel *
+    surf.grip *
+    trailBraking *
+    (drifting ? PHYSICS.driftYawLimitBonus : 1);
   const gripYawLimit = latAccelMax / Math.max(6, speed);
-  const yawRate = Math.min(steerYawRate, gripYawLimit);
+  let yawRate = Math.min(steerYawRate, gripYawLimit);
+
+  /*
+   * In the air there is no grip cap at all — nothing is touching the ground, so
+   * nothing limits how fast the skiff can be pointed. Air steering is therefore
+   * `steerYawRate` alone, which the airborne authority term has already scaled.
+   * Capping it by grip is what made the earlier build's crests feel like a coin
+   * flip: the cap tightens with speed, and a crest is taken at speed.
+   */
+  if (racer.airborne) yawRate = steerYawRate;
 
   /*
    * Positive steer turns right, and a turn to the right *increases* the heading
@@ -195,7 +241,10 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
   let grip = spec.grip * surf.grip;
   if (drifting) grip *= DRIFT.gripMultiplier;
   if (staggered) grip *= COMBAT.staggerGrip;
-  if (racer.airborne) grip *= 0.15;
+  // Airborne there is nothing to grip, so the slide is not bled off — but the
+  // skiff's own attitude jets ease the nose back towards the direction of
+  // travel, which is what makes a clean landing a skill rather than a lottery.
+  if (racer.airborne) grip = PHYSICS.airborneAlign;
 
   // Tyre curve past the peak: beyond the slip angle the surface is happy to
   // hold, grip climbs steeply. That gives the slide a stable equilibrium
@@ -246,21 +295,42 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
     racer.y += racer.verticalVelocity * dt;
     if (racer.y <= groundY) {
       const impact = -racer.verticalVelocity;
+      const airTime = racer.airTime;
       racer.y = groundY;
       racer.verticalVelocity = 0;
       racer.airborne = false;
+      racer.airTime = 0;
+      racer.sinceLanding = 0;
       const clean = impact <= PHYSICS.cleanLandingSpeed;
-      if (clean) {
+
+      /*
+       * Landing quality: how level, and how straight.
+       *
+       * This is the payoff beat that makes air time a skill rather than
+       * something that happens to you. Both halves matter — arriving gently but
+       * sideways scores nothing, and so does arriving straight but hard — and a
+       * hop off a flat road is excluded by the air-time floor so the mechanic
+       * cannot be farmed on a straight.
+       */
+      const levelness = clamp01(1 - impact / (PHYSICS.cleanLandingSpeed * 2.2));
+      const alignment = 1 - clamp01((Math.abs(racer.slip) - LANDING.alignedSlip) / (LANDING.sloppySlip - LANDING.alignedSlip));
+      const quality = airTime >= LANDING.minAirTime ? levelness * alignment : 0;
+
+      if (quality > 0) {
+        racer.surge = Math.min(SURGE.max, racer.surge + LANDING.perfectSurge * quality);
+        vLong += LANDING.perfectImpulse * quality;
+      } else if (clean) {
         racer.surge = Math.min(SURGE.max, racer.surge + SURGE.cleanLandingGain);
-      } else {
+      }
+      if (!clean) {
         const loss = clamp01((impact - PHYSICS.cleanLandingSpeed) / 18);
         vLong *= 1 - loss * 0.28;
-        racer.velocity = {
-          x: newForward.x * vLong + newRight.x * vLat,
-          z: newForward.z * vLong + newRight.z * vLat,
-        };
       }
-      ctx.events.push({ type: 'jumpLand', racer: racer.index, clean, speed: impact });
+      racer.velocity = {
+        x: newForward.x * vLong + newRight.x * vLat,
+        z: newForward.z * vLong + newRight.z * vLat,
+      };
+      ctx.events.push({ type: 'jumpLand', racer: racer.index, clean, speed: impact, quality });
     }
   } else {
     /*

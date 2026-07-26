@@ -1,7 +1,7 @@
 import type { Rng } from '../../core/rng';
 import { angleDelta, clamp, clamp01, distance, dot, fromHeading, heading as headingOf, lerp } from '../../core/math';
 import type { Vec2 } from '../../core/math';
-import { COMBAT, DRIFT, PHYSICS, RACE, SURGE } from '../config';
+import { COMBAT, DRIFT, HOP, PHYSICS, RACE, SURGE, TOW } from '../config';
 import type { Track } from '../track/buildTrack';
 import { sampleAt } from '../track/buildTrack';
 import { SURFACES } from '../track/types';
@@ -314,6 +314,37 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
   // restarts the audio and the exhaust flare many times a second.
   input.boost = ai.boostHold > 0 && racer.surge > 0.02 && !racer.airborne;
 
+  // --- the tow -------------------------------------------------------------
+  /*
+   * Sitting in the wake charges a snap; pulling out spends it. A bold driver
+   * holds the tow to the end of the straight and goes late, which is exactly
+   * the decision the player faces. A timid one breaks early and wastes it.
+   *
+   * The AI does not get to see the charge value the player cannot: it reads
+   * `towCharge` off its own car, which is the same number the player's HUD
+   * shows.
+   */
+  if (racer.slipstreaming && racer.towCharge >= TOW.minCharge && ai.boldness > 0.3) {
+    // Committing to the pull-out is the same manoeuvre as an overtake, so it
+    // reuses the overtake timer rather than inventing a second lane-change
+    // controller that would fight it.
+    const corneringSoon = !straightAhead;
+    if (corneringSoon || racer.towCharge > 0.92) ai.overtakeTimer = Math.max(ai.overtakeTimer, 1.4);
+  }
+
+  // --- the hop -------------------------------------------------------------
+  /*
+   * Two uses, both defensive rather than clever: hop the last moment before a
+   * crest so the landing is level, and hop out of a patch of spoil. A bolder
+   * driver hops earlier and lands better.
+   *
+   * Deliberately *not* used to shave corners. An AI that hops constantly reads
+   * as a bug, and the mechanic's value to the player is the timing, which an
+   * opponent spamming it would devalue.
+   */
+  const crestAhead = surfaceDrop(ctx.track, racer.path, projection.distance, speed);
+  input.hop = !racer.airborne && speed > HOP.minSpeed * 3 && crestAhead && ai.boldness > 0.4;
+
   // --- companion strike ----------------------------------------------------
   input.strike = planStrike(racer, ctx);
 
@@ -357,6 +388,22 @@ function steerTowardsLine(racer: RacerState, ctx: AiContext, lateral: number, lo
    * backwards. Both negations are gone; the AI's behaviour is unchanged.
    */
   return clamp(error * AI_TUNING.headingGain + crossTrack * AI_TUNING.crossTrackGain + damping, -1, 1);
+}
+
+/**
+ * True when the surface is about to fall away sharply — a crest, in other
+ * words, and the one moment a hop is worth spending.
+ *
+ * Measured over roughly a fifth of a second of travel, which is far enough
+ * ahead to act on and near enough that it is still the same crest.
+ */
+function surfaceDrop(track: Track, path: Path, distance: number, speed: number): boolean {
+  const span = Math.max(6, speed * 0.2);
+  const here = sampleAhead(track, path, distance, 0).y;
+  const soon = sampleAhead(track, path, distance, span).y;
+  const later = sampleAhead(track, path, distance, span * 2).y;
+  // Rising then falling is a crest; a steady descent is just a hill.
+  return soon > here + 0.05 && later < soon - 0.35;
 }
 
 /** Mean curvature over a stretch of path, used for line and boost decisions. */

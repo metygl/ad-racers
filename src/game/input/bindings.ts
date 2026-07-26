@@ -12,6 +12,7 @@ export type ActionId =
   | 'steerLeft'
   | 'steerRight'
   | 'drift'
+  | 'hop'
   | 'boost'
   | 'strikeLeft'
   | 'strikeRight'
@@ -34,6 +35,14 @@ export const ACTIONS: readonly ActionInfo[] = [
   { id: 'steerLeft', label: 'Steer left', hint: '', rebindable: true },
   { id: 'steerRight', label: 'Steer right', hint: '', rebindable: true },
   { id: 'drift', label: 'Drift', hint: 'Hold through a corner to build Surge.', rebindable: true },
+  {
+    id: 'hop',
+    label: 'Hop',
+    // Deliberately a separate key from Drift, and never folded into it. See the
+    // note on `HOP` in `src/game/config.ts`.
+    hint: 'Skip a kerb, take a crest level, or drop straight into a drift.',
+    rebindable: true,
+  },
   { id: 'boost', label: 'Surge', hint: 'Spend banked Surge for speed.', rebindable: true },
   { id: 'strikeLeft', label: 'Strike left', hint: 'Swing the pod arm at a rival on your left.', rebindable: true },
   { id: 'strikeRight', label: 'Strike right', hint: 'Swing the pod arm at a rival on your right.', rebindable: true },
@@ -54,7 +63,8 @@ export const DEFAULT_KEY_BINDINGS: KeyBindings = {
   brake: ['KeyS', 'ArrowDown'],
   steerLeft: ['KeyA', 'ArrowLeft'],
   steerRight: ['KeyD', 'ArrowRight'],
-  drift: ['Space', 'ShiftLeft'],
+  drift: ['ShiftLeft', 'KeyJ'],
+  hop: ['Space', 'KeyK'],
   boost: ['KeyL', 'ControlLeft'],
   strikeLeft: ['KeyQ', 'Comma'],
   strikeRight: ['KeyE', 'Period'],
@@ -68,13 +78,20 @@ export const DEFAULT_KEY_BINDINGS: KeyBindings = {
  * separately; these are the buttons.
  */
 export const GAMEPAD_BUTTONS: Partial<Record<ActionId, number[]>> = {
-  accelerate: [7, 0],
+  // The right trigger is the throttle and the bottom face button is the hop.
+  // The bottom button used to double as a throttle, which is a common
+  // convention, but the hop needs a button a thumb can reach without leaving
+  // the stick — and a throttle that is also a hop is exactly the overloading
+  // this game avoids elsewhere. The left trigger and the right face button
+  // both brake, so nothing is left without a pair.
+  accelerate: [7],
   brake: [6, 1],
   drift: [2],
+  hop: [0],
   boost: [3],
   strikeLeft: [4],
   strikeRight: [5],
-  respawn: [8],
+  respawn: [10],
   pause: [9],
   camera: [11],
 };

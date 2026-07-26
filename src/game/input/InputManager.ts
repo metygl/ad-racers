@@ -22,9 +22,20 @@ export interface TouchState {
   accelerate: boolean;
   brake: boolean;
   drift: boolean;
+  hop: boolean;
   boost: boolean;
   strike: -1 | 0 | 1;
 }
+
+const EMPTY_TOUCH: TouchState = {
+  steer: 0,
+  accelerate: false,
+  brake: false,
+  drift: false,
+  hop: false,
+  boost: false,
+  strike: 0,
+};
 
 export class InputManager {
   private readonly held = new Set<string>();
@@ -32,7 +43,7 @@ export class InputManager {
   private bindings: KeyBindings;
   private gamepadIndex: number | null = null;
   private previousButtons: boolean[] = [];
-  private touch: TouchState = { steer: 0, accelerate: false, brake: false, drift: false, boost: false, strike: 0 };
+  private touch: TouchState = { ...EMPTY_TOUCH };
   /** Smoothed analogue steering, so keyboard input is not a square wave. */
   private steerAxis = 0;
   private lastSource: InputSource = 'keyboard';
@@ -76,7 +87,7 @@ export class InputManager {
     if (!enabled) {
       this.held.clear();
       this.steerAxis = 0;
-      this.touch = { steer: 0, accelerate: false, brake: false, drift: false, boost: false, strike: 0 };
+      this.touch = { ...EMPTY_TOUCH };
     }
   }
 
@@ -195,6 +206,7 @@ export class InputManager {
     let throttle = 0;
     let brake = false;
     let drift = false;
+    let hop = false;
     let boost = false;
     let strike: -1 | 0 | 1 = 0;
     let respawn = false;
@@ -206,6 +218,7 @@ export class InputManager {
     if (this.isHeld('accelerate')) throttle = 1;
     if (this.isHeld('brake')) brake = true;
     if (this.isHeld('drift')) drift = true;
+    if (this.isHeld('hop')) hop = true;
     if (this.isHeld('boost')) boost = true;
     if (this.isHeld('strikeLeft')) strike = -1;
     if (this.isHeld('strikeRight')) strike = 1;
@@ -236,13 +249,16 @@ export class InputManager {
         switch (action) {
           case 'accelerate':
             // Analogue triggers give proportional throttle.
-            throttle = Math.max(throttle, buttons[7]?.value ?? 1);
+            throttle = Math.max(throttle, buttons[7]?.value || 1);
             break;
           case 'brake':
             brake = true;
             break;
           case 'drift':
             drift = true;
+            break;
+          case 'hop':
+            hop = true;
             break;
           case 'boost':
             boost = true;
@@ -270,6 +286,7 @@ export class InputManager {
     if (this.touch.accelerate) throttle = 1;
     if (this.touch.brake) brake = true;
     if (this.touch.drift) drift = true;
+    if (this.touch.hop) hop = true;
     if (this.touch.boost) boost = true;
     if (this.touch.strike !== 0) strike = this.touch.strike;
     if (this.touch.steer !== 0) analogueSteer = this.touch.steer;
@@ -288,6 +305,7 @@ export class InputManager {
     input.throttle = throttle;
     input.brake = brake;
     input.drift = drift;
+    input.hop = hop;
     input.boost = boost;
     input.strike = strike;
     input.respawn = respawn;

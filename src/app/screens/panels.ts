@@ -211,6 +211,8 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
       }),
     );
     row.style.setProperty('--crew', `#${profile.colors.body.toString(16).padStart(6, '0')}`);
+    // Drives the staggered reveal; see `.results__row` in the stylesheet.
+    row.style.setProperty('--row', String(rows.children.length));
     rows.append(row);
   }
 

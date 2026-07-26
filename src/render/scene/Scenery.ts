@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Rng, hashSeed } from '../../core/rng';
 import { PHYSICS } from '../../game/config';
 import { mergeGeometries } from './mergeGeometry';
+import type { MergePart } from './mergeGeometry';
 import type { Track } from '../../game/track/buildTrack';
 import type { ObstacleDefinition, PathSample, SceneryKind, TrackTheme } from '../../game/track/types';
 
@@ -192,6 +193,145 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       return {
         geometry,
         material: new THREE.MeshStandardMaterial({ color: 0x6b4231, roughness: 0.95, flatShading: true }),
+      };
+    }
+
+    /*
+     * ------------------------------------------------------------------
+     * Glasshouse Vigil's own vocabulary.
+     *
+     * The art review's judgement on this course was "no readable glasshouse":
+     * a good sky over a generic road. A place has to be built out of the
+     * things it *was* — glazing bars, growth racks, lamp masts, the roof on
+     * the floor — not out of the same trees as everywhere else with a
+     * different tint. Every one of these is authored to read as a specific
+     * piece of ruined horticulture at race distance.
+     * ------------------------------------------------------------------
+     */
+    case 'glassFrame': {
+      /*
+       * A standing glazing frame, most of its panes gone.
+       *
+       * The surviving glass is the point. Two translucent panes in a mostly
+       * empty grid say "this was a roof" far more clearly than a full one
+       * would, and the gaps let the sky through — which is where this course's
+       * only real light comes from.
+       */
+      const bar = 0.16;
+      const geometry = mergeGeometries([
+        ...[-1, 1].map((side): MergePart => ({
+          geometry: new THREE.BoxGeometry(bar, 9, bar),
+          position: [0, 4.5, side * 2.6],
+        })),
+        { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 9, 0] },
+        { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 5.6, 0] },
+        { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 2.4, 0] },
+        // A cracked pane still in its frame.
+        { geometry: new THREE.BoxGeometry(0.04, 3.1, 2.5), position: [0, 7.4, -1.2] },
+      ]);
+      return {
+        geometry,
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.shoulderColor, 0.9),
+          roughness: 0.45,
+          metalness: 0.55,
+          flatShading: true,
+        }),
+      };
+    }
+    case 'growthRack': {
+      // Three tiers of planting trays, with three centuries of growth spilling
+      // over the edges.
+      const geometry = mergeGeometries([
+        ...[0, 1, 2].map((tier): MergePart => ({
+          geometry: new THREE.BoxGeometry(2.4, 0.14, 1.1),
+          position: [0, 0.9 + tier * 1.1, 0],
+        })),
+        ...[-1, 1].flatMap((side) =>
+          [-1, 1].map((end): MergePart => ({
+            geometry: new THREE.BoxGeometry(0.1, 3.3, 0.1),
+            position: [end * 1.1, 1.65, side * 0.5],
+          })),
+        ),
+        ...[0, 1, 2].map((tier): MergePart => ({
+          geometry: new THREE.IcosahedronGeometry(0.62, 0),
+          position: [tier % 2 === 0 ? 0.6 : -0.5, 1.2 + tier * 1.1, 0],
+        })),
+      ]);
+      return {
+        geometry,
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 1.15),
+          roughness: 0.85,
+          flatShading: true,
+        }),
+        wind: 0.6,
+      };
+    }
+    case 'lampMast': {
+      /*
+       * A growth lamp still running on whatever is left in it.
+       *
+       * Emissive, and on this course that is load bearing rather than
+       * decorative: the lamps are most of what tells a driver where the road
+       * goes. Fog is disabled on the head so a distant one still reads as a
+       * light rather than dissolving into the haze — which is exactly what you
+       * navigate by at night.
+       */
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.16, 0.26, 11, 6), position: [0, 5.5, 0] },
+        { geometry: new THREE.BoxGeometry(1.8, 0.18, 0.5), position: [0.7, 11, 0] },
+        { geometry: new THREE.BoxGeometry(1.2, 0.42, 0.44), position: [1.3, 10.7, 0] },
+      ]);
+      return {
+        geometry,
+        material: new THREE.MeshStandardMaterial({
+          color: 0x2b3540,
+          emissive: new THREE.Color(0xbfe9d0),
+          emissiveIntensity: 0.28,
+          roughness: 0.5,
+          metalness: 0.4,
+          flatShading: true,
+        }),
+      };
+    }
+    case 'fallenTruss': {
+      // The roof, on the floor. Low, long, and lying at an angle so it reads as
+      // *collapsed* rather than as a wall someone built.
+      const geometry = mergeGeometries([
+        { geometry: new THREE.BoxGeometry(7, 0.18, 0.18), position: [0, 0.8, -0.7], rotation: [0, 0, 0.12] },
+        { geometry: new THREE.BoxGeometry(7, 0.18, 0.18), position: [0, 0.3, 0.7] },
+        ...[-2, 0, 2].map((along): MergePart => ({
+          geometry: new THREE.BoxGeometry(0.14, 0.14, 1.6),
+          position: [along, 0.55, 0],
+          rotation: [0.5, 0, 0],
+        })),
+      ]);
+      return {
+        geometry,
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.shoulderColor, 0.7),
+          roughness: 0.8,
+          metalness: 0.35,
+          flatShading: true,
+        }),
+      };
+    }
+    case 'volunteer': {
+      // Saplings that got in through the broken roof and never left.
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.1, 0.16, 2.6, 5), position: [0, 1.3, 0] },
+        { geometry: new THREE.IcosahedronGeometry(1.15, 0), position: [0, 3.1, 0] },
+        { geometry: new THREE.IcosahedronGeometry(0.7, 0), position: [0.7, 2.5, 0.3] },
+      ]);
+      return {
+        geometry,
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 1.3),
+          roughness: 0.9,
+          flatShading: true,
+        }),
+        wind: 1.6,
       };
     }
   }

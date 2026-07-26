@@ -1,9 +1,11 @@
 import * as THREE from 'three';
-import { clamp01, damp, lerp } from '../../core/math';
+import { clamp01 } from '../../core/math';
 import { COMBAT, DRIFT, TOW } from '../../game/config';
 import type { RacerProfile } from '../../game/racers';
 import type { RacerState } from '../../game/sim/state';
+import { SURFACES } from '../../game/track/types';
 import { particleTexture } from '../textures/procedural';
+import { SkiffRig } from './skiffRig';
 import { mergeGeometries } from './mergeGeometry';
 import type { MergePart } from './mergeGeometry';
 
@@ -43,16 +45,38 @@ const HULL_WIDTH = 1.7;
 const POD_OFFSET = 1.85;
 const HALF_PI = Math.PI / 2;
 
-/** How much of the crew's fin character is expressed as height vs. sweep. */
-interface FinProfile {
+/**
+ * The mechanical character of one crew's skiff.
+ *
+ * Not a colour scheme with a different fin. Each crew built their machine out
+ * of different salvage for a different job, and the proportions say which:
+ * where the hover pods sit, how the hull is braced, how tall the roll hoop is,
+ * how the pod arm is counterweighted. The art review's silhouette test is the
+ * bar — identifiable as a black shape at 64 px — and shape is the only thing
+ * that survives fog, distance and colour blindness together.
+ */
+interface CrewBuild {
+  /** Tail fin height, in metres. */
   height: number;
+  /** How far the fin rakes back, in radians. */
   sweep: number;
-  /** Number of fin blades: one, or a split pair. */
+  /** One blade, or a split pair. */
   blades: 1 | 2;
   /** Nose length multiplier — long needle through to blunt. */
   nose: number;
   /** Shoulder width multiplier. */
   shoulder: number;
+  /**
+   * Where the hover struts sit along the hull, -1 at the tail to +1 at the
+   * nose. Three is the usual arrangement; a heavy crew runs four.
+   */
+  struts: readonly number[];
+  /** Height of the roll hoop over the pilot. 0 means none. */
+  hoop: number;
+  /** Radius of the pod arm's counterweight. Heavier crews swing heavier. */
+  counterweight: number;
+  /** Number of exposed truss bays in the outrigger spar. */
+  trussBays: number;
 }
 
 /**
@@ -60,21 +84,56 @@ interface FinProfile {
  * differ enough to be read as a black shape at 64 px — the art bible's
  * silhouette test.
  */
-const FIN_PROFILES: Record<string, FinProfile> = {
-  thornline: { height: 1.55, sweep: 0.42, blades: 1, nose: 1.0, shoulder: 0.86 },
-  foundry: { height: 0.85, sweep: 0.12, blades: 1, nose: 0.62, shoulder: 1.28 },
-  nightgrove: { height: 1.2, sweep: 0.5, blades: 2, nose: 1.05, shoulder: 0.94 },
-  emberworks: { height: 0.95, sweep: 0.62, blades: 1, nose: 1.5, shoulder: 0.8 },
-  boneyard: { height: 1.35, sweep: 0.0, blades: 2, nose: 0.78, shoulder: 1.16 },
-  greenline: { height: 0.7, sweep: 0.3, blades: 1, nose: 0.72, shoulder: 0.78 },
+const CREW_BUILDS: Record<string, CrewBuild> = {
+  // Hero build. Narrow, tall-finned and long-nosed: a machine built to be
+  // thrown at an apex in a service tunnel, with the struts pulled inboard so
+  // nothing catches on a wall.
+  thornline: {
+    height: 1.55, sweep: 0.42, blades: 1, nose: 1.05, shoulder: 0.84,
+    struts: [0.72, -0.35, -0.82], hoop: 0.78, counterweight: 0.26, trussBays: 3,
+  },
+  foundry: {
+    height: 0.85, sweep: 0.12, blades: 1, nose: 0.62, shoulder: 1.3,
+    struts: [0.7, 0.05, -0.5, -0.88], hoop: 0.5, counterweight: 0.38, trussBays: 4,
+  },
+  nightgrove: {
+    height: 1.2, sweep: 0.5, blades: 2, nose: 1.05, shoulder: 0.94,
+    struts: [0.68, -0.3, -0.85], hoop: 0.62, counterweight: 0.3, trussBays: 3,
+  },
+  emberworks: {
+    height: 0.95, sweep: 0.62, blades: 1, nose: 1.55, shoulder: 0.78,
+    struts: [0.82, -0.45, -0.9], hoop: 0.34, counterweight: 0.22, trussBays: 2,
+  },
+  boneyard: {
+    height: 1.35, sweep: 0.0, blades: 2, nose: 0.76, shoulder: 1.18,
+    struts: [0.66, 0.0, -0.55, -0.9], hoop: 0.94, counterweight: 0.36, trussBays: 4,
+  },
+  greenline: {
+    height: 0.7, sweep: 0.3, blades: 1, nose: 0.7, shoulder: 0.76,
+    struts: [0.74, -0.4, -0.86], hoop: 0.44, counterweight: 0.2, trussBays: 2,
+  },
 };
 
-const DEFAULT_FIN: FinProfile = { height: 1.2, sweep: 0.35, blades: 1, nose: 1, shoulder: 1 };
+const DEFAULT_BUILD: CrewBuild = {
+  height: 1.2, sweep: 0.35, blades: 1, nose: 1, shoulder: 1,
+  struts: [0.7, -0.35, -0.85], hoop: 0.6, counterweight: 0.28, trussBays: 3,
+};
 
 export interface VehicleVisual {
   group: THREE.Group;
   /** Applies one frame of simulation state. */
   update: (racer: RacerState, elapsed: number) => void;
+  /** A one-off physical knock, from a collision or a landed strike. */
+  knock: (strength: number) => void;
+  /**
+   * Tells the rig whether the swing in progress connected.
+   *
+   * The recovery pose is the *only* visual difference between a hit and a miss,
+   * and a review found the active and recovery frames "nearly
+   * indistinguishable" — so combat read as random even where it was
+   * deterministic.
+   */
+  setSwingLanded: (landed: boolean) => void;
   dispose: () => void;
 }
 
@@ -83,7 +142,7 @@ function panel(color: number, roughness = 0.55, metalness = 0.35): THREE.MeshSta
 }
 
 export function buildVehicle(profile: RacerProfile, castShadow: boolean): VehicleVisual {
-  const fin = FIN_PROFILES[profile.id] ?? DEFAULT_FIN;
+  const fin = CREW_BUILDS[profile.id] ?? DEFAULT_BUILD;
 
   const group = new THREE.Group();
   group.name = `skiff-${profile.id}`;
@@ -115,7 +174,17 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
    * as running lights rather than as a glowing car.
    */
   trim.emissive = new THREE.Color(profile.colors.glow);
-  trim.emissiveIntensity = 0.35;
+  trim.emissiveIntensity = 0.55;
+  /*
+   * The body carries a little of it too.
+   *
+   * Running lights on the trim alone leave the *hull* — which is most of the
+   * silhouette and all of the crew colour — as a black shape after dark. A
+   * skiff has to be identifiable as its crew at race distance on every course,
+   * and on the night course nothing but the machine's own light does that.
+   */
+  body.emissive = new THREE.Color(profile.colors.body);
+  body.emissiveIntensity = 0.22;
   const dark = panel(0x1b1f26, 0.7, 0.2);
   const disposables: (THREE.BufferGeometry | THREE.Material)[] = [body, trim, dark];
 
@@ -154,12 +223,51 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
         rotation: [0, 0, HALF_PI],
       }),
     ),
+    /*
+     * The roll hoop over the pilot.
+     *
+     * Two uprights and a bar — the single most useful piece of hard-surface
+     * detail on the machine, because it is the one part that reads as a
+     * *structure* rather than a moulded shell, and because its height is the
+     * clearest per-crew silhouette difference after the fin.
+     */
+    ...(fin.hoop > 0
+      ? [
+          ...[-1, 1].map(
+            (side): MergePart => ({
+              geometry: new THREE.BoxGeometry(0.12, fin.hoop, 0.12),
+              position: [-0.62, 1.5 + fin.hoop / 2, side * halfWidth * 0.5],
+            }),
+          ),
+          {
+            geometry: new THREE.BoxGeometry(0.12, 0.12, halfWidth * 1.0 + 0.12),
+            position: [-0.62, 1.5 + fin.hoop, 0],
+          } as MergePart,
+        ]
+      : []),
   ];
 
   const darkParts: MergePart[] = [
     { geometry: new THREE.BoxGeometry(HULL_LENGTH * 0.8, 0.4, halfWidth * 1.48), position: [0.1, 1.0, 0] },
     { geometry: new THREE.BoxGeometry(1.4, 0.36, 1.05), position: [-0.2, 1.34, 0] },
-    { geometry: new THREE.BoxGeometry(0.28, 0.18, POD_OFFSET), position: [-0.3, 0.72, POD_OFFSET / 2] },
+    /*
+     * The outrigger spar, as an exposed truss rather than a solid bar.
+     *
+     * This is the part that tells the whole story of the machine: the pod is
+     * *bolted on*, by a crew, out of what they had. A smooth fairing would say
+     * the opposite. Negative space between the bays is what makes it read as
+     * salvage at race distance and not as a moulded wing.
+     */
+    { geometry: new THREE.BoxGeometry(0.16, 0.1, POD_OFFSET), position: [-0.3, 0.78, POD_OFFSET / 2] },
+    { geometry: new THREE.BoxGeometry(0.16, 0.1, POD_OFFSET), position: [-0.3, 0.6, POD_OFFSET / 2] },
+    ...Array.from({ length: fin.trussBays }, (_, i): MergePart => {
+      const at = ((i + 0.5) / fin.trussBays) * POD_OFFSET;
+      return {
+        geometry: new THREE.BoxGeometry(0.09, 0.24, 0.09),
+        position: [-0.3, 0.69, at],
+        rotation: [i % 2 === 0 ? 0.5 : -0.5, 0, 0],
+      };
+    }),
     // Intake slots along the flanks, which catch the key light and stop the
     // hull reading as one untextured block.
     ...[-1, 1].flatMap((side) =>
@@ -207,6 +315,33 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     chassis.add(mesh);
     disposables.push(geometry);
   }
+
+  /*
+   * Hover struts.
+   *
+   * Separate nodes because they move independently — that is the point. A
+   * hovercraft with a rigid body has no mass; struts that compress under
+   * braking and extend in the air are the cheapest possible way to say
+   * otherwise, and they are what a landing actually reads through.
+   */
+  const strutGeometry = mergeGeometries([
+    { geometry: new THREE.CylinderGeometry(0.07, 0.09, 0.42, 6), position: [0, 0.2, 0] },
+    { geometry: new THREE.CylinderGeometry(0.26, 0.3, 0.16, 10), position: [0, -0.02, 0] },
+  ]);
+  disposables.push(strutGeometry);
+  const struts = fin.struts.map((along) => {
+    const strut = new THREE.Group();
+    strut.position.set((along * HULL_LENGTH) / 2, 0.16, 0);
+    const left = new THREE.Mesh(strutGeometry, dark);
+    left.position.z = -halfWidth * 0.82;
+    const right = new THREE.Mesh(strutGeometry, dark);
+    right.position.z = halfWidth * 0.82;
+    left.castShadow = castShadow;
+    right.castShadow = castShadow;
+    strut.add(left, right);
+    chassis.add(strut);
+    return strut;
+  });
 
   // --- animated parts ------------------------------------------------------
   // These move independently, so they stay separate: an incoming strike has to
@@ -283,6 +418,31 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   disposables.push(cushionGeometry, cushionMaterial);
 
   /*
+   * A flat ground shadow the rig spreads and fades with height.
+   *
+   * Separate from the real shadow map, which is off entirely on the low tier
+   * and in any case cannot say "you are four metres up" at a glance. This one
+   * is the altimeter a player actually uses to time a landing.
+   */
+  const shadowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    map: glowSprite,
+    transparent: true,
+    // Light enough to read as contact rather than as a hole in the ground. It
+    // has to work on the night course, where the road is already dark and an
+    // opaque blob under the skiff makes the machine harder to see, not easier.
+    opacity: 0.22,
+    depthWrite: false,
+    fog: false,
+  });
+  const shadowGeometry = new THREE.PlaneGeometry(HULL_LENGTH * 1.35, HULL_LENGTH * 0.95);
+  const groundShadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+  groundShadow.rotation.x = -HALF_PI;
+  groundShadow.position.y = 0.03;
+  groundShadow.renderOrder = 0;
+  disposables.push(shadowGeometry, shadowMaterial);
+
+  /*
    * The tow cone: a translucent wedge behind the skiff that brightens as the
    * wake snap charges. This is the anticipation beat for the tow mechanic —
    * without a visible tell the snap fires out of nowhere and reads as a bug.
@@ -330,9 +490,18 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   arm.rotation.y = -Math.PI * 0.62;
   pod.add(arm);
 
+  /*
+   * The boom: a shaft, a grapple head, and a counterweight on the *short* side.
+   *
+   * The counterweight is what makes the mechanism legible — it is the reason a
+   * person in a pod can swing something heavy at speed, and it gives the arm a
+   * readable pivot so a wind-up looks like a wind-up rather than a limb moving.
+   */
   const armGeometry = mergeGeometries([
     { geometry: new THREE.BoxGeometry(0.14, 0.14, 1.5), position: [0, 0, 0.85] },
+    { geometry: new THREE.BoxGeometry(0.1, 0.1, 0.5), position: [0, 0, -0.3] },
     { geometry: new THREE.IcosahedronGeometry(0.24, 0), position: [0, 0, 1.55] },
+    { geometry: new THREE.IcosahedronGeometry(fin.counterweight, 0), position: [0, 0, -0.58] },
   ]);
   const armMesh = new THREE.Mesh(armGeometry, trim);
   arm.add(armMesh);
@@ -444,14 +613,31 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   group.add(vents);
   disposables.push(ventGeometry);
 
-  // --- animation state ----------------------------------------------------
-  let roll = 0;
-  let pitch = 0;
-  let armAngle = 0;
-  let hover = 0;
-  let hoverVelocity = 0;
-  let damage = 0;
+  group.add(groundShadow);
+
+  // --- animation ------------------------------------------------------------
+  /*
+   * Every body channel lives in the rig. The model owns geometry and effect
+   * materials; the rig owns *motion*, because motion is the part that has to
+   * explain the physics and it needs springs with memory rather than a pile of
+   * per-frame lerps.
+   */
+  const rig = new SkiffRig(
+    {
+      chassis,
+      struts,
+      pilot,
+      pod,
+      companion: wrench,
+      arm,
+      shadow: groundShadow,
+      shadowMaterial,
+    },
+    fin.struts,
+  );
   let phase = profile.id.length * 0.7;
+  /** Whether the current swing has connected, for the recovery pose. */
+  let swingLanded = false;
 
 
   const update = (racer: RacerState, elapsed: number): void => {
@@ -466,43 +652,8 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
     const speedFactor = clamp01(speed / 50);
 
-    /*
-     * Suspension, as a spring rather than a damped follow.
-     *
-     * A skiff that simply eases towards its target height has no *character*:
-     * it never overshoots, so a landing has no compression and a crest has no
-     * float. A second-order spring gives both for free, and the overshoot is
-     * the single clearest read the player gets on how hard they just landed.
-     */
-    const load = racer.airborne ? -0.34 : clamp01(Math.abs(racer.slip) / 0.5) * 0.1 - speedFactor * 0.04;
-    const stiffness = 90;
-    const damping = 13;
-    hoverVelocity += (load - hover) * stiffness * dt - hoverVelocity * damping * dt;
-    hover += hoverVelocity * dt;
-    hover = Math.max(-0.45, Math.min(0.45, hover));
-    chassis.position.y = hover;
-
-    /*
-     * Roll reads lateral load; pitch reads acceleration. Both are telemetry,
-     * per the art bible, so both are exaggerated well past physical and both
-     * are damped enough to be readable rather than twitchy.
-     *
-     * The skiff banks *into* the corner, like an aircraft rather than a car
-     * leaning onto its outside springs. That is a deliberate stylisation: on a
-     * hovercraft the outward lean reads as a mistake, and the inward bank makes
-     * the direction of a slide legible from directly behind — which is the one
-     * angle the player almost always has.
-     */
-    const slideRoll = clamp01(Math.abs(racer.slip) / 0.55) * Math.sign(racer.slip) * 0.34;
-    const steerRoll = racer.steer * 0.16;
-    roll = damp(roll, slideRoll + steerRoll, 9, dt);
-    chassis.rotation.x = roll;
-
-    const targetPitch = racer.airborne
-      ? 0.16
-      : clamp01(hoverVelocity * -0.5) * 0.1 - clamp01(speedFactor) * 0.05 + (racer.boosting ? -0.05 : 0);
-    pitch = damp(pitch, targetPitch, 8, dt);
-    chassis.rotation.z = pitch;
+    rig.update(racer, dt, SURFACES[racer.surface].roughness);
+    rig.updateArm(racer, dt, COMBAT.windup, COMBAT.recovery, swingLanded);
 
     /*
      * Exhaust brightness and size track the throttle and the boost, and the
@@ -519,7 +670,8 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     thrust.scale.set(1, thrustScale * flicker, thrustScale * flicker);
     thrustMaterial.opacity = racer.boosting ? 0.6 : 0.14 + speedFactor * 0.22;
     thrust.visible = speed > 1.5 || racer.boosting;
-    thrust.position.y = hover;
+    // Thrusters stay with the hull, which is what the chassis node carries.
+    thrust.position.y = chassis.position.y;
 
     // The hover cushion brightens under load and while boosting, and fades out
     // entirely in the air — where, self-evidently, there is nothing to hover on.
@@ -570,47 +722,19 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     vents.visible = ventMaterial.opacity > 0.01;
     vents.scale.setScalar(1 + pulse * 0.25);
 
-    // Grapple arm: back during windup, snapped out during the active frames,
-    // easing home through recovery.
-    let target = 0;
-    switch (racer.strike.phase) {
-      case 'windup':
-        target = -0.55 * (1 - racer.strike.timer / COMBAT.windup) - 0.15;
-        break;
-      case 'active':
-        target = 1.55;
-        break;
-      case 'recovery':
-        target = lerp(0, 1.2, clamp01(racer.strike.timer / COMBAT.recovery));
-        break;
-      case 'idle':
-        target = 0;
-        break;
-    }
-    // The pod sits to one side of the hull; a strike to the other side swings
-    // the whole pod assembly across rather than reaching through the chassis.
-    const side = racer.strike.side;
-    pod.rotation.y = damp(pod.rotation.y, racer.strike.phase === 'idle' ? 0 : side === -1 ? Math.PI : 0, 14, dt);
-    armAngle = damp(armAngle, target, 22, dt);
-    arm.rotation.x = armAngle * 0.35;
-    arm.rotation.y = -Math.PI * 0.62 + armAngle;
-
-    /*
-     * Impact reaction. A struck skiff slumps its riders and shudders for a
-     * moment — the shudder decays on its own, so the tell is unmistakable at
-     * the instant of the hit and completely gone a second later rather than
-     * lingering as a permanent wobble.
-     */
-    damage = Math.max(damage - dt * 2.2, clamp01(racer.stagger / COMBAT.staggerTime));
-    const stagger = clamp01(racer.stagger / COMBAT.staggerTime);
-    pilot.rotation.z = stagger * 0.5 + Math.sin(phase * 44) * damage * 0.08;
-    wrench.rotation.z = -stagger * 0.5;
-    chassis.rotation.y = Math.sin(phase * 31) * damage * 0.05;
   };
 
   const dispose = (): void => {
     for (const item of disposables) item.dispose();
   };
 
-  return { group, update, dispose };
+  return {
+    group,
+    update,
+    knock: (strength: number) => rig.knock(strength),
+    setSwingLanded: (landed: boolean) => {
+      swingLanded = landed;
+    },
+    dispose,
+  };
 }

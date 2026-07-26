@@ -715,6 +715,7 @@ export class App {
         const opened = [...after].find((id) => !before.has(id));
         this.lastUnlock = opened ? getSpeedClass(opened).label : null;
       }
+      if (this.lastUnlock) this.hud.announceMoment(`${this.lastUnlock} unlocked`, 'reward');
       circuitView = {
         round: this.circuit.currentRound,
         rounds: this.circuit.rounds.length,

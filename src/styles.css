@@ -1888,3 +1888,133 @@ body {
     height: 1.2rem;
   }
 }
+
+/*
+ * The authored moment banner.
+ *
+ * Final lap, finish and reward. Three seconds of the race that should not look
+ * like the other ninety, and which previously arrived as a HUD number quietly
+ * incrementing: a motion review sampled the whole finish sequence and found
+ * zero running animations at any point.
+ *
+ * The reduced-motion variant is a *designed alternative*, not a deletion. It
+ * keeps the same timing hierarchy — arrive, hold, leave — and the same colour
+ * language, and drops only the movement and the scale. A player who cannot
+ * tolerate motion still gets the beat.
+ */
+.moment {
+  position: absolute;
+  left: 50%;
+  top: 28%;
+  transform: translate(-50%, -50%);
+  font-size: clamp(2rem, 7vw, 4.5rem);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-shadow: 0 0.15em 0.6em rgba(0, 0, 0, 0.85);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.moment--lap {
+  color: var(--amber);
+}
+
+.moment--finish {
+  color: var(--signal);
+}
+
+.moment--reward {
+  color: #bfe9ff;
+}
+
+.moment--play {
+  animation: moment-beat 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.moment--finish.moment--play {
+  animation-duration: 3.2s;
+}
+
+@keyframes moment-beat {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.35);
+    letter-spacing: 0.3em;
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+    letter-spacing: 0.06em;
+  }
+  72% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -52%) scale(0.98);
+  }
+}
+
+.reduced-motion .moment--play {
+  animation: moment-fade 2.2s ease-out forwards;
+}
+
+.reduced-motion .moment--finish.moment--play {
+  animation-duration: 3.2s;
+}
+
+@keyframes moment-fade {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
+ * Results arrive in order rather than all at once.
+ *
+ * A classification is a story — who won, then who was next — and revealing it
+ * as a single static table throws that away. The stagger is short enough that
+ * a player who already knows the result is not kept waiting, and reduced motion
+ * gets the same order as a plain fade with no movement.
+ */
+.results__row {
+  animation: result-reveal 320ms ease-out backwards;
+  animation-delay: calc(var(--row, 0) * 90ms);
+}
+
+@keyframes result-reveal {
+  from {
+    opacity: 0;
+    transform: translateX(-0.6rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.reduced-motion .results__row {
+  animation-name: result-fade;
+}
+
+@keyframes result-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

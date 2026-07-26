@@ -345,6 +345,8 @@ export class GameRenderer {
           if (!racer) break;
           this.particles.emit('impact', racer.pos.x, racer.y + 0.8, racer.pos.z, 0xffd9a0, 8, clamp01(event.speed / 18));
           this.particles.emit('spark', racer.pos.x, racer.y + 0.7, racer.pos.z, 0xffb95c, 10, clamp01(event.speed / 14));
+          // The body takes the hit, not just the camera.
+          this.vehicles.get(event.racer)?.knock(clamp01(event.speed / 16));
           if (racer.isPlayer) this.chase.addShake(clamp01(event.speed / 16) * 0.8);
           break;
         }
@@ -352,10 +354,19 @@ export class GameRenderer {
           const racer = simulation.racers[event.racer];
           if (!racer) break;
           this.particles.emit('spark', event.pos.x, racer.y + 0.6, event.pos.z, 0xffc36b, 7, clamp01(event.speed / 16));
+          this.vehicles.get(event.racer)?.knock(clamp01(event.speed / 20) * 0.8);
           if (racer.isPlayer) this.chase.addShake(clamp01(event.speed / 20) * 0.7);
           break;
         }
+        case 'strikeSwing': {
+          // Assume a miss until something says otherwise: the recovery pose
+          // then differs the moment a hit lands.
+          this.vehicles.get(event.racer)?.setSwingLanded(false);
+          break;
+        }
         case 'strikeHit': {
+          this.vehicles.get(event.attacker)?.setSwingLanded(true);
+          this.vehicles.get(event.target)?.knock(0.5 + event.strength * 0.5);
           const target = simulation.racers[event.target];
           const y = target ? target.y + 1.1 : 1.1;
           this.particles.emit('impact', event.pos.x, y, event.pos.z, 0xfff0b8, 12, event.strength);

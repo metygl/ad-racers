@@ -44,6 +44,7 @@ export class Hud {
   private readonly strikeState: HTMLElement;
   private readonly notifications: HTMLElement;
   private readonly countdown: HTMLElement;
+  private readonly moment: HTMLElement;
   private readonly warning: HTMLElement;
   private readonly liveRegion: HTMLElement;
   private readonly minimap: HTMLCanvasElement;
@@ -103,6 +104,20 @@ export class Hud {
     this.strikeState = el('div', { class: 'strike' });
     this.notifications = el('div', { class: 'hud__notifications' });
     this.countdown = el('div', { class: 'countdown', 'aria-hidden': 'true' });
+    /*
+     * The authored moment banner.
+     *
+     * Final lap, finish and unlock used to arrive as a HUD number quietly
+     * changing and a static line of text — a motion review found the whole
+     * sequence "cuts abruptly and lacks authored celebration", with zero
+     * running animations at any sample. These are the highest-value seconds in
+     * a race and they deserve a beat of their own.
+     *
+     * Under reduced motion the same hierarchy survives: the banner still
+     * appears, still holds, still leaves — it just does it with opacity and
+     * colour instead of movement. See `.moment` in the stylesheet.
+     */
+    this.moment = el('div', { class: 'moment', 'aria-hidden': 'true' });
     this.warning = el('div', { class: 'hud__warning', hidden: true });
     this.liveRegion = el('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
     this.standings = el('ol', { class: 'standings' });
@@ -146,6 +161,7 @@ export class Hud {
         this.minimap,
       ),
       this.countdown,
+      this.moment,
       this.warning,
       this.notifications,
       el(
@@ -315,6 +331,7 @@ export class Hud {
     this.updateStandings(simulation);
     this.drawMinimap(simulation);
     this.updateSpeedLines(speed, player.boosting);
+    this.tickMoment(elapsed);
     this.tickNotifications(elapsed);
   }
 
@@ -419,6 +436,24 @@ export class Hud {
     this.speedLines.style.opacity = intensity.toFixed(3);
   }
 
+  /**
+   * Announces one of the race's authored moments.
+   *
+   * Deliberately a separate channel from `notify`: a notification is
+   * information, this is punctuation, and the two must never queue behind each
+   * other. A lap message can wait; "FINAL LAP" cannot.
+   */
+  announceMoment(text: string, kind: 'lap' | 'finish' | 'reward'): void {
+    this.moment.textContent = text;
+    this.moment.className = `moment moment--${kind}`;
+    // Restarting the animation needs the class off and a reflow between.
+    void this.moment.offsetWidth;
+    this.moment.classList.add('moment--play');
+    this.momentTimer = kind === 'finish' ? 3.2 : 2.2;
+  }
+
+  private momentTimer = 0;
+
   /** Shows a transient message, e.g. "Struck by Emberworks". */
   notify(message: string, kind: 'info' | 'good' | 'bad' = 'info'): void {
     const node = el('div', { class: `notification notification--${kind}`, text: message });
@@ -439,8 +474,13 @@ export class Hud {
       switch (event.type) {
         case 'lap':
           if (event.racer === player.index && event.lap < simulation.track.laps) {
-            this.notify(`Lap ${event.lap + 1} — ${formatLapTime(event.time)}`, 'info');
-            announce(this.liveRegion, `Lap ${event.lap + 1} of ${simulation.track.laps}. Position ${ordinal(player.position)}.`);
+            const entering = event.lap + 1;
+            if (entering === simulation.track.laps) {
+              // The one lap that is different from the others.
+              this.announceMoment('FINAL LAP', 'lap');
+            }
+            this.notify(`Lap ${entering} — ${formatLapTime(event.time)}`, 'info');
+            announce(this.liveRegion, `Lap ${entering} of ${simulation.track.laps}. Position ${ordinal(player.position)}.`);
           }
           break;
         case 'strikeHit':
@@ -472,6 +512,7 @@ export class Hud {
           break;
         case 'finish':
           if (event.racer === player.index) {
+            this.announceMoment(event.position === 1 ? 'WON' : `${ordinal(event.position)}`, 'finish');
             announce(this.liveRegion, `Finished ${ordinal(event.position)} in ${formatLapTime(event.time)}.`);
           }
           break;
@@ -479,6 +520,12 @@ export class Hud {
           break;
       }
     }
+  }
+
+  private tickMoment(elapsed: number): void {
+    if (this.momentTimer <= 0) return;
+    this.momentTimer -= elapsed;
+    if (this.momentTimer <= 0) this.moment.classList.remove('moment--play');
   }
 
   private tickNotifications(elapsed: number): void {
@@ -498,6 +545,8 @@ export class Hud {
   reset(): void {
     for (const item of this.active) item.node.remove();
     this.active = [];
+    this.momentTimer = 0;
+    this.moment.classList.remove('moment--play');
     this.warning.hidden = true;
     this.countdown.classList.remove('countdown--visible');
   }

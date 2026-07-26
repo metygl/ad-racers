@@ -174,14 +174,27 @@ export const GLASSHOUSE_VIGIL: TrackDefinition = {
       kind: 'mud' as const,
     })),
   ],
+  /*
+   * Built out of what the place was, in four depth bands.
+   *
+   * The review's verdict on the first version was "no readable glasshouse":
+   * good sky, generic road. A ruined arcology is glazing bars, growth racks,
+   * lamp masts and the roof lying on the floor — and it has to be *layered*, so
+   * the frame always has something close, something at mid distance and
+   * something on the skyline.
+   *
+   *   0-2×    reeds and fallen truss  — the debris you brush past
+   *   1.3-3×  growth racks and volunteers — the horticulture, at eye level
+   *   1.4-4×  glazing frames — the structure, catching what light there is
+   *   2-6×    lamp masts — the skyline, and the thing you navigate by
+   */
   scenery: [
-    // Reeds and volunteer growth close in, then the skeleton of the arcology
-    // behind it, then the masts. Three depths, so the frame is never flat.
-    { kind: 'reed', density: 1.6, bandInner: 1.05, bandOuter: 2.6, scaleMin: 0.7, scaleMax: 1.7 },
-    { kind: 'broadleaf', density: 0.5, bandInner: 1.6, bandOuter: 4, scaleMin: 0.9, scaleMax: 1.9 },
-    { kind: 'pylon', density: 0.05, bandInner: 1.4, bandOuter: 3, scaleMin: 1.1, scaleMax: 1.5 },
-    { kind: 'crystal', density: 0.22, bandInner: 1.1, bandOuter: 2.8, scaleMin: 0.5, scaleMax: 1.2 },
-    { kind: 'monolith', density: 0.05, bandInner: 2.2, bandOuter: 5, scaleMin: 0.9, scaleMax: 1.6 },
+    { kind: 'reed', density: 1.9, bandInner: 1.02, bandOuter: 2.0, scaleMin: 0.7, scaleMax: 1.7 },
+    { kind: 'fallenTruss', density: 0.16, bandInner: 1.05, bandOuter: 2.2, scaleMin: 0.8, scaleMax: 1.5 },
+    { kind: 'growthRack', density: 0.34, bandInner: 1.3, bandOuter: 3.0, scaleMin: 0.9, scaleMax: 1.5 },
+    { kind: 'volunteer', density: 0.7, bandInner: 1.2, bandOuter: 3.4, scaleMin: 0.8, scaleMax: 1.8 },
+    { kind: 'glassFrame', density: 0.3, bandInner: 1.4, bandOuter: 4.0, scaleMin: 0.9, scaleMax: 1.9 },
+    { kind: 'lampMast', density: 0.075, bandInner: 2.0, bandOuter: 6.0, scaleMin: 1.0, scaleMax: 1.7 },
   ],
   theme: {
     /*
@@ -202,17 +215,17 @@ export const GLASSHOUSE_VIGIL: TrackDefinition = {
     fogColor: 0x1b2740,
     fogDensity: 0.0026,
     sunColor: 0xbccbe8,
-    sunIntensity: 1.25,
+    sunIntensity: 1.6,
     sunElevation: 0.72,
     sunAzimuth: 4.2,
-    ambientSky: 0x35507e,
-    ambientGround: 0x0e1418,
-    ambientIntensity: 2.6,
-    roadColor: 0x525a64,
+    ambientSky: 0x40608f,
+    ambientGround: 0x18222a,
+    ambientIntensity: 3.2,
+    roadColor: 0x646d78,
     shoulderColor: 0x4e5a58,
     kerbColor: 0x7fe8ff,
-    terrainColor: 0x161f26,
-    terrainAccent: 0x1d3028,
+    terrainColor: 0x1b262e,
+    terrainAccent: 0x27403a,
     dustColor: 0x8fa8c0,
     speedLineColor: 0xbfe9ff,
     cloudiness: 0.35,
@@ -222,7 +235,7 @@ export const GLASSHOUSE_VIGIL: TrackDefinition = {
       // puts racers in the top value band on *every* course, and a night scene
       // where the skiffs are silhouettes has failed the rule however good the
       // screenshot looks.
-      exposure: 1.5,
+      exposure: 1.72,
       // Lifted, cool shadows and highlights pulled towards the lamp colour: the
       // look of a place lit by something that is nearly out.
       lift: [0.016, 0.024, 0.042],

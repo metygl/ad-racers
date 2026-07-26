@@ -96,7 +96,34 @@ export type SceneryKind =
   | 'pylon'
   | 'reed'
   | 'crystal'
-  | 'chimney';
+  | 'chimney'
+  /* --- Glasshouse Vigil: the hero course's own vocabulary --- */
+  /** A standing glazing frame, most of its panes long gone. */
+  | 'glassFrame'
+  /** A growth rack: three tiers of planting trays gone wild. */
+  | 'growthRack'
+  /** A lamp mast, still lit, that actually casts colour into the scene. */
+  | 'lampMast'
+  /** A collapsed roof truss, half buried. */
+  | 'fallenTruss'
+  /** Volunteer saplings that got in through the broken roof. */
+  | 'volunteer';
+
+/**
+ * Set-piece structures placed by hand rather than scattered.
+ *
+ * A landmark is not scenery: it is a thing a player navigates by, so it has to
+ * be in a specific place, at a specific scale, and visible from more than one
+ * point on the lap. The art bible asks for at least three per course.
+ */
+export interface LandmarkDefinition {
+  kind: SceneryKind | 'archGantry' | 'condenserTower';
+  x: number;
+  z: number;
+  /** Radians about Y. */
+  rotation?: number;
+  scale?: number;
+}
 
 export interface ScenerySpec {
   kind: SceneryKind;
@@ -184,6 +211,8 @@ export interface TrackDefinition {
   obstacles: ObstacleDefinition[];
   hazards: HazardDefinition[];
   scenery: ScenerySpec[];
+  /** Hand-placed structures a player can navigate by. */
+  landmarks?: LandmarkDefinition[];
   theme: TrackTheme;
   /** Surface outside the corridor. */
   offTrackSurface: SurfaceId;

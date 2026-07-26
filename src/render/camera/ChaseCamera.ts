@@ -77,6 +77,12 @@ export class ChaseCamera {
   private reverse = 0;
   /** 0-1 how far the camera has been pulled in to clear an occluder. */
   private occlusion = 0;
+  /** Viewport fraction covered by touch controls; 0 on desktop. */
+  private occludedBand = 0;
+  /** Finish-sequence progress, 0 when not finishing. */
+  private finish = 0;
+  /** Remaining hit-pause, seconds. */
+  private held = 0;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(62, aspect, 0.5, 4200);
@@ -119,6 +125,29 @@ export class ChaseCamera {
     this.dip = Math.min(1.4, this.dip + amount * this.shakeScale);
   }
 
+  /**
+   * Freezes the camera in place for a few frames — the hit-pause.
+   *
+   * Motion finding F6 asked for a hit-pause, and the obvious implementation of
+   * one is not available here: slowing time would desynchronise the simulation
+   * from the render clock, and this game's determinism guarantee is the reason
+   * a whole race can be a unit test. So the pause is *presentational* and it is
+   * applied to the camera alone. The world keeps moving at full speed; the
+   * viewpoint stops dead for 80 ms and then catches up.
+   *
+   * That is enough. The eye reads impact weight from the *frame* not advancing,
+   * and the skiff continuing to move inside a held frame is a stronger read of
+   * being knocked than freezing everything would be — a fighting game holds the
+   * camera and animates the recoil for exactly this reason.
+   *
+   * Held frames are capped hard and the catch-up is damped, so this can never
+   * lose the racer: at 80 ms and 50 m/s the skiff moves four metres inside a
+   * ten-metre frame, and the damped position chases it back immediately.
+   */
+  hold(seconds: number): void {
+    this.held = Math.min(0.09, Math.max(this.held, seconds * this.shakeScale));
+  }
+
   /** Snaps the camera behind a racer with no interpolation. */
   reset(racer: RacerState): void {
     this.yaw = racer.heading;
@@ -130,6 +159,8 @@ export class ChaseCamera {
     this.initialised = false;
     this.reverse = 0;
     this.occlusion = 0;
+    this.finish = 0;
+    this.held = 0;
     this.trackYaw = null;
     this.previousSpeed = Math.hypot(racer.velocity.x, racer.velocity.z);
     this.apply(racer, 1 / 60, true);
@@ -158,8 +189,39 @@ export class ChaseCamera {
     this.occlusion = target > this.occlusion ? Math.min(target, this.occlusion + 0.25) : target;
   }
 
+  /**
+   * The fraction of the viewport's height covered by controls at the bottom.
+   *
+   * Not a "mobile" flag: it is the actual measured band, so the correction is
+   * proportional to the real obstruction rather than to a device guess. A
+   * desktop layout passes 0 and the composition is unchanged.
+   */
+  setOccludedBand(fraction: number): void {
+    this.occludedBand = clamp01(fraction);
+  }
+
+  /**
+   * Starts the finish sequence: a slow orbit around the skiff, dropped to a low
+   * three-quarter angle and eased in over a second.
+   *
+   * ART-10's finding was that finishing has no spectacle — the race simply
+   * stops and a table appears. The one shot every racing game has earned by
+   * that point is the car it has just been driving, seen from outside, moving.
+   * The camera keeps following the skiff, so this is a *reward*, not a cutscene
+   * the player is locked out of.
+   */
+  startFinish(): void {
+    this.finish = 0.0001;
+  }
+
+  /** Ends the finish sequence and eases back to the chase view. */
+  endFinish(): void {
+    this.finish = 0;
+  }
+
   update(racer: RacerState, elapsed: number, roughness: number): void {
     this.clock += elapsed;
+    if (this.finish > 0) this.finish = Math.min(1, this.finish + elapsed * 0.9);
     // A skiff travelling backwards gets a rear view, eased over ~200 ms.
     const alongNose = racer.velocity.x * Math.cos(racer.heading) + racer.velocity.z * Math.sin(racer.heading);
     const wantsReverse = alongNose < -2 ? 1 : 0;
@@ -169,6 +231,16 @@ export class ChaseCamera {
     this.dip = Math.max(0, this.dip - elapsed * 4.2);
     // Continuous rumble from the surface, on top of impulse shake.
     if (roughness > 0) this.shake = Math.max(this.shake, roughness * 0.09 * this.shakeScale);
+    /*
+     * The hit-pause. The camera transform is simply not rewritten this frame,
+     * so the viewpoint stays exactly where the impact caught it while the world
+     * carries on. Everything else above has already decayed, so the shake and
+     * kick resume mid-flight rather than restarting when the hold ends.
+     */
+    if (this.held > 0) {
+      this.held -= elapsed;
+      return;
+    }
     this.apply(racer, elapsed, false);
   }
 
@@ -182,6 +254,38 @@ export class ChaseCamera {
       const z = racer.pos.z + Math.sin(this.orbitAngle) * settings.distance;
       this.camera.position.set(x, racer.y + settings.height, z);
       this.camera.lookAt(racer.pos.x, racer.y + 1.2, racer.pos.z);
+      return;
+    }
+
+    /*
+     * The finish shot.
+     *
+     * A low three-quarter orbit that drifts forward past the skiff's flank —
+     * the angle that shows the machine, the rider and the crew mark at once,
+     * which is precisely the reward the player has been driving towards and
+     * has never had a frame that shows it. Eased in from wherever the chase
+     * camera happened to be, so the flag does not cut.
+     *
+     * Its speed is deliberately *slower* than the orbit mode's. This is the one
+     * moment in the game with nothing to react to, and the pacing should say so.
+     */
+    if (this.finish > 0) {
+      const ease = this.finish * this.finish * (3 - 2 * this.finish);
+      this.orbitAngle += elapsed * 0.34;
+      const angle = racer.heading + 2.35 + this.orbitAngle;
+      const radius = 9.2 - ease * 1.6;
+      const orbitX = racer.pos.x + Math.cos(angle) * radius;
+      const orbitZ = racer.pos.z + Math.sin(angle) * radius;
+      const orbitY = racer.y + 2.35;
+      this.position.x = lerp(this.position.x, orbitX, ease);
+      this.position.y = lerp(this.position.y, orbitY, ease);
+      this.position.z = lerp(this.position.z, orbitZ, ease);
+      this.camera.position.copy(this.position);
+      this.camera.lookAt(racer.pos.x, racer.y + 1.15, racer.pos.z);
+      // Back to the base field of view: the speed cue has nothing left to say.
+      this.fov = lerp(this.fov, MODE_SETTINGS.chase.fov - 4, 1 - Math.exp(-3 * elapsed));
+      this.camera.fov = this.fov;
+      this.camera.updateProjectionMatrix();
       return;
     }
 
@@ -243,7 +347,22 @@ export class ChaseCamera {
      */
     const wanted = settings.distance + speedFactor * 2.1 + surge + this.kick * 1.6;
     const distance = Math.max(MIN_DISTANCE, wanted * (1 - this.occlusion * 0.72));
-    const height = settings.height + speedFactor * 0.55 - this.dip * 0.9;
+    /*
+     * Composition: the skiff is raised in frame by whatever the controls cover.
+     *
+     * ART-12's finding was that on a phone the action is composed *behind* its
+     * own controls — and moving the HUD out of the way, which the previous pass
+     * did, does not fix it, because the thing in the covered band is the road
+     * and the machine. The camera has to compose for the visible part of the
+     * viewport rather than for the whole of it.
+     *
+     * Raising the camera and dropping the look-at point together shifts the
+     * focal vehicle *up the frame* without tilting the horizon out of it, which
+     * is the same correction a camera operator makes for a letterbox. It is
+     * driven by the real occluded fraction, so a tablet with small controls
+     * gets a small correction and a phone in portrait gets the whole of it.
+     */
+    const height = settings.height + speedFactor * 0.55 - this.dip * 0.9 + this.occludedBand * 3.4;
 
     const behindX = -Math.cos(this.yaw);
     const behindZ = -Math.sin(this.yaw);
@@ -285,7 +404,7 @@ export class ChaseCamera {
     const lookAhead = settings.look + speedFactor * 5;
     this.camera.lookAt(
       racer.pos.x + Math.cos(this.yaw) * lookAhead,
-      racer.y + 1.35 - this.dip * 0.4,
+      racer.y + 1.35 - this.dip * 0.4 - this.occludedBand * 2.6,
       racer.pos.z + Math.sin(this.yaw) * lookAhead,
     );
 

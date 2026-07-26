@@ -29,6 +29,8 @@
   --radius-lg: 16px;
   --focus: #ffe08a;
 
+  /* Touch button diameter. Named because the HUD has to clear the row. */
+  --touch-icon: 2.9rem;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -1539,8 +1541,8 @@ body {
 }
 
 .touch__icon {
-  width: 2.9rem;
-  height: 2.9rem;
+  width: var(--touch-icon);
+  height: var(--touch-icon);
   border-radius: 50%;
   background: rgba(6, 10, 14, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.24);
@@ -1594,7 +1596,15 @@ body {
  * and the bottom-right corner, because those are where thumbs live.
  */
 .touch-active .hud__panel--position {
-  margin-left: 3.4rem;
+  /*
+   * Clear the whole utility row, not one button of it.
+   *
+   * The row holds two 2.9 rem icons with a 0.5 rem gap, and this was set to
+   * 3.4 rem — enough for the first one. On a 390 px portrait viewport the
+   * result was the pause button sitting on top of the position readout, which
+   * is the one HUD element a player checks mid-corner.
+   */
+  margin-left: calc(2 * var(--touch-icon) + 1.1rem);
 }
 
 .touch-active .hud__side {

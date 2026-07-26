@@ -195,7 +195,25 @@ test.describe('touch journey', () => {
         name: node.className,
         r: node.getBoundingClientRect().toJSON() as DOMRect,
       }));
-      const hud = ['.hud__panel--lap', '.hud__panel--time', '.minimap', '.hud__panel--speed']
+      /*
+       * Every HUD element a player reads mid-corner, not a sample of them.
+       *
+       * The first version of this list left out the position readout, and that
+       * is exactly what broke: the touch utility row reserved clearance for one
+       * of its two buttons, so on a 390 px portrait viewport the pause button
+       * sat on top of the position card and the test said nothing. A list of
+       * *some* of the HUD is a test that only catches the collisions you
+       * already thought of.
+       */
+      const hud = [
+        '.hud__panel--lap',
+        '.hud__panel--time',
+        '.hud__panel--position',
+        '.minimap',
+        '.hud__panel--speed',
+        '.hud__bottom',
+        '.hud__notifications',
+      ]
         .map(pick)
         .filter((x): x is { name: string; r: DOMRect } => x !== null);
       return { controls, hud };

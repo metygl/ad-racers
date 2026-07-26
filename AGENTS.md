@@ -63,9 +63,16 @@ These cost real debugging time. Each is documented at its site in the code.
 - **Place shortcut hazards by fraction, never by control-point index.**
   `chordAlong` samples densely; a `slice(2, 5)` silently moves when that density
   changes. Use `atFractions`.
-- **Per-skiff meshes are multiplied by six.** Two struts per station as separate
-  meshes took the scene from 62 draw calls to 146 and broke the enforced budget.
-  Merge anything that moves together.
+- **Per-skiff meshes are multiplied by six, and by two again if they cast.**
+  A shadow-casting mesh is drawn twice, so six skiffs is twelve skiffs of
+  geometry. Merge anything that moves together, instance anything that moves
+  independently (the strut stations are one `InstancedMesh` per skiff), give
+  parts that differ only in colour a `MergePart.color` vertex attribute rather
+  than a second material, and let only the player cast into the shadow map.
+- **Measure draw calls with the grid bunched, not mid-race.** With the field
+  strung out most rivals are frustum-culled, and a number sampled there is
+  roughly half the real one. The honest sample is the frame after the green
+  light, on High, with shadows on.
 - **Track projection scores by true distance, not lateral offset.** When
   `closestPointOnSegment` clamps to a segment end, the lateral component stops
   meaning "how far away this is". Scoring by it makes progress jump tens of
@@ -87,6 +94,18 @@ These cost real debugging time. Each is documented at its site in the code.
 - **Pick obscure ports for local servers.** 5173 and 4173 were both already
   serving unrelated projects on this machine, and Playwright happily tested one
   of them.
+
+- **The Saltflat difficulty ladder is thin: Ace beats Pro by 0.86 s over three
+  seeds.** Any physics change at all can invert it, and `tests/unit/ai.test.ts`
+  will say so. Two attempts at F4's body-angle bound were rejected this way
+  before a value above the measured envelope worked; the census that produced it
+  is in `docs/VERTICAL-SLICE.md`.
+- **Bound the *settled* slip angle, never the mid-step one.** Within a step the
+  body rotates before the tyres pull the velocity round to follow it, so the
+  instantaneous angle is far larger than the one that persists. Past the peak
+  slip angle the tyre curve multiplies grip by more than ten, which is also why
+  no sequence of inputs can reach an extreme slip state — a test that needs one
+  has to write the velocity directly.
 
 ## Tuning
 

@@ -246,7 +246,36 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
    * car is travelling backwards, exactly as it does in a real vehicle.
    */
   const yaw = racer.steer * yawRate * (vLong < 0 ? -1 : 1);
-  racer.heading = wrapAngle(racer.heading + yaw * dt);
+
+  /*
+   * A hard bound on how far the body may be crossed up.
+   *
+   * The lateral-grip model below already gives a slide a stable equilibrium,
+   * but "stable" and "bounded" are not the same thing: with enough steering
+   * authority and a low-grip surface the equilibrium sits past 50°, and the
+   * motion review's F4 finding is what that looks like — a machine sustaining
+   * an angle no driver would hold, with the nose pointing somewhere the skiff
+   * is never going to go. It reads as broken rather than as spectacular, and it
+   * is the one part of a drift a player cannot learn to read.
+   *
+   * Past the bound, the attitude jets pull the nose back towards the direction
+   * of travel, proportionally to the excess. This never fights a *transient* —
+   * a flick, a landing, a hit still cross the body up freely — it only stops
+   * the angle being *held* there, which is exactly the distinction F4 draws.
+   *
+   * The angle it reads is `racer.slip` — last step's *settled* value, measured
+   * after grip has bled the slide off. The instantaneous pre-grip angle is a
+   * different and much larger number, because within a step the body rotates
+   * before the tyres get a chance to pull the velocity round with it; bounding
+   * that one bounds a transient every corner produces, which is how the first
+   * version of this cost the Ace field a second a lap on the salt without ever
+   * catching a genuinely unreadable angle.
+   */
+  const overAngle = Math.abs(racer.slip) - PHYSICS.bodyAngleMax;
+  const correction =
+    overAngle > 0 && !racer.airborne ? -Math.sign(racer.slip) * overAngle * PHYSICS.bodyAngleRecovery : 0;
+
+  racer.heading = wrapAngle(racer.heading + (yaw + correction) * dt);
 
   // --- lateral grip -------------------------------------------------------
   // Re-project the (unchanged) world velocity onto the new, rotated basis. Any

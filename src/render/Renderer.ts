@@ -8,6 +8,9 @@ import { ChaseCamera } from './camera/ChaseCamera';
 import { ParticleSystem } from './scene/Particles';
 import { buildHazardMarkers, buildHorizon, buildObstacles, buildScenery } from './scene/Scenery';
 import type { SceneryResult } from './scene/Scenery';
+import { buildLandmarks } from './scene/Landmarks';
+import { buildCourseLife } from './scene/CourseLife';
+import type { CourseLifeResult } from './scene/CourseLife';
 import { buildLighting, buildSky } from './scene/SkyDome';
 import type { LightingResult, SkyResult } from './scene/SkyDome';
 import { buildTerrain } from './scene/Terrain';
@@ -20,6 +23,7 @@ import { DEFAULT_GRADE, toColor } from './palette';
 import { PostComposer, defaultPostSettings } from './post/Composer';
 import type { PostSettings } from './post/Composer';
 import { disposeTextures } from './textures/procedural';
+import { disposeFamilyMaps } from './materials/families';
 
 /**
  * Everything that draws.
@@ -38,6 +42,62 @@ import { disposeTextures } from './textures/procedural';
  * and the player's skiff somewhere behind them.
  */
 const RIVAL_EFFECT_SCALE = 0.4;
+
+/**
+ * What each surface throws up, and how.
+ *
+ * Motion finding F7: surface feedback was "incoherent" because every surface
+ * emitted the same grey puff at a different rate — so leaving the road was a
+ * quantitative change the player had to notice rather than a qualitative one
+ * they could not miss. A bed gives each surface its own material: a primary
+ * spray, and a second emitter that only fires when the skiff is actually
+ * sliding, which is what makes the difference legible in one lap.
+ *
+ * Colours are per surface where the *material* has a colour of its own, and
+ * inherited from the course's dust otherwise — a quarry and an arcology should
+ * not kick up the same beige, but wet grass is green in both.
+ */
+interface SurfaceBed {
+  kind: 'dust' | 'splash';
+  /** Multiplier on the emission rate. */
+  rate: number;
+  /** Multiplier on particle intensity. */
+  scale: number;
+  /** Overrides the course dust colour when the material has its own. */
+  color?: number;
+  secondary?: { kind: 'spark' | 'ember' | 'splash' | 'dust'; color: number; scale: number };
+}
+
+const SURFACE_BEDS: Record<string, SurfaceBed> = {
+  // Tarmac is nearly clean until it is not: almost no dust, and grit sparking
+  // off the hover skirts the moment the skiff is genuinely sideways.
+  road: { kind: 'dust', rate: 0.55, scale: 0.7, secondary: { kind: 'spark', color: 0xffcf8a, scale: 0.55 } },
+  // Dirt is the loud one, and it throws stones as well as dust.
+  dirt: { kind: 'dust', rate: 1.35, scale: 1.25, secondary: { kind: 'ember', color: 0x8a6a44, scale: 0.8 } },
+  // Grass tears rather than billows: less dust, and torn green thrown behind.
+  grass: { kind: 'dust', rate: 0.95, scale: 0.9, color: 0x6f8a55, secondary: { kind: 'ember', color: 0x7fa860, scale: 1 } },
+  // Standing water: spray in front, a fine mist behind.
+  water: { kind: 'splash', rate: 1.5, scale: 1.3, color: 0xcfe8ff, secondary: { kind: 'splash', color: 0xe8f4ff, scale: 1.2 } },
+  // Salt is dry, fine and bright — it hangs rather than falls.
+  salt: { kind: 'dust', rate: 1.15, scale: 1.4, color: 0xf2efe4, secondary: { kind: 'dust', color: 0xfffaf0, scale: 1.3 } },
+  sand: { kind: 'dust', rate: 1.25, scale: 1.3, color: 0xd8bf94 },
+};
+
+/** Used by any surface a course adds without declaring a bed for it. */
+const DEFAULT_BED: SurfaceBed = { kind: 'dust', rate: 1, scale: 1 };
+
+/**
+ * How close a rival has to pass, and how fast, to count as a near miss.
+ *
+ * Both terms matter. Two skiffs sitting side by side at the same speed for a
+ * whole straight is not a near miss and must not fire one; the same gap closed
+ * at 12 m/s of relative speed is the single most exciting thing that happens in
+ * a race and had no feedback at all.
+ */
+const NEAR_MISS_DISTANCE = 3.6;
+const NEAR_MISS_CLOSING = 7;
+/** Seconds before the same rival can trigger another. */
+const NEAR_MISS_COOLDOWN = 1.2;
 
 export interface RendererOptions {
   canvas: HTMLCanvasElement;
@@ -69,6 +129,7 @@ export class GameRenderer {
   private particles: ParticleSystem;
   private sky: SkyResult | null = null;
   private scenery: SceneryResult | null = null;
+  private life: CourseLifeResult | null = null;
   /** Meshes the camera ray tests against; scenery and obstacles only. */
   private occluders: THREE.Object3D[] = [];
   private readonly raycaster = new THREE.Raycaster();
@@ -99,6 +160,10 @@ export class GameRenderer {
    * into an assertion that 1 is less than 90.
    */
   private sceneStats = { drawCalls: 0, triangles: 0 };
+  /** Per-rival near-miss cooldowns, so one pass fires exactly one cue. */
+  private readonly nearMissCooldowns = new Map<number, number>();
+  /** Audio hook for a near miss; the renderer has no business making sound. */
+  onNearMiss: ((intensity: number) => void) | null = null;
 
   constructor(private readonly options: RendererOptions) {
     this.quality = options.quality;
@@ -265,6 +330,17 @@ export class GameRenderer {
       this.scenery = scenery;
       this.world.add(scenery.group);
       this.world.add(buildHorizon(track));
+      this.world.add(buildLandmarks(track, terrain.heightAt));
+      const life = buildCourseLife(track, {
+        density: tier.lifeDensity,
+        heightAt: terrain.heightAt,
+        accent: theme.kerbColor ?? theme.speedLineColor,
+        night: theme.night ?? false,
+        fogColor: theme.fogColor,
+        fogDensity: theme.fogDensity,
+      });
+      this.life = life;
+      this.world.add(life.group);
       const obstacles = buildObstacles(track);
       this.world.add(obstacles);
       /*
@@ -308,7 +384,17 @@ export class GameRenderer {
     }
     this.vehicles.clear();
     for (const racer of simulation.racers) {
-      const visual = buildVehicle(getRacer(racer.profileId), tier.vehicleShadows);
+      /*
+       * Only the player's skiff casts into the shadow map.
+       *
+       * A cast shadow costs a second draw of every casting mesh, so a six-car
+       * grid pays for twelve skiffs' worth of geometry to render one — and at
+       * racing distance a rival's cast shadow is indistinguishable from the
+       * height-aware ground shadow every skiff already carries. The player's
+       * own shadow is the one that does real work, because it is the cue they
+       * read their altitude off over a crest.
+       */
+      const visual = buildVehicle(getRacer(racer.profileId), tier.vehicleShadows && racer.isPlayer);
       this.vehicles.set(racer.index, visual);
       this.world.add(visual.group);
     }
@@ -329,11 +415,24 @@ export class GameRenderer {
       this.sky = null;
     }
     this.scenery = null;
+    this.life?.dispose();
+    this.life = null;
     this.occluders = [];
     if (this.lighting) {
       this.scene.remove(this.lighting.group);
       this.lighting = null;
     }
+  }
+
+  /**
+   * Puts one racer's rider into the finish pose.
+   *
+   * `intensity` is 0 for last and 1 for a win, so the celebration is earned
+   * rather than automatic — a rider punching the air after sixth place is worse
+   * than no reaction at all.
+   */
+  setCelebration(index: number, intensity: number): void {
+    this.vehicles.get(index)?.setCelebration(intensity);
   }
 
   /** Turns simulation events into effects. Called once per rendered frame. */
@@ -343,17 +442,41 @@ export class GameRenderer {
         case 'collision': {
           const racer = simulation.racers[event.racer];
           if (!racer) break;
-          this.particles.emit('impact', racer.pos.x, racer.y + 0.8, racer.pos.z, 0xffd9a0, 8, clamp01(event.speed / 18));
-          this.particles.emit('spark', racer.pos.x, racer.y + 0.7, racer.pos.z, 0xffb95c, 10, clamp01(event.speed / 14));
+          const force = clamp01(event.speed / 18);
+          this.particles.emit('impact', racer.pos.x, racer.y + 0.8, racer.pos.z, 0xffd9a0, 8, force);
+          /*
+           * Sparks thrown back along the contact normal rather than in every
+           * direction. With a rival involved the normal is the line between the
+           * two skiffs, which is the one piece of information a uniform burst
+           * throws away: *which side* the hit came from.
+           */
+          const other = event.other === null ? null : simulation.racers[event.other];
+          const normal = other
+            ? { x: racer.pos.x - other.pos.x, z: racer.pos.z - other.pos.z }
+            : { x: racer.pos.x - event.pos.x, z: racer.pos.z - event.pos.z };
+          this.particles.emitDirected(
+            'spark', event.pos.x, racer.y + 0.7, event.pos.z, normal, 0xffb95c, 10, clamp01(event.speed / 14),
+          );
           // The body takes the hit, not just the camera.
           this.vehicles.get(event.racer)?.knock(clamp01(event.speed / 16));
-          if (racer.isPlayer) this.chase.addShake(clamp01(event.speed / 16) * 0.8);
+          if (racer.isPlayer) {
+            this.chase.addShake(clamp01(event.speed / 16) * 0.8);
+            // Only a solid one holds the frame. A brush at 6 m/s that stopped
+            // the camera would make ordinary side-by-side racing feel broken.
+            if (force > 0.45) this.chase.hold(0.03 + force * 0.05);
+          }
           break;
         }
         case 'wallHit': {
           const racer = simulation.racers[event.racer];
           if (!racer) break;
-          this.particles.emit('spark', event.pos.x, racer.y + 0.6, event.pos.z, 0xffc36b, 7, clamp01(event.speed / 16));
+          // Off the wall, back towards the road: the normal points from the
+          // contact to the racer's own centre.
+          this.particles.emitDirected(
+            'spark', event.pos.x, racer.y + 0.6, event.pos.z,
+            { x: racer.pos.x - event.pos.x, z: racer.pos.z - event.pos.z },
+            0xffc36b, 7, clamp01(event.speed / 16),
+          );
           this.vehicles.get(event.racer)?.knock(clamp01(event.speed / 20) * 0.8);
           if (racer.isPlayer) this.chase.addShake(clamp01(event.speed / 20) * 0.7);
           break;
@@ -370,9 +493,20 @@ export class GameRenderer {
           const target = simulation.racers[event.target];
           const y = target ? target.y + 1.1 : 1.1;
           this.particles.emit('impact', event.pos.x, y, event.pos.z, 0xfff0b8, 12, event.strength);
-          this.particles.emit('spark', event.pos.x, y, event.pos.z, 0xffe08a, 14, event.strength);
-          if (target?.isPlayer || simulation.racers[event.attacker]?.isPlayer) {
+          const attacker = simulation.racers[event.attacker];
+          // Debris off the target, away from whoever swung.
+          const away = attacker && target
+            ? { x: target.pos.x - attacker.pos.x, z: target.pos.z - attacker.pos.z }
+            : { x: 0, z: 1 };
+          this.particles.emitDirected('spark', event.pos.x, y, event.pos.z, away, 0xffe08a, 14, event.strength);
+          if (target?.isPlayer || attacker?.isPlayer) {
             this.chase.addShake(0.55 * event.strength);
+            /*
+             * The hit-pause. A landed strike is the single most decisive event
+             * in the game and it previously read as a shove; holding the frame
+             * for a few dozen milliseconds is what gives it weight.
+             */
+            this.chase.hold(0.035 + event.strength * 0.05);
           }
           break;
         }
@@ -502,6 +636,7 @@ export class GameRenderer {
       this.chase.setTrackYaw(Math.atan2(projection.tangent.z, projection.tangent.x));
       this.chase.setClearance(this.measureClearance(focus));
       this.chase.update(focus, elapsed, this.reducedMotion ? 0 : roughness);
+      this.detectNearMiss(focus, simulation, elapsed);
       this.lighting?.follow(focus.pos.x, focus.y, focus.pos.z);
       if (this.sky) {
         this.sky.mesh.position.copy(this.chase.camera.position);
@@ -510,6 +645,22 @@ export class GameRenderer {
     }
 
     this.scenery?.update(elapsed);
+    /*
+     * The crowd reacts to the *leader*, not to the player.
+     *
+     * A marshal who waves at whoever the camera is following is waving at a
+     * driver in fifth while the front of the race goes past unnoticed, which
+     * reads as a crowd that is watching the wrong thing — worse than one that
+     * does not move at all.
+     */
+    if (this.life) {
+      let leader = simulation.racers[0];
+      for (const racer of simulation.racers) {
+        const ahead = racer.lapsCompleted + racer.progress;
+        if (leader && ahead > leader.lapsCompleted + leader.progress) leader = racer;
+      }
+      if (leader) this.life.update(elapsed, leader.pos);
+    }
     this.particles.update(elapsed, this.chase.camera.quaternion);
 
     /*
@@ -571,6 +722,68 @@ export class GameRenderer {
     return clamp01(nearest.distance / 16);
   }
 
+  /**
+   * The near miss.
+   *
+   * A rival closing on the player and passing inside a few metres is the most
+   * exciting thing that happens in a race, and F7 found it had *no* feedback at
+   * all — the same silent frame as an empty straight. Two terms are both
+   * required, and the second is what makes this usable: a rival sitting
+   * alongside at matched speed for a whole straight is not a near miss and must
+   * not fire one, while the same gap closed at speed is.
+   *
+   * The cue is deliberately small — a camera kick and a whip of the rival's own
+   * dust across the frame, not a slow-motion flourish — because it fires
+   * several times a lap and anything larger becomes noise. It also drives the
+   * audio hook, which is where most of the read actually lives.
+   */
+  private detectNearMiss(focus: RacerState, simulation: Simulation, elapsed: number): void {
+    for (const key of this.nearMissCooldowns.keys()) {
+      const left = (this.nearMissCooldowns.get(key) ?? 0) - elapsed;
+      if (left <= 0) this.nearMissCooldowns.delete(key);
+      else this.nearMissCooldowns.set(key, left);
+    }
+
+    for (const rival of simulation.racers) {
+      if (rival.index === focus.index) continue;
+      if (this.nearMissCooldowns.has(rival.index)) continue;
+      const dx = rival.pos.x - focus.pos.x;
+      const dz = rival.pos.z - focus.pos.z;
+      const distance = Math.hypot(dx, dz);
+      if (distance > NEAR_MISS_DISTANCE) continue;
+      // Relative speed along the line between them: positive is separating.
+      const relative =
+        ((rival.velocity.x - focus.velocity.x) * dx + (rival.velocity.z - focus.velocity.z) * dz) / Math.max(0.01, distance);
+      if (Math.abs(relative) < NEAR_MISS_CLOSING) continue;
+
+      this.nearMissCooldowns.set(rival.index, NEAR_MISS_COOLDOWN);
+      const intensity = clamp01((NEAR_MISS_DISTANCE - distance) / NEAR_MISS_DISTANCE);
+      this.chase.addKick(intensity * 0.35);
+      /*
+       * Dust dragged off the *rival*, not off the midpoint between them.
+       *
+       * The obvious placement is halfway between the two skiffs, and it is
+       * wrong: halfway is directly in front of the chase camera, two or three
+       * metres out, so a soft particle there is metres across in screen space
+       * and smears over the road exactly when the player most needs to see it.
+       * Caught on a 320 px viewport, where it covered the racing line. A near
+       * miss fires several times a lap, so it has to be the quietest cue in the
+       * game rather than the loudest — on the rival's far flank it still reads
+       * as coming from the side they passed on and never crosses the line.
+       */
+      this.particles.emit(
+        'dust',
+        rival.pos.x + dx * 0.35,
+        rival.y + 0.3,
+        rival.pos.z + dz * 0.35,
+        this.dustColor,
+        2,
+        0.3 + intensity * 0.25,
+      );
+      this.onNearMiss?.(intensity);
+    }
+  }
+
   /** Continuous per-racer effects: tyre dust, boost flare, drift smoke. */
   private emitTrail(racer: RacerState, elapsed: number, enabled: boolean, focus: RacerState | undefined): void {
     if (!enabled) return;
@@ -593,12 +806,36 @@ export class GameRenderer {
     // the skiff is sliding, so a clean line on tarmac is visually quiet and a
     // drift on dirt throws a proper rooster tail.
     const slideFactor = clamp01(Math.abs(racer.slip) / 0.4);
-    const rate = surface.roughness * 16 * clamp01(speed / 35) + slideFactor * 13;
+    const bed = SURFACE_BEDS[racer.surface] ?? DEFAULT_BED;
+    const rate = (surface.roughness * 16 * clamp01(speed / 35) + slideFactor * 13) * bed.rate;
     const count = Math.floor(rate * elapsed + (this.elapsedTotal * 60 + racer.index) % 1);
     if (count > 0) {
-      const color = racer.surface === 'water' ? 0xcfe8ff : this.dustColor;
-      const kind = racer.surface === 'water' ? 'splash' : 'dust';
-      this.particles.emit(kind, behindX, racer.y + 0.25, behindZ, color, Math.min(count, 2), 1 + slideFactor);
+      // The bed's own colour where it has one — grass throws torn green, water
+      // throws white, salt throws something almost luminous — and the course's
+      // dust colour otherwise, so a quarry and an arcology do not kick up the
+      // same beige.
+      const color = bed.color ?? this.dustColor;
+      this.particles.emit(bed.kind, behindX, racer.y + 0.25, behindZ, color, Math.min(count, 2), (1 + slideFactor) * bed.scale);
+      /*
+       * The second layer: what the surface throws *besides* dust.
+       *
+       * F7's finding was that surface feedback is "incoherent" — every surface
+       * emitted the same grey puff at a different rate, so the tell for having
+       * left the road was quantitative rather than qualitative. A bed with its
+       * own second emitter is qualitative: grit sparks off stone, spray off
+       * water, torn growth off grass. A player learns those in one lap.
+       */
+      if (bed.secondary && slideFactor > 0.25) {
+        this.particles.emit(
+          bed.secondary.kind,
+          behindX,
+          racer.y + 0.4,
+          behindZ,
+          bed.secondary.color,
+          1,
+          slideFactor * bed.secondary.scale,
+        );
+      }
     }
 
     if (racer.boosting) {
@@ -640,6 +877,7 @@ export class GameRenderer {
     this.particles.dispose();
     this.composer?.dispose();
     disposeTextures();
+    disposeFamilyMaps();
     this.renderer.dispose();
   }
 }

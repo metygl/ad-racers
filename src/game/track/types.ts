@@ -116,12 +116,22 @@ export type SceneryKind =
  * be in a specific place, at a specific scale, and visible from more than one
  * point on the lap. The art bible asks for at least three per course.
  */
+/**
+ * A hand-placed structure at a named point on the lap.
+ *
+ * Placed by *fraction of the centreline* rather than by world coordinate, and
+ * that is the whole design of this type. A landmark's job is to mark a specific
+ * corner — "the arch at the mouth of the Nave" — and a hard-coded x/z stops
+ * meaning that the moment the corner moves by a metre during tuning. A fraction
+ * cannot drift away from the course it describes.
+ */
 export interface LandmarkDefinition {
-  kind: SceneryKind | 'archGantry' | 'condenserTower';
-  x: number;
-  z: number;
-  /** Radians about Y. */
-  rotation?: number;
+  /** An arch over the road, a standing wall alongside, or a lit mast. */
+  kind: 'arch' | 'wall' | 'beacon';
+  /** Position along the lap, 0-1. */
+  at: number;
+  /** Offset from the centreline, in multiples of the local half-width. */
+  lateral: number;
   scale?: number;
 }
 

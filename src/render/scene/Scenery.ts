@@ -5,6 +5,7 @@ import { mergeGeometries } from './mergeGeometry';
 import type { MergePart } from './mergeGeometry';
 import type { Track } from '../../game/track/buildTrack';
 import type { ObstacleDefinition, PathSample, SceneryKind, TrackTheme } from '../../game/track/types';
+import { familyMaterial } from '../materials/families';
 
 /** Multiplies a colour's lightness, keeping its hue and saturation. */
 function shade(color: number, factor: number): THREE.Color {
@@ -74,7 +75,21 @@ function applyWind(material: THREE.Material, strength: number, speed: number): {
 }
 
 /** Prototype geometry for one scenery kind, in local space, y-up from 0. */
-function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.BufferGeometry; material: THREE.Material; wind?: number } {
+interface Prototype {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
+  wind?: number;
+  /**
+   * A second instanced mesh at the same transforms, in a different material
+   * family. One extra draw call for the whole species, and the only way a
+   * single silhouette can be made of two materials.
+   */
+  extra?: { geometry: THREE.BufferGeometry; material: THREE.Material };
+  /** Emissive modulation, for anything that is a working light. */
+  flicker?: { amplitude: number; speed: number };
+}
+
+function prototype(kind: SceneryKind, theme: TrackTheme): Prototype {
   const stone = new THREE.MeshStandardMaterial({ color: theme.shoulderColor, roughness: 0.95, flatShading: true });
 
   switch (kind) {
@@ -226,17 +241,18 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
         { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 9, 0] },
         { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 5.6, 0] },
         { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 2.4, 0] },
-        // A cracked pane still in its frame.
-        { geometry: new THREE.BoxGeometry(0.04, 3.1, 2.5), position: [0, 7.4, -1.2] },
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({
-          color: shade(theme.shoulderColor, 0.9),
-          roughness: 0.45,
-          metalness: 0.55,
-          flatShading: true,
-        }),
+        // Two families in one silhouette, which is what a glazing frame *is*:
+        // the bars are painted structure, the surviving pane is glass. Merged
+        // into one mesh, one of the two has to win — and a pane that reflects
+        // like a girder is the exact failure ART-08 named.
+        material: familyMaterial('structure', { color: shade(theme.shoulderColor, 0.9), repeat: 3 }),
+        extra: {
+          geometry: new THREE.BoxGeometry(0.04, 3.1, 2.5).translate(0, 7.4, -1.2),
+          material: familyMaterial('glazing', { color: 0xcfe6f2, repeat: 2 }),
+        },
       };
     }
     case 'growthRack': {
@@ -260,11 +276,7 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({
-          color: shade(theme.terrainAccent, 1.15),
-          roughness: 0.85,
-          flatShading: true,
-        }),
+        material: familyMaterial('growth', { color: shade(theme.terrainAccent, 1.15), repeat: 2 }),
         wind: 0.6,
       };
     }
@@ -285,14 +297,17 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({
+        material: familyMaterial('emitter', {
           color: 0x2b3540,
-          emissive: new THREE.Color(0xbfe9d0),
+          emissive: 0xbfe9d0,
           emissiveIntensity: 0.28,
-          roughness: 0.5,
-          metalness: 0.4,
-          flatShading: true,
+          repeat: 2,
         }),
+        // A lamp with three centuries of corrosion in its ballast does not burn
+        // steady. The flicker is slow and shallow — enough that the course
+        // feels *alive* rather than lit, and not enough to make the thing a
+        // driver navigates by unreliable.
+        flicker: { amplitude: 0.12, speed: 1.9 },
       };
     }
     case 'fallenTruss': {
@@ -309,12 +324,7 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({
-          color: shade(theme.shoulderColor, 0.7),
-          roughness: 0.8,
-          metalness: 0.35,
-          flatShading: true,
-        }),
+        material: familyMaterial('corroded', { color: shade(theme.shoulderColor, 0.7), repeat: 3 }),
       };
     }
     case 'volunteer': {
@@ -326,11 +336,7 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({
-          color: shade(theme.terrainAccent, 1.3),
-          roughness: 0.9,
-          flatShading: true,
-        }),
+        material: familyMaterial('growth', { color: shade(theme.terrainAccent, 1.3), repeat: 2 }),
         wind: 1.6,
       };
     }
@@ -362,6 +368,7 @@ export function buildScenery(track: Track, options: SceneryOptions): SceneryResu
   const samples = track.main.samples;
   const theme = track.definition.theme;
   const clocks: { value: number }[] = [];
+  const lights: { material: THREE.MeshStandardMaterial; amplitude: number; speed: number; base: number; phase: number }[] = [];
 
   for (const spec of track.definition.scenery) {
     const rng = new Rng(hashSeed(spec.kind, track.definition.seed));
@@ -412,34 +419,51 @@ export function buildScenery(track: Track, options: SceneryOptions): SceneryResu
       { length: budget },
       (_, index) => placements[Math.floor((index * placements.length) / budget)] as (typeof placements)[number],
     );
-    const { geometry, material, wind } = prototype(spec.kind, theme);
+    const { geometry, material, wind, extra, flicker } = prototype(spec.kind, theme);
     if (wind) clocks.push(applyWind(material, wind, 1.1).time);
-    const mesh = new THREE.InstancedMesh(geometry, material, selected.length);
-    mesh.name = `scenery-${spec.kind}`;
-    mesh.castShadow = options.castShadows;
-    mesh.receiveShadow = false;
-    mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    if (flicker) lights.push({ material: material as THREE.MeshStandardMaterial, ...flicker, base: (material as THREE.MeshStandardMaterial).emissiveIntensity, phase: rng.range(0, 6.28) });
 
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3();
-    selected.forEach((p, index) => {
-      position.set(p.x, options.heightAt(p.x, p.z) - 0.2, p.z);
-      quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rotation);
-      scale.setScalar(p.scale);
-      matrix.compose(position, quaternion, scale);
-      mesh.setMatrixAt(index, matrix);
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    mesh.computeBoundingSphere();
-    group.add(mesh);
+    // Both parts of a two-family species take the same transforms, so the
+    // pane is always in the frame that goes with it.
+    for (const [partGeometry, partMaterial, suffix] of [
+      [geometry, material, ''],
+      ...(extra ? ([[extra.geometry, extra.material, '-glass']] as const) : []),
+    ] as const) {
+      const mesh = new THREE.InstancedMesh(partGeometry, partMaterial, selected.length);
+      mesh.name = `scenery-${spec.kind}${suffix}`;
+      mesh.castShadow = options.castShadows && suffix === '';
+      mesh.receiveShadow = false;
+      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+      selected.forEach((p, index) => {
+        position.set(p.x, options.heightAt(p.x, p.z) - 0.2, p.z);
+        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rotation);
+        scale.setScalar(p.scale);
+        matrix.compose(position, quaternion, scale);
+        mesh.setMatrixAt(index, matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
   }
 
+  let clock = 0;
   return {
     group,
     update: (elapsed: number) => {
-      for (const clock of clocks) clock.value += elapsed;
+      clock += elapsed;
+      for (const c of clocks) c.value += elapsed;
+      for (const light of lights) {
+        // Two incommensurate sines, so the flicker never settles into a
+        // rhythm the eye can predict and start reading as a strobe.
+        const wobble =
+          Math.sin(clock * light.speed + light.phase) * 0.7 + Math.sin(clock * light.speed * 2.7 + light.phase * 1.9) * 0.3;
+        light.material.emissiveIntensity = light.base * (1 + wobble * light.amplitude);
+      }
     },
   };
 }

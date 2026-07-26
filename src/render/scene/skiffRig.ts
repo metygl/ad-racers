@@ -61,8 +61,10 @@ export interface RigNodes {
   chassis: THREE.Object3D;
   /** Hover struts, front to back; each compresses independently. */
   struts: THREE.Object3D[];
-  /** The pilot on the spine. */
+  /** The pilot on the spine. Pivots at the hips. */
   pilot: THREE.Object3D;
+  /** The rider's helmet, which turns independently of the body. */
+  head: THREE.Object3D;
   /** The outrigger pod, which the companion rides in. */
   pod: THREE.Object3D;
   /** The companion themself, inside the pod. */
@@ -87,6 +89,12 @@ export class SkiffRig {
   private readonly bracePitch = new Spring(0, 40, 8);
   private readonly armSwing = new Spring(0, 260, 22);
   private readonly podTurn = new Spring(0, 120, 16);
+  /** Where the head is looking. Soft, so it leads in and lags out. */
+  private readonly look = new Spring(0, 34, 8);
+  /** The finish pose, eased in over about a second. */
+  private readonly celebrate = new Spring(0, 26, 10);
+  private celebrating = 0;
+  private readonly pilotRest: number;
 
   private previousSpeed = 0;
   private previousVertical = 0;
@@ -100,6 +108,19 @@ export class SkiffRig {
     private readonly placement: StrutPlacement,
   ) {
     this.strutSprings = placement.map(() => new Spring(0, 190, 15));
+    this.pilotRest = nodes.pilot.position.y;
+  }
+
+  /**
+   * Puts the rider into (or out of) the finish pose.
+   *
+   * `intensity` is 0 for a result worth nothing and 1 for a win, so a sixth
+   * place gets a rider slumped over the bars rather than a celebration the
+   * player did not earn — which is the difference between a reward and a
+   * participation trophy.
+   */
+  setCelebration(intensity: number): void {
+    this.celebrating = intensity;
   }
 
   reset(racer: RacerState): void {
@@ -108,6 +129,9 @@ export class SkiffRig {
     this.pitch.reset(0);
     for (const spring of this.strutSprings) spring.reset(0);
     this.braceRoll.reset(0);
+    this.look.reset(0);
+    this.celebrate.reset(0);
+    this.celebrating = 0;
     this.bracePitch.reset(0);
     this.previousSpeed = Math.hypot(racer.velocity.x, racer.velocity.z);
     this.previousVertical = racer.verticalVelocity;
@@ -219,6 +243,35 @@ export class SkiffRig {
     // The pilot is strapped to the spine, so they move less and sooner.
     nodes.pilot.rotation.x = clamp(-this.roll.value * 0.55, -0.4, 0.4);
     nodes.pilot.rotation.z = clamp(-this.pitch.value * 0.6, -0.35, 0.35);
+
+    /*
+     * The rider's expression: three states, and each one is information.
+     *
+     * - **Tucked.** Speed folds them down over the tank; lifting stands them
+     *   up. This is a *speed* readout on the one object always in frame, and it
+     *   is the reason the pose is driven by speed rather than by throttle.
+     * - **Looking through the corner.** The head turns towards where the skiff
+     *   is going, not where it is pointing — which in a drift are different,
+     *   and the difference is exactly what the player wants to know.
+     * - **Braced.** Under a heavy hit the whole body folds and the head drops.
+     *   A rider who never flinches makes contact feel like nothing happened.
+     *
+     * `celebration` is set by the finish sequence and overrides the tuck: at
+     * the flag they come off the bars, sit up and put an arm in the air.
+     */
+    const tuck = clamp01(Math.hypot(racer.velocity.x, racer.velocity.z) / 48);
+    const slump = clamp01(this.shudder * 2.2);
+    this.celebrate.step(this.celebrating, dt);
+    const cheer = this.celebrate.value;
+    nodes.pilot.rotation.z += 0.3 * tuck * (1 - cheer) - 0.45 * slump + 0.5 * cheer;
+    nodes.pilot.position.y = this.pilotRest - 0.05 * tuck * (1 - cheer) - 0.07 * slump + 0.06 * cheer;
+
+    // The head leads the body into the corner and lags coming out, because
+    // that is the order a person does it in.
+    const lookTarget = clamp(-racer.slip * 1.1 - racer.steer * 0.4, -0.85, 0.85);
+    const look = this.look.step(slump > 0.3 ? 0 : lookTarget, dt);
+    nodes.head.rotation.y = look;
+    nodes.head.rotation.z = -0.4 * slump + 0.12 * cheer;
 
     /*
      * Height-aware shadow.

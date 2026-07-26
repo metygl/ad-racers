@@ -218,6 +218,45 @@ export class ParticleSystem {
   }
 
   /**
+   * A burst thrown along a contact normal.
+   *
+   * Motion finding F6's third part: an impact that sprays debris uniformly in
+   * every direction tells the player *that* something happened. Debris thrown
+   * back along the normal of the contact tells them *where they were hit*,
+   * which is the difference between a hit that is confusing and a hit that is
+   * information — and on a six-car grid it is often the only cue that says
+   * which side the rival came from.
+   *
+   * The normal is supplied by the caller, which computes it from the two
+   * positions the simulation reported. Nothing about this feeds back.
+   */
+  emitDirected(
+    kind: ParticleKind,
+    x: number,
+    y: number,
+    z: number,
+    normal: { x: number; z: number },
+    color: THREE.ColorRepresentation,
+    count: number,
+    intensity = 1,
+  ): void {
+    const length = Math.hypot(normal.x, normal.z) || 1;
+    const nx = normal.x / length;
+    const nz = normal.z / length;
+    const before = this.cursor;
+    this.emit(kind, x, y, z, color, count, intensity);
+    // Rewrite the velocities the base emitter randomised: keep its spread, but
+    // bias it hard along the normal so the cone points away from the contact.
+    for (let i = 0; i < count; i++) {
+      const p = this.pool[(before + i) % this.pool.length] as Particle;
+      const speed = Math.hypot(p.vx, p.vz);
+      p.vx = nx * speed * 1.5 + p.vx * 0.35;
+      p.vz = nz * speed * 1.5 + p.vz * 0.35;
+      p.vy = Math.abs(p.vy) * 0.7 + 1.2 * intensity;
+    }
+  }
+
+  /**
    * Advances every live particle and rewrites the instance buffers.
    * `cameraQuaternion` billboards the quads.
    */

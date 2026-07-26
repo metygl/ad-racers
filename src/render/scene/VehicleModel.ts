@@ -4,7 +4,7 @@ import { COMBAT, DRIFT, TOW } from '../../game/config';
 import type { RacerProfile } from '../../game/racers';
 import type { RacerState } from '../../game/sim/state';
 import { SURFACES } from '../../game/track/types';
-import { particleTexture } from '../textures/procedural';
+import { helmetTexture, liveryTexture, particleTexture, plateTexture } from '../textures/procedural';
 import { SkiffRig } from './skiffRig';
 import { mergeGeometries } from './mergeGeometry';
 import type { MergePart } from './mergeGeometry';
@@ -141,11 +141,28 @@ export interface VehicleVisual {
    * deterministic.
    */
   setSwingLanded: (landed: boolean) => void;
+  /** Finish pose, 0 for last place through 1 for a win. */
+  setCelebration: (intensity: number) => void;
   dispose: () => void;
 }
 
-function panel(color: number, roughness = 0.55, metalness = 0.35): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, roughness, metalness, flatShading: true });
+/**
+ * A hull panel.
+ *
+ * Every one carries the shared plating map: seams, rivets, streaks and scrapes.
+ * A flat-shaded box in a crew colour has no *surface*, and that was the largest
+ * single component of the art review's "placeholder-level" verdict — these are
+ * three-hundred-year-old machines rebuilt in a shed, and their plating should
+ * read as panels that were cut, bolted and then weathered at different rates.
+ *
+ * The map is shared and its repeat is per material, so the whole grid still
+ * costs one texture.
+ */
+function panel(color: number, roughness = 0.55, metalness = 0.35, repeat = 1.6): THREE.MeshStandardMaterial {
+  const map = plateTexture().clone();
+  map.needsUpdate = true;
+  map.repeat.set(repeat, repeat);
+  return new THREE.MeshStandardMaterial({ color, map, roughness, metalness, flatShading: true });
 }
 
 export function buildVehicle(profile: RacerProfile, castShadow: boolean): VehicleVisual {
@@ -194,7 +211,7 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   // Kept below the bloom threshold on every course: this exists so the hull is
   // *visible* after dark, not so it glows.
   body.emissiveIntensity = 0.12;
-  const dark = panel(0x1b1f26, 0.7, 0.2);
+  const dark = panel(0x1b1f26, 0.7, 0.2, 2.4);
   const disposables: (THREE.BufferGeometry | THREE.Material)[] = [body, trim, dark];
 
   const noseLength = 1.8 * fin.nose;
@@ -350,23 +367,197 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     ]),
   );
   disposables.push(strutGeometry);
-  const struts = fin.struts.map((along) => {
-    const strut = new THREE.Mesh(strutGeometry, dark);
-    strut.position.set((along * HULL_LENGTH) / 2, 0.16, 0);
-    strut.castShadow = castShadow;
-    chassis.add(strut);
-    return strut;
+  /*
+   * All of a skiff's strut stations are one instanced draw.
+   *
+   * Merging the two sides of a station halved the cost once; instancing the
+   * stations finishes the job. Three or four stations per skiff, six skiffs and
+   * a shadow pass is between thirty-six and forty-eight draw calls for the
+   * suspension alone, and the suspension is not what the frame is about.
+   *
+   * Each station still moves independently — that is the entire point of having
+   * them — so the rig writes a per-instance matrix rather than a node
+   * transform. `StrutProxy` gives it the same `position.y` interface it had
+   * when these were nodes, so the rig does not have to know.
+   */
+  const strutMesh = new THREE.InstancedMesh(strutGeometry, dark, fin.struts.length);
+  strutMesh.name = 'struts';
+  strutMesh.castShadow = castShadow;
+  strutMesh.frustumCulled = false;
+  strutMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  chassis.add(strutMesh);
+
+  const strutMatrix = new THREE.Matrix4();
+  const struts = fin.struts.map((along, index) => {
+    const proxy = new THREE.Object3D();
+    proxy.position.set((along * HULL_LENGTH) / 2, 0.16, 0);
+    // Seed the buffer, so a skiff drawn before its first rig update is not a
+    // pile of struts at the origin.
+    strutMatrix.makeTranslation(proxy.position.x, proxy.position.y, proxy.position.z);
+    strutMesh.setMatrixAt(index, strutMatrix);
+    return proxy;
   });
+  strutMesh.instanceMatrix.needsUpdate = true;
+
+  /** Pushes the proxies' positions into the instance buffer. */
+  const syncStruts = (): void => {
+    struts.forEach((proxy, index) => {
+      strutMatrix.makeTranslation(proxy.position.x, proxy.position.y, proxy.position.z);
+      strutMesh.setMatrixAt(index, strutMatrix);
+    });
+    strutMesh.instanceMatrix.needsUpdate = true;
+  };
 
   // --- animated parts ------------------------------------------------------
   // These move independently, so they stay separate: an incoming strike has to
   // be readable, and a rider slumping when struck is the clearest tell there is.
-  const pilotGeometry = new THREE.CapsuleGeometry(0.28, 0.46, 3, 6);
-  const pilot = new THREE.Mesh(pilotGeometry, trim);
-  pilot.position.set(-0.3, 1.76, 0);
-  pilot.castShadow = castShadow;
+
+  /*
+   * The rider.
+   *
+   * The art review's single word for the crews was "placeholder", and a capsule
+   * on the spine was the most literal example of it in the game: at any
+   * distance it read as cargo. A rider is what makes a skiff a machine somebody
+   * is *driving*, and the parts that carry that are entirely conventional —
+   * shoulders that are wider than the hips, arms that reach forward to
+   * something, a head that sits above and behind them, and a helmet with a
+   * visor. None of it is detailed; all of it is proportioned.
+   *
+   * The body is one merged mesh and the head is a second, and the split is not
+   * arbitrary. Two of the three things a rider has to say — *braced* and
+   * *hit* — are said by the torso, and the third, *where they are looking*, can
+   * only be said by a head that turns independently. Six cars pay two draw
+   * calls each for that, which is the cheapest characterisation in the game.
+   */
+  const GEAR = 0x2a2f36;
+  const riderBodyParts: MergePart[] = [
+    // Hips, sunk into the spine: the rider sits *in* the machine.
+    { geometry: new THREE.BoxGeometry(0.34, 0.26, 0.42), position: [-0.06, -0.3, 0], color: GEAR },
+    // Torso, tapering up to the shoulders and leaning forward over the tank.
+    { geometry: new THREE.BoxGeometry(0.44, 0.5, 0.46), position: [0.05, -0.02, 0], rotation: [0, 0, 0.22], color: GEAR },
+    // Shoulders — the widest point, which is what makes the silhouette human.
+    { geometry: new THREE.BoxGeometry(0.26, 0.2, 0.62), position: [0.12, 0.2, 0], color: GEAR },
+    // Upper arms, out and forward to the grips.
+    ...[-1, 1].map((side): MergePart => ({
+      geometry: new THREE.CylinderGeometry(0.075, 0.085, 0.44, 5),
+      position: [0.26, 0.06, side * 0.29],
+      rotation: [0, 0, -1.05],
+      color: GEAR,
+    })),
+    // Forearms, down onto the bars. Two segments rather than one straight rod:
+    // a bent elbow is most of what says a person is holding on.
+    ...[-1, 1].map((side): MergePart => ({
+      geometry: new THREE.CylinderGeometry(0.06, 0.07, 0.34, 5),
+      position: [0.5, -0.08, side * 0.31],
+      rotation: [0, 0, -0.55],
+      color: GEAR,
+    })),
+    // Knees, drawn up under the tank.
+    ...[-1, 1].map((side): MergePart => ({
+      geometry: new THREE.BoxGeometry(0.4, 0.18, 0.16),
+      position: [0.16, -0.4, side * 0.19],
+      rotation: [0, 0, 0.35],
+      color: GEAR,
+    })),
+    // The shoulder yoke, in the crew's colour: one bright horizontal at the top
+    // of the body, which is what says "this rider is on that team" at 40 m.
+    // A vertex colour rather than a second material, so the rider is one draw.
+    {
+      geometry: new THREE.BoxGeometry(0.24, 0.11, 0.66),
+      position: [0.12, 0.22, 0],
+      color: profile.colors.trim,
+    },
+  ];
+  /*
+   * The rider wears the crew's colour, they are not *made* of it.
+   *
+   * Built in the trim material, the rider merged into the roll hoop and the
+   * flank stripes around them and the whole assembly read as one pale lump.
+   * A person is legible because they are a *different* value from the machine
+   * they are sitting on — dark gear, one bright band at the eyes — which is
+   * exactly how a real rider reads against a bike at distance. The shoulders
+   * keep the crew colour so the affiliation still carries.
+   */
+  const gear = panel(0xffffff, 0.86, 0.05, 3.2);
+  gear.vertexColors = true;
+  disposables.push(gear);
+  const riderGeometry = mergeGeometries(riderBodyParts);
+  const riderBody = new THREE.Mesh(riderGeometry, gear);
+  riderBody.castShadow = castShadow;
+  disposables.push(riderGeometry);
+
+  /*
+   * The helmet.
+   *
+   * A cylinder rather than a sphere, because the visor has to be a *band* and a
+   * band wraps a cylinder without the texture pinching at the poles. The visor
+   * lives in the emissive map, so it survives a night course — an unlit visor
+   * disappears exactly when the silhouette matters most, and a head with no
+   * bright band at 30 px on screen is a lump rather than a person.
+   */
+  const helmetMaps = helmetTexture(profile.colors.trim);
+  const helmetMaterial = new THREE.MeshStandardMaterial({
+    map: helmetMaps.map,
+    emissiveMap: helmetMaps.emissive,
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity: 0.85,
+    roughness: 0.32,
+    metalness: 0.1,
+  });
+  disposables.push(helmetMaterial);
+  const helmetGeometry = mergeGeometries([
+    { geometry: new THREE.CylinderGeometry(0.19, 0.185, 0.34, 12), position: [0, 0, 0], rotation: [HALF_PI, 0, 0] },
+    // The chin bar, which is what stops the head reading as a ball.
+    { geometry: new THREE.BoxGeometry(0.2, 0.12, 0.3), position: [0.15, -0.09, 0] },
+  ]);
+  const head = new THREE.Mesh(helmetGeometry, helmetMaterial);
+  head.position.set(0.02, 0.42, 0);
+  head.castShadow = castShadow;
+  disposables.push(helmetGeometry);
+
+  /*
+   * Both hang off a pivot at the hips rather than off the chassis directly.
+   *
+   * The rider's poses are all rotations about where they are strapped in, so a
+   * lean and a slump both have to turn about a point low in the body. Rotating
+   * a mesh whose origin is at its centre pivots them about the sternum, which
+   * reads as a doll being tipped rather than a person bracing.
+   */
+  const pilot = new THREE.Group();
+  pilot.position.set(-0.3, 1.5, 0);
+  pilot.add(riderBody);
+  pilot.add(head);
   chassis.add(pilot);
-  disposables.push(pilotGeometry);
+
+  /*
+   * The flank livery: crew mark, number and hand-lettering.
+   *
+   * A decal quad on each side, both merged into one mesh. Drawn rather than
+   * modelled, because geometry for a race number costs draw calls on the one
+   * part of the skiff a player only ever sees in profile, and because paint is
+   * what team graphics actually *are*.
+   */
+  const liveryMaterial = new THREE.MeshBasicMaterial({
+    map: liveryTexture(profile.id, profile.colors.trim, profile.id.length * 37 + profile.id.charCodeAt(0)),
+    transparent: true,
+    // Painted onto the hull, so it must never light differently from it and
+    // must never sort in front of the thruster glow.
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  });
+  disposables.push(liveryMaterial);
+  const liveryGeometry = mergeGeometries(
+    [-1, 1].map((side): MergePart => ({
+      geometry: new THREE.PlaneGeometry(1.7, 0.85),
+      position: [0.1, 0.62, side * (halfWidth + 0.05)],
+      rotation: [0, side * HALF_PI, 0],
+    })),
+  );
+  const livery = new THREE.Mesh(liveryGeometry, liveryMaterial);
+  livery.name = 'livery';
+  chassis.add(livery);
+  disposables.push(liveryGeometry);
 
   /*
    * Exhaust glow: camera-facing additive discs, not a cone. A solid cone
@@ -656,6 +847,7 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
       chassis,
       struts,
       pilot,
+      head,
       pod,
       companion: wrench,
       arm,
@@ -682,6 +874,7 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     const speedFactor = clamp01(speed / 50);
 
     rig.update(racer, dt, SURFACES[racer.surface].roughness);
+    syncStruts();
     rig.updateArm(racer, dt, COMBAT.windup, COMBAT.recovery, swingLanded);
 
     /*
@@ -757,6 +950,9 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     group,
     update,
     knock: (strength: number) => rig.knock(strength),
+    setCelebration: (intensity: number) => {
+      rig.setCelebration(intensity);
+    },
     setSwingLanded: (landed: boolean) => {
       swingLanded = landed;
     },

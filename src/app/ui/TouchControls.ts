@@ -210,6 +210,27 @@ export class TouchControls {
    * keyboard-only recovery prompt. A touch player could not finish. Asserting
    * the state every time costs nothing and cannot go stale.
    */
+  /**
+   * The fraction of the viewport's height the controls actually cover.
+   *
+   * Measured from the live layout rather than guessed from a breakpoint, so a
+   * tablet with small controls and a phone in portrait each get a correction
+   * proportional to the real obstruction. The camera uses it to compose the
+   * action *above* the controls, which is the half of ART-12 that moving the
+   * HUD out of the way could never fix — the thing in the covered band is the
+   * road and the machine.
+   */
+  occludedFraction(): number {
+    if (this.root.hidden) return 0;
+    const viewport = window.innerHeight || 1;
+    let highest = viewport;
+    for (const zone of [this.steerTrack, ...Array.from(this.root.querySelectorAll<HTMLElement>('.touch__right, .touch__utility'))]) {
+      const box = zone.getBoundingClientRect();
+      if (box.height > 0) highest = Math.min(highest, box.top);
+    }
+    return Math.max(0, Math.min(0.5, (viewport - highest) / viewport));
+  }
+
   show(): void {
     this.root.hidden = false;
     this.input.setTouchState({ accelerate: true });

@@ -23,6 +23,14 @@ export interface QualitySettings {
   sceneryDensity: number;
   /** Distance beyond which scenery instances are culled, metres. */
   sceneryDistance: number;
+  /**
+   * Multiplier on the ambient-life populations — marshals, motes, flock.
+   *
+   * Separate from `sceneryDensity` because life is not set dressing that scales
+   * with it. A course with a *thin* crowd still reads as attended; a course
+   * with none reads as abandoned, so even the low tier keeps some.
+   */
+  lifeDensity: number;
   /** Maximum simultaneous particles. */
   particleBudget: number;
   /** Terrain grid spacing, metres. Larger is cheaper. */
@@ -55,6 +63,7 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     shadowRadius: 60,
     sceneryDensity: 0.35,
     sceneryDistance: 260,
+    lifeDensity: 0.4,
     particleBudget: 120,
     terrainResolution: 10,
     speedEffects: false,
@@ -71,6 +80,7 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     shadowRadius: 85,
     sceneryDensity: 0.7,
     sceneryDistance: 420,
+    lifeDensity: 0.75,
     particleBudget: 340,
     terrainResolution: 6,
     speedEffects: true,
@@ -87,6 +97,7 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     shadowRadius: 110,
     sceneryDensity: 1,
     sceneryDistance: 650,
+    lifeDensity: 1,
     particleBudget: 800,
     terrainResolution: 4,
     speedEffects: true,

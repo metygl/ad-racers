@@ -6,6 +6,7 @@ import {
   FIXED_STEP,
   HOP,
   LANDING,
+  PHYSICS,
   RECOVERY,
   SPEED_CLASSES,
   TOW,
@@ -513,4 +514,111 @@ describe('the mastery gradient', () => {
     });
     expect(result.sim.player?.completed).toBe(true);
   }, 120_000);
+});
+
+describe('the body-angle bound', () => {
+  /**
+   * Motion finding F4 asked for an explicit limit on how far the body may be
+   * *held* crossed up. Grip alone gives a slide an equilibrium but not a bound,
+   * so a hit or a bad landing on a low-grip surface can leave the machine
+   * sustaining an angle no driver would hold, with the nose pointing somewhere
+   * the skiff is never going to go.
+   */
+  it('turns the nose back towards the direction of travel past the bound', () => {
+    const { sim, racer } = solo('saltflat-reliquary');
+    upToSpeed(sim, racer);
+
+    /*
+     * Put the skiff in the state the finding describes, directly.
+     *
+     * No sequence of inputs reaches it — the tyre model is strong enough that
+     * even full lock with drift held settles around 0.5 rad — which is exactly
+     * why the bound exists for the cases inputs do *not* produce: a heavy
+     * strike, a landing gone wrong, a wall. Writing the velocity is the only
+     * way to test the mechanism rather than the tyre curve in front of it.
+     */
+    const forward = fromHeading(racer.heading);
+    const right = { x: -Math.sin(racer.heading), z: Math.cos(racer.heading) };
+    const speed = speedOf(racer);
+    // Almost pure lateral. The longitudinal component has to stay small,
+    // because the tyre curve multiplies grip by more than ten past the peak
+    // slip angle and bleeds an ordinary slide back under the bound inside a
+    // single step — which is the whole reason inputs cannot reach this state.
+    racer.velocity.x = forward.x * speed * 0.02 + right.x * speed;
+    racer.velocity.z = forward.z * speed * 0.02 + right.z * speed;
+
+    // One step to let the simulation measure the attitude it has been handed.
+    run(sim, FIXED_STEP, emptyInput());
+    expect(Math.abs(racer.slip)).toBeGreaterThan(PHYSICS.bodyAngleMax);
+
+    // With no steering input there is no other source of yaw, so any change in
+    // heading over the next step is the bound and nothing else.
+    const before = racer.heading;
+    const slipSign = Math.sign(racer.slip);
+    run(sim, FIXED_STEP, emptyInput());
+    const turned = wrapAngle(racer.heading - before);
+
+    expect(turned).not.toBe(0);
+    // Towards the direction of travel: opposite in sign to the slip.
+    expect(Math.sign(turned)).toBe(-slipSign);
+  });
+
+  it('leaves ordinary drifting completely alone', () => {
+    /*
+     * The bound has to be invisible in normal driving or it is a handling
+     * change wearing a readability argument — and it twice was not. An earlier
+     * version measured the *pre-grip* angle, which is much larger than the
+     * settled one because within a step the body rotates before the tyres pull
+     * the velocity round with it. A later one measured the right angle at too
+     * tight a threshold. Both cost the Ace field about a second a lap on the
+     * salt and inverted the difficulty ladder, which the AI suite caught and
+     * this test exists to catch sooner and more cheaply.
+     */
+    const { sim, racer } = solo('saltflat-reliquary');
+    upToSpeed(sim, racer);
+
+    let clamped = 0;
+    for (let i = 0; i < Math.ceil(6 / FIXED_STEP); i++) {
+      // A committed but ordinary drift: three quarters of lock, held.
+      sim.step({ ...emptyInput(), throttle: 1, steer: 0.75, drift: true });
+      sim.drainEvents();
+      if (Math.abs(racer.slip) > PHYSICS.bodyAngleMax) clamped += 1;
+    }
+    expect(clamped).toBe(0);
+  });
+
+  it('never lets the body sit far from the road, on any course', () => {
+    /*
+     * The invariant F4 is actually about, asserted on the quantity it names:
+     * the body's angle against the *track tangent*, not against its own
+     * velocity. A skiff can be at a modest slip angle and still be pointing a
+     * long way off the road through a corner, and the second is what a player
+     * reads as coherent or broken.
+     *
+     * Measured rather than assumed. Across full Ace fields on all four courses
+     * the peak sits between 0.66 and 1.14 rad and the 99.99th percentile at or
+     * under 1.2, so the tyre model already holds the body inside a readable
+     * envelope and `bodyAngleMax` is a guard rail above it rather than a
+     * clamp that shapes normal racing. This test is what keeps that true: it
+     * fails if a future tuning change lets the field sit sideways, whether or
+     * not the guard rail catches it.
+     */
+    for (const trackId of ['saltflat-reliquary', 'overgrown-interchange', 'emberfall-quarry', 'glasshouse-vigil']) {
+      let peak = 0;
+      runHeadlessRace({
+        trackId,
+        difficultyId: 'ace',
+        playerIndex: null,
+        maxSeconds: 400,
+        onStep: (sim) => {
+          for (const r of sim.racers) {
+            const projection = sim.track.project(r.pos, r.path);
+            const tangent = Math.atan2(projection.tangent.z, projection.tangent.x);
+            peak = Math.max(peak, Math.abs(wrapAngle(r.heading - tangent)));
+          }
+        },
+      });
+      expect(peak, `${trackId}: body angle against the road`).toBeLessThan(PHYSICS.bodyAngleMax);
+    }
+  });
 });

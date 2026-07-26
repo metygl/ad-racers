@@ -40,6 +40,7 @@ type OneShot =
   | 'hop'
   | 'land'
   | 'towSnap'
+  | 'nearMiss'
   | 'lap'
   | 'finish'
   | 'uiMove'
@@ -181,6 +182,15 @@ export class AudioEngine {
     this.buffers.set('hop', this.buffer(context, 0.22, noiseBurst(Math.floor(0.22 * rate), rate, { seed: 71, decay: 26, lowpass: 1800, resonance: 0.3 })));
     this.buffers.set('land', this.buffer(context, 0.36, noiseBurst(Math.floor(0.36 * rate), rate, { seed: 83, decay: 15, lowpass: 620, resonance: 0.45 })));
     this.buffers.set('towSnap', this.buffer(context, 0.55, sweep(Math.floor(0.55 * rate), rate, { from: 260, to: 1500, decay: 5, noise: 0.42, seed: 97 })));
+    /*
+     * The near miss: a doppler whoosh that arrives and leaves.
+     *
+     * Rising *then* falling, which is the whole cue — a rival going past is the
+     * one sound in the mix that has to say "that came from beside me and is now
+     * behind me", and a flat noise burst says only "something happened". It is
+     * quiet by design; this fires several times a lap.
+     */
+    this.buffers.set('nearMiss', this.buffer(context, 0.42, sweep(Math.floor(0.42 * rate), rate, { from: 1400, to: 380, decay: 7, noise: 0.85, seed: 131 })));
     this.buffers.set('lap', this.buffer(context, 0.5, tone(Math.floor(0.5 * rate), rate, { frequency: 784, decay: 6, harmonics: [1, 0.3, 0.15] })));
     this.buffers.set('finish', this.buffer(context, 1.4, tone(Math.floor(1.4 * rate), rate, { frequency: 523.25, decay: 2.2, harmonics: [1, 0.5, 0.3, 0.18, 0.1] })));
     this.buffers.set('uiMove', this.buffer(context, 0.08, tone(Math.floor(0.08 * rate), rate, { frequency: 620, decay: 40, harmonics: [1] })));

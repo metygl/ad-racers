@@ -18,11 +18,24 @@ export interface MergePart {
   position?: [number, number, number];
   rotation?: [number, number, number];
   scale?: [number, number, number];
+  /**
+   * Per-part colour, written into a vertex-colour attribute.
+   *
+   * The escape hatch for the one case merging cannot otherwise reach: an
+   * assembly whose parts are different *colours* but the same material. A
+   * rider's dark gear and their crew-coloured shoulder yoke are two draw calls
+   * as two materials and one as two vertex colours, and six skiffs make that
+   * difference six times over. Supply it on every part or none — a mixed set
+   * would leave the rest black.
+   */
+  color?: THREE.ColorRepresentation;
 }
 
 export function mergeGeometries(parts: readonly MergePart[]): THREE.BufferGeometry {
   const positions: number[] = [];
   const normals: number[] = [];
+  const colors: number[] = [];
+  const tint = new THREE.Color();
   const matrix = new THREE.Matrix4();
   const normalMatrix = new THREE.Matrix3();
   const vector = new THREE.Vector3();
@@ -47,6 +60,10 @@ export function mergeGeometries(parts: readonly MergePart[]): THREE.BufferGeomet
         vector.fromBufferAttribute(normalAttribute, i).applyMatrix3(normalMatrix).normalize();
         normals.push(vector.x, vector.y, vector.z);
       }
+      if (part.color !== undefined) {
+        tint.set(part.color);
+        colors.push(tint.r, tint.g, tint.b);
+      }
     }
 
     if (source !== part.geometry) source.dispose();
@@ -59,6 +76,9 @@ export function mergeGeometries(parts: readonly MergePart[]): THREE.BufferGeomet
     merged.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   } else {
     merged.computeVertexNormals();
+  }
+  if (colors.length === positions.length) {
+    merged.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   }
   merged.computeBoundingSphere();
   return merged;

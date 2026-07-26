@@ -77,6 +77,18 @@ type RaceMode = 'single' | 'circuit';
  */
 const RESOLVE_STEPS_PER_FRAME = 160;
 
+/**
+ * How long the finish camera runs before the results screen.
+ *
+ * Measured against the resolve, which takes about a second of real time to
+ * finish the field behind the player — so the beat costs the player almost
+ * nothing they were not already waiting for, and buys the one shot in the game
+ * that shows the machine they have been driving from outside.
+ */
+const FINISH_HOLD = 2.1;
+/** The same beat without the orbit, for reduced motion. */
+const FINISH_HOLD_REDUCED = 0.9;
+
 export interface AppOptions {
   root: HTMLElement;
   canvas: HTMLCanvasElement;
@@ -110,6 +122,8 @@ export class App {
   private screen: ScreenName = 'loading';
   private previousScreen: ScreenName = 'title';
   private paused = false;
+  /** Seconds of finish camera left before the results screen. */
+  private finishHold = 0;
   private accumulator = 0;
   private lastFrame = 0;
   private frameHandle = 0;
@@ -199,6 +213,12 @@ export class App {
       this.showUnsupported(error);
       return;
     }
+
+    // The renderer detects near misses because it is what holds the field and
+    // the camera; it has no business making a sound, so it calls back here.
+    this.renderer.onNearMiss = (intensity) => {
+      this.audio.play('nearMiss', { volume: 0.3 + intensity * 0.45 });
+    };
 
     this.handleResize();
     // Warm the first track so the first race does not stall on spline building.
@@ -297,6 +317,16 @@ export class App {
     // The HUD gives ground to the thumbs only while they are actually there.
     document.documentElement.classList.toggle('touch-active', touchDriving);
     this.hud.setTouch(shouldUseTouch());
+    /*
+     * Tell the camera how much of the frame the thumbs are standing in.
+     *
+     * Read after the class toggle, on the next frame, because the controls'
+     * layout depends on it — measuring first would report the previous
+     * viewport's band. Desktop passes 0 and nothing changes.
+     */
+    requestAnimationFrame(() => {
+      this.renderer?.chase.setOccludedBand(touchDriving ? this.touch.occludedFraction() : 0);
+    });
   }
 
   private showScreen(name: ScreenName, content?: HTMLElement): void {
@@ -815,6 +845,9 @@ export class App {
     const width = Math.max(1, this.root.clientWidth || window.innerWidth);
     const height = Math.max(1, this.root.clientHeight || window.innerHeight);
     this.renderer?.setSize(width, height);
+    // A rotation changes both the viewport and the controls' footprint, so the
+    // composition correction has to be re-measured with the new layout.
+    this.renderer?.chase.setOccludedBand(this.touch.occludedFraction());
   };
 
   private handleVisibility = (): void => {
@@ -920,14 +953,55 @@ export class App {
         renderer.consumeEvents(events, simulation);
         this.hud.handleEvents(events, simulation);
         this.audio.handleEvents(events, simulation, renderer.chase.listenerYaw);
+        /*
+         * The finish moment.
+         *
+         * Starts the instant the *player* crosses the line, not when the field
+         * finishes — the reward belongs to the player's own flag. The camera
+         * swings out to a low three-quarter orbit and the rider comes off the
+         * bars, scaled by the result: a win gets an arm in the air, a sixth
+         * gets a rider slumped over the tank. ART-10's finding was that
+         * finishing had no spectacle at all; the race simply stopped and a
+         * table appeared.
+         */
+        for (const event of events) {
+          if (event.type !== 'finish') continue;
+          const finisher = simulation.racers[event.racer];
+          if (!finisher?.isPlayer) continue;
+          const field = Math.max(1, simulation.racers.length - 1);
+          const celebration = clamp01(1 - (event.position - 1) / field);
+          renderer.setCelebration(event.racer, celebration);
+          // Reduced motion keeps the beat and drops the orbit: the camera holds
+          // a steady three-quarter view rather than travelling around the car.
+          if (!this.save.settings.reducedMotion) renderer.chase.startFinish();
+        }
+
         if (events.some((event) => event.type === 'raceEnd')) {
-          this.finishRace();
-          return;
+          /*
+           * The results screen waits out an authored beat rather than cutting.
+           *
+           * Long enough for the orbit to read and for the crowd reaction and
+           * the rider's pose to land, short enough that a player replaying a
+           * course for the tenth time is not held. Reduced motion keeps a
+           * shorter beat rather than none, so the transition is still a
+           * transition.
+           */
+          this.finishHold = this.save.settings.reducedMotion ? FINISH_HOLD_REDUCED : FINISH_HOLD;
         }
       }
 
       this.audio.updateEngines(simulation, renderer.chase.listenerYaw);
       this.hud.update(simulation, elapsed);
+
+      if (this.finishHold > 0) {
+        this.finishHold -= elapsed;
+        if (this.finishHold <= 0) {
+          renderer.chase.endFinish();
+          renderer.render(simulation, 0);
+          this.finishRace();
+          return;
+        }
+      }
     } else {
       this.input.poll(elapsed);
     }

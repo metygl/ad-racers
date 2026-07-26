@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { distance, wrapAngle } from '../../src/core/math';
-import { FIXED_STEP } from '../../src/game/config';
+import { FIXED_STEP, PHYSICS } from '../../src/game/config';
 import { Track, sampleAt } from '../../src/game/track/buildTrack';
 import { Simulation } from '../../src/game/sim/simulation';
 import { emptyInput } from '../../src/game/sim/state';
@@ -382,5 +382,52 @@ describe('driving every shortcut', () => {
         expect(Math.hypot(racer.velocity.x, racer.velocity.z)).toBeGreaterThan(10);
       });
     }
+  }
+});
+
+describe('landmarks', () => {
+  /**
+   * Landmarks are placed by *fraction of the centreline* rather than by world
+   * coordinate, precisely so they cannot drift away from the corner they are
+   * meant to mark during tuning. These assert the two things that placement
+   * has to guarantee: that every landmark resolves onto the course, and that
+   * nothing solid stands where a car can legitimately be flung.
+   */
+  for (const definition of TRACK_DEFINITIONS) {
+    const landmarks = definition.landmarks ?? [];
+    if (landmarks.length === 0) continue;
+
+    it(`${definition.name}: every landmark stands clear of the run-off`, () => {
+      const track = getTrack(definition.id);
+      const samples = track.main.samples;
+
+      for (const landmark of landmarks) {
+        expect(landmark.at).toBeGreaterThanOrEqual(0);
+        expect(landmark.at).toBeLessThanOrEqual(1);
+
+        const index = Math.min(samples.length - 1, Math.round(landmark.at * samples.length));
+        const sample = samples[index];
+        if (!sample) throw new Error('landmark resolved off the course');
+
+        const lateral = landmark.lateral * sample.halfWidth;
+        const x = sample.pos.x + sample.normal.x * lateral;
+        const z = sample.pos.z + sample.normal.z * lateral;
+
+        /*
+         * An arch is the deliberate exception: it spans the road, so its
+         * *centre* is on the centreline and what has to clear the run-off is
+         * its legs. Everything else is measured where it stands.
+         */
+        const clearance = sample.halfWidth + PHYSICS.offTrackMargin * 0.8;
+        if (landmark.kind === 'arch') {
+          // The rib's half-span, from the builder: 44 m at scale 1.
+          const halfSpan = (44 * (landmark.scale ?? 1)) / 2;
+          expect(halfSpan).toBeGreaterThan(clearance);
+        } else {
+          const projection = track.project({ x, z });
+          expect(Math.abs(projection.lateral)).toBeGreaterThan(clearance);
+        }
+      }
+    });
   }
 });

@@ -188,6 +188,23 @@ export const GLASSHOUSE_VIGIL: TrackDefinition = {
    *   1.4-4×  glazing frames — the structure, catching what light there is
    *   2-6×    lamp masts — the skyline, and the thing you navigate by
    */
+  /*
+   * Three landmarks, and between them the lap has places rather than sections.
+   *
+   * The Vault is the signature set piece: the mouth of the Nave is a gate you
+   * drive through, so the longest straight in the game starts by framing
+   * whoever is ahead of you inside an arch — which is the exact moment the tow
+   * decision is made. The Standing Wall gives the Frames chicane a back. The
+   * Beacon is the navigational one: it stands at the top of the Terraces, the
+   * highest point on the course, and it is visible from the Cistern at the
+   * bottom, so a driver always knows which way the climb goes even when the
+   * road ahead is dark.
+   */
+  landmarks: [
+    { kind: 'arch', at: 0.255, lateral: 0, scale: 1.15 },
+    { kind: 'wall', at: 0.47, lateral: 3.1, scale: 1 },
+    { kind: 'beacon', at: 0.635, lateral: -3.4, scale: 1 },
+  ],
   scenery: [
     { kind: 'reed', density: 1.9, bandInner: 1.02, bandOuter: 2.0, scaleMin: 0.7, scaleMax: 1.7 },
     { kind: 'fallenTruss', density: 0.16, bandInner: 1.05, bandOuter: 2.2, scaleMin: 0.8, scaleMax: 1.5 },

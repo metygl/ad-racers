@@ -84,6 +84,39 @@ export const PHYSICS = {
   driftPeakSlipAngle: 0.62,
   /** How hard grip rises per radian of slip beyond the peak. */
   slipRecoveryGain: 9,
+  /**
+   * The hard bound on sustained body angle, in radians. About 77°.
+   *
+   * Motion finding F4 asked for this explicitly: grip alone gives a slide an
+   * equilibrium but not a *limit*, so a heavy strike or a landing gone wrong
+   * can in principle leave the machine holding an angle no driver would, with
+   * the nose pointing somewhere the skiff is never going to go.
+   *
+   * It is a guard rail, not a handling parameter, and the number says so. A
+   * census across full Pro and Ace fields on all four courses put the peak
+   * body angle against the *track tangent* — the quantity the finding names —
+   * between 0.66 and 1.14 rad, with the 99.99th percentile at or below 1.2. So
+   * the tyre curve already holds the body inside a readable envelope, and this
+   * sits above the whole of it.
+   *
+   * Two tighter values were tried first and both were wrong, in ways worth
+   * recording. At 0.75 rad *measured on the pre-grip angle* it clipped a
+   * transient that every corner produces — within a step the body rotates
+   * before the tyres pull the velocity round with it, so that angle is much
+   * larger than the settled one. At 1.0 rad on the settled angle it still
+   * clipped the Ace field's fastest corners. Both cost about a second a lap on
+   * the salt and *inverted the difficulty ladder*, which the AI suite caught.
+   * On a course where Ace beats Pro by 0.86 s, a bound that also catches good
+   * driving is worth less than no bound at all.
+   */
+  bodyAngleMax: 1.35,
+  /**
+   * How hard the attitude jets pull the nose back per radian past the bound,
+   * in rad/s per rad. Strong enough to bound the angle within a few tenths of
+   * a second, weak enough that a flick, a landing or a hit still crosses the
+   * body up freely — the bound is on the *sustained* angle, not the transient.
+   */
+  bodyAngleRecovery: 3.2,
   /** Gravity, used for the light airborne model over crests and ramps. */
   gravity: 22,
   /** Vertical speed below which a landing counts as clean. */

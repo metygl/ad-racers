@@ -1,4 +1,5 @@
-import { makeRing, scatterAlong } from '../authoring';
+import { chordAlong, makeRing, scatterAlong } from '../authoring';
+import { previewMainPath } from '../buildTrack';
 import type { RingNode } from '../authoring';
 import type { HazardDefinition, ObstacleDefinition, TrackDefinition } from '../types';
 
@@ -42,23 +43,27 @@ const NODES: RingNode[] = [
 ];
 
 const ring = makeRing(NODES, { scale: 1.02, aspectX: 1.2, aspectZ: 0.86 });
+const mainLine = previewMainPath(ring.points);
 
 /**
- * The Lagoon Line. A straight cut across the shallow water in the middle of
- * the long right-hand sweep. It is shorter, but `water` costs 42% top speed
- * and over half the grip, so it only pays if you carry enough entry speed and
- * do not have to steer once you are in it.
+ * The Lagoon Line. A cut across the shallow water in the middle of the long
+ * right-hand sweep. It is shorter, but `water` costs 42% top speed and over
+ * half the grip, so it only pays if you carry enough entry speed and do not
+ * have to steer once you are in it.
+ *
+ * Authored with `chordAlong` like every other shortcut rather than by hand.
+ * The hand-placed version met the road at 33 degrees on entry and 45 on exit —
+ * survivable here only because this course is open-edged and thirty metres
+ * wide, and the same mistake on Emberfall's walled Conveyor was destroying
+ * cars. One authoring path means one merge guarantee.
  */
-const lagoon = [
-  ring.pointAt(112, 1.0, { halfWidth: 13 }),
-  ring.pointAt(128, 0.84, { halfWidth: 11, surface: 'water' }),
-  ring.pointAt(150, 0.76, { halfWidth: 11, surface: 'water' }),
-  ring.pointAt(172, 0.78, { halfWidth: 11, surface: 'water' }),
-  ring.pointAt(190, 0.88, { halfWidth: 12, surface: 'water' }),
-  // A generous mouth at the exit: leaving a low-grip surface at speed needs
-  // room, and a tight exit turns the shortcut into a guaranteed excursion.
-  ring.pointAt(206, 1.0, { halfWidth: 14 }),
-];
+const lagoon = chordAlong(mainLine, 585, 1040, 9, -44, (t) => {
+  const mouth = t < 0.16 || t > 0.84;
+  return {
+    halfWidth: mouth ? 14 : 11,
+    ...(mouth ? {} : { surface: 'water' as const }),
+  };
+});
 
 /** Rusted spires. Big, obvious, and placed to reward a tidy line, not to trap. */
 const spires: ObstacleDefinition[] = [

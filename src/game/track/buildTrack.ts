@@ -403,9 +403,26 @@ export class Track {
       // as if it were underneath the car. That made progress jump backwards and
       // forwards by tens of metres every frame and was the root cause of the AI
       // sawing at the wheel.
+      /*
+       * The preference bonus is withdrawn where an open path has run out.
+       *
+       * `closestPointOnSegment` clamps, so a point beyond the end of a branch
+       * projects onto its final segment and the returned `lateral` stops
+       * meaning anything: a racer three metres past the Conveyor's exit
+       * reported a lateral of -32 m against a 9.9 m corridor, which the physics
+       * read as being far outside a wall and answered with an impact. That is
+       * the 44 m/s the review measured for *successfully completing* the
+       * shortcut.
+       *
+       * The same clamping hazard is already handled for the score itself by
+       * measuring true distance; this is the other half of it. A branch that
+       * has ended must not keep hold of the racer by seniority.
+       */
+      const clampedAtEnd =
+        !path.closed && ((index === 0 && t <= 0) || (nextIndex === n - 1 && t >= 1));
+      const preferred = preferredPath === path && !clampedAtEnd;
       const score =
-        Math.hypot(point.x - center.x, point.z - center.z) -
-        (preferredPath && path === preferredPath ? halfWidth * 0.25 : 0);
+        Math.hypot(point.x - center.x, point.z - center.z) - (preferred ? halfWidth * 0.25 : 0);
       if (score >= bestScore) return;
 
       let segmentLength = b.distance - a.distance;

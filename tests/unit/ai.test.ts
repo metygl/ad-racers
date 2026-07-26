@@ -115,11 +115,25 @@ describe('difficulty', () => {
   });
 
   it.each(TRACKS)('%s: each level is measurably faster than the one below', (_name, trackId) => {
+    /*
+     * Averaged across seeds, not measured on one.
+     *
+     * A single race is one sample of a stochastic field: a mistake, a shortcut
+     * taken or missed, or one wall contact moves a winning time by seconds, and
+     * on the technical course that is enough to invert two adjacent levels for
+     * a particular seed while the ladder is perfectly sound. A difficulty
+     * ladder is a claim about the *distribution*, so it has to be measured as
+     * one.
+     */
+    const SEEDS = [12345, 777, 424242];
     const times = LEVELS.map((difficultyId) => {
-      const result = runHeadlessRace({ trackId, difficultyId, playerIndex: null, maxSeconds: 400 });
-      const winner = result.results[0];
-      if (!winner) throw new Error('no winner');
-      return winner.finishTime;
+      const samples = SEEDS.map((seed) => {
+        const result = runHeadlessRace({ trackId, difficultyId, seed, playerIndex: null, maxSeconds: 400 });
+        const winner = result.results[0];
+        if (!winner) throw new Error('no winner');
+        return winner.finishTime;
+      });
+      return samples.reduce((total, value) => total + value, 0) / samples.length;
     });
 
     for (let i = 1; i < times.length; i++) {

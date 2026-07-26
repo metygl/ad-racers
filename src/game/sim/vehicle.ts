@@ -526,15 +526,24 @@ function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
   const intoWall = dot(racer.velocity, { x: normal.x * side, z: normal.z * side });
   if (intoWall <= 0) return;
 
-  // Always remove the component into the wall — a car cannot keep driving into
-  // a barrier — but only *bill* an impact once per contact.
+  /*
+   * Always remove the component into the wall — a car cannot keep driving into
+   * a barrier — but only *bill* an impact once per contact.
+   *
+   * Restitution is part of the bill. Bouncing every frame is what let a
+   * sustained contact compound: two consecutive capped steps still took 42% and
+   * then another 27%, so the per-impact ceiling did not actually bound what a
+   * contact cost. While locked out the wall simply stops the car going through
+   * it, and takes nothing else.
+   */
+  const billing = racer.wallImpactLock <= 0;
   const speedBefore = Math.hypot(racer.velocity.x, racer.velocity.z);
+  const bounce = billing ? 1 + PHYSICS.wallRestitution : 1;
   racer.velocity = {
-    x: racer.velocity.x - normal.x * side * intoWall * (1 + PHYSICS.wallRestitution),
-    z: racer.velocity.z - normal.z * side * intoWall * (1 + PHYSICS.wallRestitution),
+    x: racer.velocity.x - normal.x * side * intoWall * bounce,
+    z: racer.velocity.z - normal.z * side * intoWall * bounce,
   };
 
-  const billing = racer.wallImpactLock <= 0;
   if (billing) {
     const squareness = clamp01(intoWall / Math.max(4, speedBefore));
     const scrub = 1 - squareness * 0.45;

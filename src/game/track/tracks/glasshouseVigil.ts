@@ -1,4 +1,4 @@
-import { chordAlong, makeRing, scatterAlong } from '../authoring';
+import { atFractions, chordAlong, makeRing, scatterAlong } from '../authoring';
 import { previewMainPath } from '../buildTrack';
 import type { RingNode } from '../authoring';
 import type { ObstacleDefinition, TrackDefinition } from '../types';
@@ -113,7 +113,7 @@ const glazing: ObstacleDefinition[] = scatterAlong(ring, 160, 196, 5, () => 1.0,
 );
 
 /** Silt heaps in the Rootway, offset so a clean line through it exists. */
-const silt: ObstacleDefinition[] = rootway.slice(3, 5).map((p, i) => ({
+const silt: ObstacleDefinition[] = atFractions(rootway, [0.45, 0.6]).map((p, i) => ({
   x: p.x + Math.cos(i * 1.9 + 0.6) * 2.8,
   z: p.z + Math.sin(i * 1.9 + 0.6) * 2.8,
   radius: 1.1,

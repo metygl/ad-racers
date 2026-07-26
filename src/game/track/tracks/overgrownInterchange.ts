@@ -1,4 +1,4 @@
-import { chordAlong, makeRing, scatterAlong } from '../authoring';
+import { atFractions, chordAlong, makeRing, scatterAlong } from '../authoring';
 import { previewMainPath } from '../buildTrack';
 import type { RingNode } from '../authoring';
 import type { ObstacleDefinition, TrackDefinition } from '../types';
@@ -59,7 +59,7 @@ const mainLine = previewMainPath(ring.points);
  * from where the first and last points project, so it stays legal by
  * construction.
  */
-const slipRoad = chordAlong(mainLine, 755, 1125, 7, 30, (t) => {
+const slipRoad = chordAlong(mainLine, 755, 1125, 9, 30, (t) => {
   const mouth = t < 0.12 || t > 0.88;
   return {
     halfWidth: mouth ? 8.5 : 7,
@@ -76,7 +76,7 @@ const slipRoad = chordAlong(mainLine, 755, 1125, 7, 30, (t) => {
  * measurably *slower* than the main line, which makes taking it a mistake
  * rather than a risk. `tests/unit/ai.test.ts` holds that line.
  */
-const rubble: ObstacleDefinition[] = slipRoad.slice(2, 4).map((p, i) => ({
+const rubble: ObstacleDefinition[] = atFractions(slipRoad, [0.42, 0.58]).map((p, i) => ({
   x: p.x + Math.cos(i * 2.1) * 3.4,
   z: p.z + Math.sin(i * 2.1) * 3.4,
   radius: 1.2,

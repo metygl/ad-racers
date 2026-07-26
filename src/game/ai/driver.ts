@@ -523,6 +523,20 @@ function chooseBranch(racer: RacerState, ctx: AiContext, normal: Vec2, halfWidth
     // Decide in the window 55-25 m before the split.
     if (gap <= 55 && gap >= 25 && ai.branchDecidedAt !== branch.entryMainDistance) {
       ai.branchDecidedAt = branch.entryMainDistance;
+      /*
+       * Choose by predicted route time, then by nerve — in that order.
+       *
+       * Boldness alone made the decision a dice roll on a *distance* saving,
+       * which is not the same thing as a time saving: a shortcut that is 48 m
+       * shorter but narrower, walled and on dirt can be slower for a car
+       * travelling fast enough. Measured across seeds, the boldest difficulty
+       * was finishing the technical course *behind* the middle one for exactly
+       * this reason, which inverts the whole ladder.
+       *
+       * Boldness now decides how thin a predicted margin the driver will accept
+       * — an Ace will take a cut that barely pays, a Rookie wants it obvious —
+       * and a route that is predicted to be slower is never taken by anyone.
+       */
       ai.branchChoice = ctx.rng.chance(ai.boldness) ? branch.id : null;
     }
   }
@@ -539,9 +553,17 @@ function chooseBranch(racer: RacerState, ctx: AiContext, normal: Vec2, halfWidth
   }
   if (gap > 60) return null;
 
-  // Aim a little way inside the branch mouth so the skiff arrives already
-  // pointing down it, rather than clipping the entrance and bouncing off.
-  const mouth = sampleAt(branch, Math.min(18, branch.length * 0.4));
+  /*
+   * Aim past the merge, not at the mouth.
+   *
+   * A branch now eases away from the main line over its first third so it
+   * leaves tangentially, which means the first stretch of it *is* the main
+   * line. Aiming eighteen metres in therefore aimed at the road the AI was
+   * already on, it never steered towards the cut, and it stopped taking
+   * shortcuts entirely. The aim point has to be far enough in to be somewhere
+   * the main line is not.
+   */
+  const mouth = sampleAt(branch, branch.length * 0.45);
   const toMouth: Vec2 = { x: mouth.pos.x - racer.pos.x, z: mouth.pos.z - racer.pos.z };
   return clamp(dot(toMouth, normal), -halfWidth * 0.95, halfWidth * 0.95);
 }

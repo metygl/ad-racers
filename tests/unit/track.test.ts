@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { distance } from '../../src/core/math';
+import { distance, wrapAngle } from '../../src/core/math';
+import { FIXED_STEP } from '../../src/game/config';
 import { Track, sampleAt } from '../../src/game/track/buildTrack';
+import { Simulation } from '../../src/game/sim/simulation';
+import { emptyInput } from '../../src/game/sim/state';
+import type { RacerState } from '../../src/game/sim/state';
 import { TRACK_DEFINITIONS, getTrack } from '../../src/game/track/tracks';
-import type { PathSample } from '../../src/game/track/types';
+import type { Path, PathSample } from '../../src/game/track/types';
+import { buildSetup } from '../support/headless';
 
 /**
  * Track geometry.
@@ -217,4 +222,165 @@ describe('sampleAt', () => {
     const start = sampleAt(branch, 0);
     expect(before.pos.x).toBeCloseTo(start.pos.x, 6);
   });
+});
+
+/**
+ * Branch merges.
+ *
+ * A shortcut has to meet the road in the right *place* and going the right
+ * *way*. Every shipped branch used to satisfy the first and fail the second —
+ * between 33 and 62 degrees of tangent mismatch at the mouths — which on
+ * Saltflat cost a slide and on Emberfall's walled seven-metre Conveyor
+ * destroyed the car: a live review measured 52.5 m/s down to 8.75 m/s in three
+ * quarters of a second, for successfully completing the shortcut.
+ */
+describe('branch merges', () => {
+  const angleBetween = (a: { x: number; z: number }, b: { x: number; z: number }): number =>
+    Math.abs(wrapAngle(Math.atan2(a.z, a.x) - Math.atan2(b.z, b.x)));
+
+  for (const definition of TRACK_DEFINITIONS) {
+    const track = getTrack(definition.id);
+    for (const branch of track.branches) {
+      it(`${definition.name}: ${branch.id} joins and leaves the road tangentially`, () => {
+        const first = branch.samples[0] as PathSample;
+        const last = branch.samples[branch.samples.length - 1] as PathSample;
+        const atEntry = track.sampleMain(branch.entryMainDistance % track.length);
+        const atExit = track.sampleMain(branch.exitMainDistance % track.length);
+
+        // Same place...
+        expect(distance(first.pos, atEntry.pos)).toBeLessThan(2);
+        expect(distance(last.pos, atExit.pos)).toBeLessThan(2);
+        // ...and the same direction. Ten degrees is the most a corridor this
+        // narrow can absorb without the merge becoming an impact.
+        expect(angleBetween(first.tangent, atEntry.tangent)).toBeLessThan(0.18);
+        expect(angleBetween(last.tangent, atExit.tangent)).toBeLessThan(0.18);
+      });
+    }
+  }
+});
+
+/**
+ * Driving every shortcut, and measuring the handoff.
+ *
+ * The geometry assertions above are necessary but not sufficient: what matters
+ * is what happens to a car. The thing under test is the *handoff* — the step
+ * where a racer stops being projected onto one corridor and starts being
+ * projected onto another. Everything else on a shortcut (rubble, spoil, silt)
+ * is deliberate content and is not this test's business.
+ *
+ * At the Conveyor exit that handoff used to remove 44 m/s in under a second,
+ * because a point past the end of an open path clamps onto its final segment
+ * and the reported lateral stops meaning anything — the physics read -32 m
+ * against a 9.9 m corridor as being far outside a wall.
+ */
+describe('driving every shortcut', () => {
+  interface Handoff {
+    from: string;
+    to: string;
+    speedDrop: number;
+    jump: number;
+    turn: number;
+  }
+
+  /** Drives from a point on `path` and records every corridor handoff. */
+  function driveFrom(
+    trackId: string,
+    startOn: Path,
+    startDistance: number,
+    seconds: number,
+    headingOffset = 0,
+  ): { handoffs: Handoff[]; racer: RacerState; sim: Simulation; recovered: boolean } {
+    const sim = new Simulation(buildSetup({ trackId, entries: 1, playerIndex: 0 }));
+    while (sim.phase === 'countdown') {
+      sim.step(emptyInput());
+      sim.drainEvents();
+    }
+    const racer = sim.racers[0] as RacerState;
+    const entry = sampleAt(startOn, startDistance);
+    const heading = Math.atan2(entry.tangent.z, entry.tangent.x) + headingOffset;
+    const speed = racer.spec.topSpeed * 0.7;
+    racer.pos = { ...entry.pos };
+    racer.y = entry.y;
+    racer.heading = heading;
+    racer.velocity = { x: Math.cos(heading) * speed, z: Math.sin(heading) * speed };
+    racer.path = startOn;
+
+    const handoffs: Handoff[] = [];
+    // Whether the racer ever got back onto a drivable corridor after leaving
+    // one. This, not "is it on track at an arbitrary instant", is what makes a
+    // mistake recoverable.
+    let leftTrack = false;
+    let recovered = true;
+    let previousPath = racer.path.id;
+    let previousSpeed = speed;
+    let previousPos = { ...racer.pos };
+    let previousHeading = racer.heading;
+
+    for (let i = 0; i < Math.ceil(seconds / FIXED_STEP); i++) {
+      const projection = sim.track.project(racer.pos, racer.path);
+      // Lookahead scales with speed, as the real driver's does: a fixed short
+      // lookahead is what makes pure pursuit oscillate into a barrier.
+      const speedNow = Math.hypot(racer.velocity.x, racer.velocity.z);
+      const ahead = sampleAt(projection.path, projection.distance + Math.max(14, speedNow * 1.1));
+      const desired = Math.atan2(ahead.pos.z - racer.pos.z, ahead.pos.x - racer.pos.x);
+      const error = wrapAngle(desired - racer.heading);
+      const crossTrack = -projection.lateral / Math.max(4, projection.halfWidth);
+      sim.step({ ...emptyInput(), throttle: 1, steer: Math.max(-1, Math.min(1, error * 2.2 + crossTrack * 0.6)) });
+      sim.drainEvents();
+
+      if (!racer.onTrack) {
+        leftTrack = true;
+        recovered = false;
+      } else if (leftTrack) {
+        recovered = true;
+      }
+
+      const now = Math.hypot(racer.velocity.x, racer.velocity.z);
+      if (racer.path.id !== previousPath) {
+        handoffs.push({
+          from: previousPath,
+          to: racer.path.id,
+          speedDrop: previousSpeed - now,
+          jump: distance(previousPos, racer.pos),
+          turn: Math.abs(wrapAngle(racer.heading - previousHeading)),
+        });
+        previousPath = racer.path.id;
+      }
+      previousSpeed = now;
+      previousPos = { ...racer.pos };
+      previousHeading = racer.heading;
+    }
+
+    return { handoffs, racer, sim, recovered };
+  }
+
+  for (const definition of TRACK_DEFINITIONS) {
+    const track = getTrack(definition.id);
+    for (const branch of track.branches) {
+      it(`${definition.name}: ${branch.id} hands off cleanly at both ends`, () => {
+        const { handoffs, racer } = driveFrom(definition.id, branch, 1, 22);
+
+        // It used the branch and came back off it.
+        expect(handoffs.some((h) => h.from === branch.id)).toBe(true);
+
+        for (const handoff of handoffs) {
+          // Nothing teleports: one step at racing pace is well under a metre.
+          expect(handoff.jump).toBeLessThan(1.2);
+          // Nothing snaps round.
+          expect(handoff.turn).toBeLessThan(0.12);
+          // And the corridor change itself costs nothing worth noticing.
+          expect(handoff.speedDrop).toBeLessThan(3);
+        }
+        expect(racer.onTrack).toBe(true);
+      });
+
+      it(`${definition.name}: ${branch.id} is recoverable when the entry is missed`, () => {
+        // Arrive at the mouth aimed across it, which is what missing looks like.
+        const { racer, recovered } = driveFrom(definition.id, branch, branch.length * 0.12, 20, 0.55);
+        // Never pinned, never stopped: a missed shortcut costs time, not the race.
+        expect(recovered).toBe(true);
+        expect(Math.hypot(racer.velocity.x, racer.velocity.z)).toBeGreaterThan(10);
+      });
+    }
+  }
 });

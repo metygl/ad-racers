@@ -394,9 +394,20 @@ export class App {
     this.showScreen('race');
   }
 
-  /** Builds the AI-only demonstration race shown behind the menus. */
+  /**
+   * Builds the AI-only demonstration race shown behind the menus.
+   *
+   * Skipped entirely on the low quality tier. A phone or an older laptop should
+   * not be simulating and rendering a six-car race just to put something behind
+   * a menu — that is battery and heat spent on decoration, and it is exactly
+   * the device that can least afford it.
+   */
   private startAttract(): void {
     if (!this.renderer) return;
+    if (this.renderer.qualityId === 'low') {
+      this.attract = null;
+      return;
+    }
     try {
       const definition = TRACK_DEFINITIONS[this.attractIndex % TRACK_DEFINITIONS.length];
       if (!definition) return;

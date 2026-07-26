@@ -1,0 +1,142 @@
+# Licensing and provenance
+
+## Summary
+
+AD Racers contains **one** third-party runtime dependency and **zero** binary
+assets. Everything else — every name, colour, texture, mesh, waveform, track
+layout and line of code — originates in this repository.
+
+`scripts/check-provenance.mjs` runs in CI and fails the build if an
+undocumented binary asset appears.
+
+---
+
+## Runtime dependencies
+
+| Package | Version | Licence | Purpose |
+| --- | --- | --- | --- |
+| [three](https://github.com/mrdoob/three.js) | 0.185.1 | MIT | WebGL rendering |
+
+That is the complete runtime dependency list. There is no UI framework, no
+physics engine, no audio library, no analytics and no font package. The
+simulation, audio synthesis, input handling and interface are all original code
+in `src/`.
+
+## Build and test dependencies
+
+None of these ship to the browser.
+
+| Package | Version | Licence | Purpose |
+| --- | --- | --- | --- |
+| vite | 8.1.5 | MIT | Bundler and dev server |
+| typescript | 6.0.3 | Apache-2.0 | Type checking |
+| vitest | 4.1.10 | MIT | Unit tests |
+| @vitest/coverage-v8 | 4.1.10 | MIT | Coverage |
+| @playwright/test | 1.62.0 | Apache-2.0 | Browser tests |
+| eslint | 10.8.0 | MIT | Linting |
+| @eslint/js | — | MIT | ESLint recommended rules |
+| typescript-eslint | 8.65.0 | MIT | TypeScript lint rules |
+| globals | — | MIT | Environment globals for ESLint |
+| @types/three | 0.185.1 | MIT | Type definitions |
+| @types/node | — | MIT | Type definitions |
+
+Regenerate this list with `npm run licenses`.
+
+---
+
+## Original content
+
+Everything in this section was created for this project and is covered by the
+repository's own licence.
+
+### World and fiction
+
+The setting — the Long Quiet, the Reclaim, salvage crews, two-seat skiffs with
+an outrigger pod, the Reclaim Circuit — is original.
+
+### Crews and riders (`src/game/racers.ts`)
+
+| Crew | Pilot | Wrench | Skiff |
+| --- | --- | --- | --- |
+| Thornline | Bramble | Vex | Nettlecutter |
+| Foundry Six | Kilo | Pip | Anvilback |
+| Nightgrove | Sable | Moth | Duskwing |
+| Emberworks | Rusk | Tinder | Cinderjack |
+| Boneyard | Marrow | Cobb | Ossuary |
+| Greenline | Juniper | Sprocket | Sapling |
+
+All eighteen names are invented. None is a reference to, parody of, or play on
+a name from any existing game, and none is derived from a real person.
+
+### Courses (`src/game/track/tracks/`)
+
+Overgrown Interchange, Saltflat Reliquary and Emberfall Quarry are original
+layouts, authored as radius profiles in this repository. No layout was traced,
+imported or adapted from any existing course.
+
+### Art, audio and interface
+
+- All geometry: `src/render/scene/` — three.js primitives, assembled here.
+- All textures: `src/render/textures/procedural.ts` — drawn to canvas at load.
+- All audio: `src/audio/synth.ts` — synthesised into `AudioBuffer`s at load.
+- All interface text, layout and colour: `src/app/` and `src/styles.css`.
+- The wordmark is set in the system font stack; there is no logo file.
+
+### Colour palette
+
+Chosen for this project. Signal green `#8dff9e` means "go", amber `#ffb03a`
+means "attention", and neither is used for anything else.
+
+---
+
+## What is deliberately absent
+
+AD Racers is *mechanically inspired* by mid-1990s arcade racing, and
+[DESIGN-RESEARCH.md](./DESIGN-RESEARCH.md) records that research with sources.
+Inspiration was taken **only** at the level of game design ideas: a two-seat
+vehicle, a close-range companion strike, no pickups, themed courses.
+
+Not present, and never were:
+
+- Any character, crew, vehicle or place name from any existing game
+- Any logo, wordmark or brand element
+- Any track layout, environment or set piece
+- Any dialogue, music, sound effect or voice line
+- Any code, mesh, texture, sprite or screenshot
+- Any parody of a real person's name
+
+The title screen states this in the footer, where a player can see it.
+
+---
+
+## Data and privacy
+
+AD Racers has no backend. Nothing is transmitted anywhere at any point.
+
+**Stored, in `localStorage` under the single key `ad-racers`:**
+
+- Interface preferences (volumes, quality, reduced motion, contrast, camera)
+- Key bindings
+- Last selected course, crew and difficulty
+- Best race time and best lap per course
+
+**Not present anywhere in the codebase:** accounts, analytics, telemetry, ads,
+monetisation, tracking pixels, third-party scripts, network requests during a
+race, generative network calls, runtime model dependencies, and credentials of
+any kind.
+
+The one network activity is fetching the game's own static files on first load.
+After that it runs offline. "Clear settings and best times" in Settings removes
+the storage key entirely.
+
+---
+
+## Verifying these claims
+
+```bash
+npm run licenses      # regenerate the dependency licence table
+npm run check:assets  # fail if any undocumented binary asset exists
+npm run check:budget  # fail if the download exceeds its budget
+grep -rn "fetch\|XMLHttpRequest\|WebSocket\|sendBeacon" src/   # no results
+grep -rn "Math.random" src/game/                              # no results
+```

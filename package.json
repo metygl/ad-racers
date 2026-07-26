@@ -10,7 +10,11 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "check:assets": "node scripts/check-provenance.mjs",
+    "check:budget": "node scripts/check-budget.mjs",
+    "licenses": "node scripts/licenses.mjs",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run check:assets && npm run check:budget"
   },
   "dependencies": {
     "three": "0.185.1"

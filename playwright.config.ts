@@ -28,9 +28,26 @@ export default defineConfig({
   projects: [
     {
       name: 'desktop',
+      testIgnore: /touch\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1440, height: 900 },
+        launchOptions: {
+          args: ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader'],
+        },
+      },
+    },
+    {
+      // A real coarse pointer with touch points, which is what the game checks
+      // before offering thumb controls — a narrow desktop window is not a phone.
+      name: 'mobile',
+      testMatch: /touch\.spec\.ts/,
+      use: {
+        ...devices['Pixel 7'],
+        // A 2.6× device scale factor means four times the pixels, which under
+        // software WebGL is the difference between slow and unusable. The
+        // layout under test is CSS pixels either way.
+        deviceScaleFactor: 1,
         launchOptions: {
           args: ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader'],
         },

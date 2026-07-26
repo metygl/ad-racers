@@ -82,7 +82,9 @@ jobs:
       - name: Browser tests
         # The Playwright config builds the site and serves it at the production
         # base path, so this exercises what actually ships. WebGL comes from
-        # SwiftShader on the runner, which is slow but real.
+        # SwiftShader on the runner: software rasterisation, which is slow but
+        # real — and is why every wait in the suite is on simulated time rather
+        # than the wall clock.
         run: npm run test:e2e
 
       - name: Upload report on failure

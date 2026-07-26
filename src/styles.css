@@ -217,7 +217,7 @@ body {
   max-height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 1.15rem;
+  gap: 1rem;
   padding: clamp(1.1rem, 3vw, 2.2rem);
   background: var(--bg-panel);
   border: 1px solid var(--line-soft);
@@ -355,10 +355,32 @@ body {
   min-width: 0;
 }
 
+.screen--setup {
+  gap: 0.85rem;
+}
+
+.screen--setup .card__blurb {
+  /* Two lines of flavour is plenty on a card that also carries five stat bars. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .card-grid {
   display: grid;
-  gap: 0.7rem;
+  gap: 0.6rem;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+}
+
+/*
+ * Six crews on one row wherever the width allows. Comparing cars means seeing
+ * them together; a layout that pushes half of them onto a second row also
+ * pushes the Start button below the fold on a 900 px-tall laptop.
+ */
+.card-grid--racers {
+  grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
 }
 
 .card-grid--difficulty {
@@ -378,8 +400,8 @@ body {
 .card {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.9rem 1rem;
+  gap: 0.3rem;
+  padding: 0.75rem 0.85rem;
   background: var(--bg-raised);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
@@ -473,8 +495,8 @@ body {
 
 .card__stats {
   display: grid;
-  gap: 0.22rem;
-  margin-top: 0.3rem;
+  gap: 0.16rem;
+  margin-top: 0.25rem;
 }
 
 .stat {

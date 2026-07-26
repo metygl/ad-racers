@@ -159,6 +159,11 @@ Browser tests cover menu-to-finish, pause/resume, resize, five viewports,
 keyboard-only navigation, focus trapping, reduced motion, high contrast, WebGL
 failure, context loss and unavailable storage.
 
+The gamepad seam is tested with a synthetic Standard Gamepad injected at
+`navigator.getGamepads()` — Playwright cannot plug in a controller, but
+everything downstream of that call is our code, so trigger throttle, stick
+deadzone, button edges and pad detection are all genuinely exercised.
+
 ## Deployment
 
 The site is a static bundle with hashed filenames and a configurable base path.

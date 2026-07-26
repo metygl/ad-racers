@@ -59,7 +59,15 @@ export class TouchControls {
       const node = el('button', { type: 'button', class: `touch__pad ${className}`, 'aria-label': label }, label);
       const down = (event: PointerEvent): void => {
         event.preventDefault();
-        node.setPointerCapture(event.pointerId);
+        // Capture keeps the pad held when a thumb slides slightly off it, but
+        // it is an optimisation, not a requirement: `setPointerCapture` throws
+        // for a pointer the browser no longer considers active, and an
+        // exception here would leave the control dead for the rest of the race.
+        try {
+          node.setPointerCapture(event.pointerId);
+        } catch {
+          /* Capture unavailable; the pad still works, it is just less forgiving. */
+        }
         node.classList.add('touch__pad--down');
         apply(true);
       };
@@ -111,7 +119,12 @@ export class TouchControls {
   private onPointerDown = (event: PointerEvent): void => {
     event.preventDefault();
     this.pointerId = event.pointerId;
-    this.steerTrack.setPointerCapture(event.pointerId);
+    try {
+      this.steerTrack.setPointerCapture(event.pointerId);
+    } catch {
+      /* See the note on the action pads: capture is a nicety, not a
+         precondition, and losing it must not disable steering. */
+    }
     this.trackRect = this.steerTrack.getBoundingClientRect();
     this.applySteer(event.clientX);
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ambientPad, engineCycle, noiseBurst, sweep, tone } from '../../src/audio/synth';
+import { ambientPad, engineCycle, musicPulse, noiseBurst, noiseLoop, sweep, tone } from '../../src/audio/synth';
 
 /**
  * Synthesised audio.
@@ -29,6 +29,13 @@ function rms(channel: Float32Array, from: number, to: number): number {
   let total = 0;
   for (let i = from; i < to; i++) total += (channel[i] as number) ** 2;
   return Math.sqrt(total / Math.max(1, to - from));
+}
+
+/** Mean absolute difference between neighbouring samples. */
+function averageStep(channel: Float32Array): number {
+  let total = 0;
+  for (let i = 1; i < channel.length; i++) total += Math.abs((channel[i] as number) - (channel[i - 1] as number));
+  return total / Math.max(1, channel.length - 1);
 }
 
 function assertClean(channel: Float32Array, name: string): void {
@@ -145,6 +152,46 @@ describe('ambientPad', () => {
     generator(left, 0);
     generator(right, 1);
     expect(Array.from(left)).not.toEqual(Array.from(right));
+  });
+});
+
+describe('noiseLoop', () => {
+  it('loops without a click at the seam', () => {
+    const channel = fill(2 * RATE, noiseLoop(2 * RATE, RATE, { seed: 5, lowpass: 4000 }));
+    // The seam is what makes or breaks a bed that runs for a whole race: a
+    // discontinuity here is a click every two seconds, and at these levels it
+    // is the most audible thing in the mix.
+    const step = Math.abs((channel[0] as number) - (channel[channel.length - 1] as number));
+    const typical = averageStep(channel);
+    expect(step).toBeLessThan(typical * 8);
+    assertClean(channel, 'noiseLoop');
+  });
+
+  it('is band limited when a highpass is asked for', () => {
+    const wide = fill(RATE, noiseLoop(RATE, RATE, { seed: 9, lowpass: 9000 }));
+    const narrow = fill(RATE, noiseLoop(RATE, RATE, { seed: 9, lowpass: 9000, highpass: 400 }));
+    // Removing the low end must remove energy, not merely move it.
+    expect(rms(narrow, 0, narrow.length)).toBeLessThanOrEqual(rms(wide, 0, wide.length) * 1.05);
+    assertClean(narrow, 'noiseLoop highpassed');
+  });
+});
+
+describe('musicPulse', () => {
+  it('produces clean stereo with width', () => {
+    const left = fill(2 * RATE, (channel) => musicPulse(2, RATE, { root: 110, bpm: 96, seed: 3 })(channel, 0));
+    const right = fill(2 * RATE, (channel) => musicPulse(2, RATE, { root: 110, bpm: 96, seed: 3 })(channel, 1));
+    assertClean(left, 'musicPulse left');
+    assertClean(right, 'musicPulse right');
+    let different = 0;
+    for (let i = 0; i < left.length; i++) {
+      if (Math.abs((left[i] as number) - (right[i] as number)) > 1e-6) different += 1;
+    }
+    expect(different).toBeGreaterThan(left.length * 0.2);
+  });
+
+  it('is silent at the very start, so it fades in rather than clicking', () => {
+    const channel = fill(RATE, (c) => musicPulse(1, RATE, { root: 110, bpm: 96, seed: 3 })(c, 0));
+    expect(Math.abs(channel[0] as number)).toBeLessThan(0.02);
   });
 });
 

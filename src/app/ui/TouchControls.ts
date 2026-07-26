@@ -95,6 +95,15 @@ export class TouchControls {
       el(
         'div',
         { class: 'touch__right' },
+        /*
+         * Two columns, three rows — not one long row per function.
+         *
+         * Six pads in two rows of three is 300 px of pad before any gaps, which
+         * does not fit beside a steering strip on a 320 px phone. A 2×3 block
+         * keeps every target above 44 px at the narrowest supported width, and
+         * puts the two the thumb reaches for most — Drift and Surge — closest
+         * to where it rests.
+         */
         el(
           'div',
           { class: 'touch__row' },
@@ -105,6 +114,11 @@ export class TouchControls {
           'div',
           { class: 'touch__row' },
           pad('Brake', 'touch__pad--brake', (down) => this.input.setTouchState({ brake: down })),
+          pad('Hop', 'touch__pad--hop', (down) => this.input.setTouchState({ hop: down })),
+        ),
+        el(
+          'div',
+          { class: 'touch__row' },
           pad('Drift', 'touch__pad--drift', (down) => this.input.setTouchState({ drift: down })),
           pad('Surge', 'touch__pad--boost', (down) => this.input.setTouchState({ boost: down })),
         ),

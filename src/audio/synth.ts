@@ -164,3 +164,89 @@ export function sweep(
     normalise(channel);
   };
 }
+
+/**
+ * A seamless loop of filtered noise, used for the wind and for every surface
+ * bed.
+ *
+ * The seam is the whole difficulty. A noise buffer looped naively clicks at the
+ * join, and at the volumes these run at a click every four seconds is the most
+ * audible thing in the mix. Cross-fading the last `fade` fraction of the buffer
+ * with its own beginning makes the loop point mathematically continuous, which
+ * `tests/unit/audio.test.ts` asserts by comparing the samples either side of it.
+ */
+export function noiseLoop(
+  length: number,
+  sampleRate: number,
+  options: { seed: number; lowpass: number; highpass?: number; fade?: number },
+): (channel: Float32Array) => void {
+  return (channel) => {
+    const raw = new Float32Array(length);
+    const cutoff = Math.min(0.99, (2 * Math.PI * options.lowpass) / sampleRate);
+    const highCutoff = options.highpass ? Math.min(0.99, (2 * Math.PI * options.highpass) / sampleRate) : 0;
+    let low = 0;
+    let high = 0;
+    for (let i = 0; i < length; i++) {
+      const white = noiseAt(options.seed, i) * 2 - 1;
+      low += cutoff * (white - low);
+      if (highCutoff > 0) {
+        high += highCutoff * (low - high);
+        raw[i] = low - high;
+      } else {
+        raw[i] = low;
+      }
+    }
+
+    const fade = Math.max(1, Math.floor(length * (options.fade ?? 0.12)));
+    for (let i = 0; i < length; i++) channel[i] = raw[i] as number;
+    for (let i = 0; i < fade; i++) {
+      const t = i / fade;
+      const tail = raw[length - fade + i] as number;
+      const head = raw[i] as number;
+      channel[i] = tail * (1 - t) + head * t;
+    }
+    normalise(channel, 0.72);
+  };
+}
+
+/**
+ * A rhythmic music layer that sits under the pad and fades in with intensity.
+ *
+ * Deliberately pitched from the same series as the pad and the interface
+ * sounds, so nothing in the mix is ever in a different key from anything else.
+ * It carries a pulse rather than a melody: a tune competes with the engine for
+ * the player's attention, and the engine has to win.
+ */
+export function musicPulse(
+  seconds: number,
+  sampleRate: number,
+  options: { root: number; bpm: number; seed: number },
+): (channel: Float32Array, index: number) => void {
+  const length = Math.floor(seconds * sampleRate);
+  const beat = (60 / options.bpm) * sampleRate;
+  // Root, fifth, octave, minor third: an open, unresolved shape that can loop
+  // for four minutes without demanding somewhere to go.
+  const degrees = [1, 1.5, 2, 1.2];
+
+  return (channel, index) => {
+    for (let i = 0; i < length; i++) {
+      const beatIndex = Math.floor(i / beat);
+      const phaseInBeat = (i % beat) / beat;
+      const degree = degrees[beatIndex % degrees.length] as number;
+      const frequency = options.root * degree * (beatIndex % 8 >= 4 ? 0.75 : 1);
+      // A plucked envelope: fast attack, exponential decay, silent by the end
+      // of the beat so nothing overlaps into the next.
+      const envelope = Math.exp(-phaseInBeat * 6) * (1 - Math.exp(-phaseInBeat * 120));
+      const t = i / sampleRate;
+      const wobble = noiseAt(options.seed + beatIndex, i >> 8) * 0.02;
+      const value =
+        Math.sin(2 * Math.PI * frequency * t) * 0.6 +
+        Math.sin(4 * Math.PI * frequency * t) * 0.18 +
+        Math.sin(Math.PI * frequency * t) * 0.28;
+      // A small stereo spread from the channel index, so the pulse has width
+      // without needing a second buffer.
+      channel[i] = value * envelope * (1 + (index === 0 ? -wobble : wobble));
+    }
+    normalise(channel, 0.55);
+  };
+}

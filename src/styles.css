@@ -1445,10 +1445,16 @@ body {
 .touch__right {
   position: absolute;
   right: calc(0.6rem + var(--safe-right));
-  bottom: calc(6rem + var(--safe-bottom));
+  /* Clear of the speed panel, which sits centred at the bottom of the HUD. */
+  bottom: calc(7.5rem + var(--safe-bottom));
   display: grid;
-  gap: 0.45rem;
+  gap: 0.4rem;
   justify-items: end;
+}
+
+.touch__pad--drift,
+.touch__pad--boost {
+  min-height: 3.4rem;
 }
 
 .touch__row {
@@ -1458,8 +1464,10 @@ body {
 
 .touch__pad {
   appearance: none;
-  min-width: 4.2rem;
-  min-height: 3.2rem;
+  /* 44 px is the floor for a touch target; these sit comfortably above it even
+     at the narrowest supported width. */
+  min-width: 4rem;
+  min-height: 3rem;
   padding: 0.4rem 0.7rem;
   font: inherit;
   font-size: 0.78rem;

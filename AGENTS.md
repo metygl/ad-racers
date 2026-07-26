@@ -51,6 +51,21 @@ These cost real debugging time. Each is documented at its site in the code.
 - **Scenery must clear the run-off, not just the road.** Only declared obstacles
   are collidable, so a tree two metres off the tarmac is one the player drives
   *through*, camera and all.
+- **A branch must meet the road in the right place *and* the right direction.**
+  `chordAlong` blends into the main line at both mouths so the merge is
+  tangential; where it has eased back on it inherits the road's half-width and
+  drops its own edge, because physics projects a racer onto exactly one path and
+  two overlapping corridors means hitting a wall that is not there.
+- **A point past the end of an open path clamps, and its `lateral` becomes
+  meaningless.** Withdraw the projection's preference bonus wherever it clamps
+  at an end, or a finished branch keeps hold of the racer and reports positions
+  tens of metres out.
+- **Place shortcut hazards by fraction, never by control-point index.**
+  `chordAlong` samples densely; a `slice(2, 5)` silently moves when that density
+  changes. Use `atFractions`.
+- **Per-skiff meshes are multiplied by six.** Two struts per station as separate
+  meshes took the scene from 62 draw calls to 146 and broke the enforced budget.
+  Merge anything that moves together.
 - **Track projection scores by true distance, not lateral offset.** When
   `closestPointOnSegment` clamps to a segment end, the lateral component stops
   meaning "how far away this is". Scoring by it makes progress jump tens of

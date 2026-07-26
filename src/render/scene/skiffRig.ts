@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { clamp, clamp01 } from '../../core/math';
 import type { RacerState } from '../../game/sim/state';
 

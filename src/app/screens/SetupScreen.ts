@@ -7,6 +7,7 @@ import type { RacerProfile } from '../../game/racers';
 import { TRACK_DEFINITIONS } from '../../game/track/tracks';
 import type { TrackDefinition } from '../../game/track/types';
 import { button, el } from '../ui/dom';
+import { courseDiorama, crewSilhouette } from '../ui/garage';
 
 /**
  * Race setup: course, skiff, difficulty.
@@ -56,6 +57,8 @@ function trackCard(track: TrackDefinition, best: BestTime | undefined, selected:
     el(
       'label',
       { class: `card card--track card--${track.id}`, for: id },
+      // The course as its own layout, drawn from the spline the race runs on.
+      el('span', { class: 'card__art' }, courseDiorama(track)),
       el('span', { class: 'card__kicker', text: `Course ${TRACK_DEFINITIONS.indexOf(track) + 1}` }),
       el('span', { class: 'card__title', text: track.name }),
       el('span', { class: 'card__tagline', text: track.tagline }),
@@ -113,6 +116,8 @@ function racerCard(racer: RacerProfile, selected: boolean, onSelect: () => void)
     el(
       'label',
       { class: 'card card--racer', for: id },
+      // The machine, in profile, from the same build table the scene uses.
+      el('span', { class: 'card__art card__art--crew' }, crewSilhouette(racer)),
       swatch,
       el('span', { class: 'card__title', text: racer.crew }),
       el('span', { class: 'card__crew', text: `${racer.pilot} & ${racer.wrench} · ${racer.skiff}` }),

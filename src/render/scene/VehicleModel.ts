@@ -55,7 +55,7 @@ const HALF_PI = Math.PI / 2;
  * bar — identifiable as a black shape at 64 px — and shape is the only thing
  * that survives fog, distance and colour blindness together.
  */
-interface CrewBuild {
+export interface CrewBuild {
   /** Tail fin height, in metres. */
   height: number;
   /** How far the fin rakes back, in radians. */
@@ -84,7 +84,14 @@ interface CrewBuild {
  * differ enough to be read as a black shape at 64 px — the art bible's
  * silhouette test.
  */
-const CREW_BUILDS: Record<string, CrewBuild> = {
+/**
+ * Exported so the garage can draw the same machine the scene builds.
+ *
+ * One table, two consumers. A selection screen that draws its own idea of a
+ * crew's shape can drift out of agreement with the model, and then the player
+ * learns the wrong silhouette from the one place they have time to study it.
+ */
+export const CREW_SILHOUETTES: Record<string, CrewBuild> = {
   // Hero build. Narrow, tall-finned and long-nosed: a machine built to be
   // thrown at an apex in a service tunnel, with the struts pulled inboard so
   // nothing catches on a wall.
@@ -142,7 +149,7 @@ function panel(color: number, roughness = 0.55, metalness = 0.35): THREE.MeshSta
 }
 
 export function buildVehicle(profile: RacerProfile, castShadow: boolean): VehicleVisual {
-  const fin = CREW_BUILDS[profile.id] ?? DEFAULT_BUILD;
+  const fin = CREW_SILHOUETTES[profile.id] ?? DEFAULT_BUILD;
 
   const group = new THREE.Group();
   group.name = `skiff-${profile.id}`;
@@ -324,21 +331,27 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
    * braking and extend in the air are the cheapest possible way to say
    * otherwise, and they are what a landing actually reads through.
    */
-  const strutGeometry = mergeGeometries([
-    { geometry: new THREE.CylinderGeometry(0.07, 0.09, 0.42, 6), position: [0, 0.2, 0] },
-    { geometry: new THREE.CylinderGeometry(0.26, 0.3, 0.16, 10), position: [0, -0.02, 0] },
-  ]);
+  /*
+   * Both sides of a strut station are one mesh, because they always move
+   * together.
+   *
+   * Six skiffs times four stations times two sides is forty-eight draw calls
+   * for something with no independent motion — enough on its own to take the
+   * scene from seventy calls to a hundred and forty-six and blow the budget the
+   * browser suite enforces. A pair per station is the same animation for half
+   * the cost.
+   */
+  const strutGeometry = mergeGeometries(
+    [-1, 1].flatMap((side): MergePart[] => [
+      { geometry: new THREE.CylinderGeometry(0.07, 0.09, 0.42, 6), position: [0, 0.2, side * halfWidth * 0.82] },
+      { geometry: new THREE.CylinderGeometry(0.26, 0.3, 0.16, 8), position: [0, -0.02, side * halfWidth * 0.82] },
+    ]),
+  );
   disposables.push(strutGeometry);
   const struts = fin.struts.map((along) => {
-    const strut = new THREE.Group();
+    const strut = new THREE.Mesh(strutGeometry, dark);
     strut.position.set((along * HULL_LENGTH) / 2, 0.16, 0);
-    const left = new THREE.Mesh(strutGeometry, dark);
-    left.position.z = -halfWidth * 0.82;
-    const right = new THREE.Mesh(strutGeometry, dark);
-    right.position.z = halfWidth * 0.82;
-    left.castShadow = castShadow;
-    right.castShadow = castShadow;
-    strut.add(left, right);
+    strut.castShadow = castShadow;
     chassis.add(strut);
     return strut;
   });
@@ -575,14 +588,28 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   const debris = new THREE.Group();
   debris.position.set(-0.3, 0.68, POD_OFFSET);
   group.add(debris);
-  const chipGeometry = new THREE.TetrahedronGeometry(0.11, 0);
+  /*
+   * The scrap ring is one mesh, spun as a whole.
+   *
+   * Six chips as six meshes is thirty-six draw calls across a full grid for a
+   * ring that rotates rigidly — the individual orbits were never
+   * distinguishable at race distance, and the read the player actually gets is
+   * "the ring is tightening and spinning faster", which a single merged ring
+   * gives for one call.
+   */
+  const chipGeometry = mergeGeometries(
+    Array.from({ length: 6 }, (_, i): MergePart => {
+      const angle = (i / 6) * Math.PI * 2;
+      return {
+        geometry: new THREE.TetrahedronGeometry(0.11, 0),
+        position: [Math.cos(angle) * 0.62, Math.sin(angle * 1.7) * 0.08, Math.sin(angle) * 0.62],
+        rotation: [angle * 1.3, angle, 0],
+      };
+    }),
+  );
   disposables.push(chipGeometry);
-  const chips = Array.from({ length: 6 }, (_, i) => {
-    const chip = new THREE.Mesh(chipGeometry, debrisMaterial);
-    chip.userData.phase = (i / 6) * Math.PI * 2;
-    debris.add(chip);
-    return chip;
-  });
+  const chipRing = new THREE.Mesh(chipGeometry, debrisMaterial);
+  debris.add(chipRing);
 
   /*
    * Pressure venting from the flank slots. Two flat plumes that only appear at
@@ -706,13 +733,9 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     debris.visible = clampField > 0.02;
     if (debris.visible) {
       // The ring tightens and spins faster the more the rig is holding.
-      const radius = 0.62 - clampField * 0.22;
-      const spin = phase * (4 + clampField * 14);
-      for (const chip of chips) {
-        const angle = spin + (chip.userData.phase as number);
-        chip.position.set(Math.cos(angle) * radius, Math.sin(angle * 1.7) * 0.08, Math.sin(angle) * radius);
-        chip.rotation.set(angle * 1.3, angle, 0);
-      }
+      debris.rotation.y = phase * (4 + clampField * 14);
+      const radius = 1 - (clampField * 0.22) / 0.62;
+      debris.scale.set(radius, 1, radius);
     }
 
     // Venting is the top tier only: the loudest thing the rig does, and the

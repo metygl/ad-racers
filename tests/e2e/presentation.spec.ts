@@ -201,6 +201,8 @@ test.describe('accessibility', () => {
     await page.locator('label[for="seg-graphics-quality-medium"]').click();
     await page.evaluate(() => {
       const prototype = HTMLCanvasElement.prototype;
+      // The wrapper deliberately reapplies the native method to each canvas.
+      // eslint-disable-next-line @typescript-eslint/unbound-method
       const original = prototype.getContext;
       let fail = true;
       prototype.getContext = function (this: HTMLCanvasElement, ...args: unknown[]) {

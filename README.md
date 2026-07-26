@@ -46,8 +46,8 @@ Three things decide a race:
 | Camera | `C` | Right stick click |
 | Pause | `Esc` / `P` | Start |
 
-Every action except pause is rebindable in **Settings → Controls**. Escape
-always pauses.
+Every keyboard action except pause is rebindable in **Settings → Controls**.
+Gamepad buttons use the fixed Standard Gamepad layout. Escape always pauses.
 
 **Touch** is offered on devices with a genuine coarse pointer: a steering strip
 under the left thumb, action pads under the right, and a permanent
@@ -88,7 +88,7 @@ mistake, and it can be switched off.
 
 ## Browser support
 
-Needs WebGL 2 (with a WebGL 1 fallback) and ES2022.
+Needs WebGL 2 and ES2022.
 
 | Browser | Status |
 | --- | --- |
@@ -175,9 +175,8 @@ a different name works unchanged.
 
 **Live site:** <https://metygl.github.io/ad-racers/>
 
-Pages is enabled and sourced from GitHub Actions. The site is published by the
-first run of the deploy workflow on `main`; until that lands the URL returns a
-404. See [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+For the current Pages status and deployment details, see
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
 
 The production build also runs anywhere that serves static files:
 
@@ -230,8 +229,6 @@ meshes or textures from any existing title.
   SwiftShader; a real mobile GPU sits far above that, but there is no hardware
   mobile measurement in this repository yet.
 - **Single player only.** There is no local or online multiplayer.
-- **Gamepad rebinding is fixed.** Keyboard bindings are fully rebindable;
-  gamepad buttons use the Standard Gamepad layout and are not remappable.
 - **Best times are per course, not per difficulty.** The difficulty a record
   was set on is stored and shown, but a single slot is kept per course.
 - **Opponents drift only where it pays.** They use it on the technical course

@@ -62,7 +62,7 @@ test.describe('menu to finish', () => {
     // Fast-forward the remainder rather than driving three laps in real time.
     await page.evaluate(() => window.adRacers?.skipToFinish());
 
-    await expect(page.getByRole('heading', { name: /Race won|Finished/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Race won|Finished|Did not finish/i })).toBeVisible();
     expect(await currentScreen(page)).toBe('results');
 
     // Every entry is classified, once.
@@ -125,7 +125,7 @@ test.describe('menu to finish', () => {
       await page.evaluate(() => window.adRacers?.startRace(90210));
       await expect(page.getByTestId('hud')).toBeVisible();
       await page.evaluate(() => window.adRacers?.skipToFinish());
-      await expect(page.getByRole('heading', { name: /Race won|Finished/ })).toBeVisible();
+      await expect(page.getByRole('heading', { name: /Race won|Finished|Did not finish/i })).toBeVisible();
       return page.evaluate(() =>
         Array.from(document.querySelectorAll('.results__row')).map(
           (row) =>

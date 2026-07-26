@@ -6,10 +6,10 @@
 | --- | --- | --- | --- |
 | Frame time, desktop | ≤ 16.7 ms (60 fps) | **8.3 ms median, 10.0 ms p95** | Measured by hand; see below |
 | Draw calls | < 100 | **58** | `tests/e2e/race.spec.ts` |
-| Triangles | < 500 k | **343 k** | Performance overlay |
+| Triangles | < 500 k | **344 k** | Performance overlay |
 | Particles | ≤ 800 (High) | Hard cap, pre-allocated | `ParticleSystem` budget |
 | JS heap | < 150 MB | **31 MB** | Performance overlay |
-| Download, total | ≤ 260 kB gzip | **177.6 kB** | `npm run check:budget` |
+| Download, total | ≤ 260 kB gzip | **177.7 kB** | `npm run check:budget` |
 | Download, our code | ≤ 80 kB gzip | **44.0 kB** | `npm run check:budget` |
 | Simulation rate | exactly 120 Hz | **120 steps/s** | `tests/e2e/race.spec.ts` |
 | Network during a race | none | none | No `fetch` in `src/` |
@@ -126,7 +126,7 @@ trusting that every GPU resource survived. Covered by
 ## Load time
 
 There is no loading bar because there is nothing to load. The download is
-177.6 kB gzipped and the world is generated in code.
+177.7 kB gzipped and the world is generated in code.
 
 The one measurable cost at startup is building the first course — the spline is
 resampled, the terrain heightfield is projected against the track corridor, and

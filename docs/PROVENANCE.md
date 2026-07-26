@@ -34,11 +34,11 @@ None of these ship to the browser.
 | @vitest/coverage-v8 | 4.1.10 | MIT | Coverage |
 | @playwright/test | 1.62.0 | Apache-2.0 | Browser tests |
 | eslint | 10.8.0 | MIT | Linting |
-| @eslint/js | — | MIT | ESLint recommended rules |
+| @eslint/js | 10.0.1 | MIT | ESLint recommended rules |
 | typescript-eslint | 8.65.0 | MIT | TypeScript lint rules |
-| globals | — | MIT | Environment globals for ESLint |
+| globals | 17.7.0 | MIT | Environment globals for ESLint |
 | @types/three | 0.185.1 | MIT | Type definitions |
-| @types/node | — | MIT | Type definitions |
+| @types/node | 26.1.1 | MIT | Type definitions |
 
 Regenerate this list with `npm run licenses`.
 
@@ -65,7 +65,7 @@ an outrigger pod, the Reclaim Circuit — is original.
 | Boneyard | Marrow | Cobb | Ossuary |
 | Greenline | Juniper | Sprocket | Sapling |
 
-All eighteen names are invented. None is a reference to, parody of, or play on
+All 24 names are invented. None is a reference to, parody of, or play on
 a name from any existing game, and none is derived from a real person.
 
 ### Courses (`src/game/track/tracks/`)

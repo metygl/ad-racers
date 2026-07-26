@@ -2,9 +2,9 @@
  * Central tuning table for the simulation.
  *
  * Everything here is in SI units: metres, seconds, radians. The values were
- * tuned by playing, but they live in one place so the balance tests in
- * `tests/unit/balance.test.ts` can assert the relationships that matter (for
- * example: combat must never be worth more than a corner's worth of time).
+ * tuned by playing, but they live in one place so focused unit tests can assert
+ * the relationships that matter (for example: combat must never be worth more
+ * than a corner's worth of time).
  */
 
 /** The simulation always advances in whole steps of this length. */
@@ -158,7 +158,7 @@ export const SURGE = {
  *
  * Design intent: a strike is worth roughly 0.35 s of track time against an
  * even opponent — enough to break a tow, never enough to substitute for
- * driving. `tests/unit/balance.test.ts` pins that budget.
+ * driving. `tests/unit/combat.test.ts` pins that budget.
  */
 export const COMBAT = {
   windup: 0.16,

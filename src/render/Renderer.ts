@@ -1,0 +1,433 @@
+import * as THREE from 'three';
+import { clamp01 } from '../core/math';
+import type { Simulation } from '../game/sim/simulation';
+import type { RacerState, SimEvent } from '../game/sim/state';
+import { getRacer } from '../game/racers';
+import { SURFACES } from '../game/track/types';
+import { ChaseCamera } from './camera/ChaseCamera';
+import { ParticleSystem } from './scene/Particles';
+import { buildHazardMarkers, buildObstacles, buildScenery } from './scene/Scenery';
+import { buildLighting, buildSky } from './scene/SkyDome';
+import type { LightingResult, SkyResult } from './scene/SkyDome';
+import { buildTerrain } from './scene/Terrain';
+import { buildTrackMesh } from './scene/TrackMesh';
+import { buildVehicle } from './scene/VehicleModel';
+import type { VehicleVisual } from './scene/VehicleModel';
+import { QUALITY_TIERS } from './quality';
+import type { QualityId } from './quality';
+import { disposeTextures } from './textures/procedural';
+
+/**
+ * Everything that draws.
+ *
+ * The renderer reads the simulation but never writes to it, and it never
+ * advances time on its own — `render` is handed the interpolation state by the
+ * game loop. That separation is what makes the race deterministic regardless of
+ * frame rate, and it is what lets the whole simulation be tested without a GPU.
+ */
+
+export interface RendererOptions {
+  canvas: HTMLCanvasElement;
+  quality: QualityId;
+  reducedMotion: boolean;
+  onContextLost: () => void;
+  onContextRestored: () => void;
+  onCanvasReplaced?: (canvas: HTMLCanvasElement) => void;
+}
+
+export interface RenderStats {
+  drawCalls: number;
+  triangles: number;
+  particles: number;
+  programs: number;
+  geometries: number;
+  textures: number;
+}
+
+export class GameRenderer {
+  readonly chase: ChaseCamera;
+  private renderer: THREE.WebGLRenderer;
+  private readonly scene = new THREE.Scene();
+  private readonly world = new THREE.Group();
+  private readonly vehicles = new Map<number, VehicleVisual>();
+  private particles: ParticleSystem;
+  private sky: SkyResult | null = null;
+  private lighting: LightingResult | null = null;
+  private quality: QualityId;
+  private reducedMotion: boolean;
+  private dustColor = new THREE.Color(0xffffff);
+  private trackId: string | null = null;
+  private elapsedTotal = 0;
+  private disposed = false;
+  private canvas: HTMLCanvasElement;
+
+  constructor(private readonly options: RendererOptions) {
+    this.quality = options.quality;
+    this.reducedMotion = options.reducedMotion;
+    this.canvas = options.canvas;
+    const tier = QUALITY_TIERS[this.quality];
+
+    this.renderer = this.createRenderer(tier.antialias);
+    this.configureRenderer(this.renderer, tier);
+
+    this.scene.add(this.world);
+    this.chase = new ChaseCamera(1);
+    this.chase.shakeScale = this.reducedMotion ? 0 : 1;
+    this.particles = new ParticleSystem(tier.particleBudget);
+    for (const mesh of this.particles.meshes) this.scene.add(mesh);
+
+    this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
+    this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
+  }
+
+  private createRenderer(antialias: boolean, canvas = this.canvas): THREE.WebGLRenderer {
+    return new THREE.WebGLRenderer({
+      canvas,
+      antialias,
+      powerPreference: 'high-performance',
+      // The game never reads the canvas back, and keeping the drawing buffer
+      // lets the browser skip a clear each frame.
+      preserveDrawingBuffer: false,
+      alpha: false,
+    });
+  }
+
+  private configureRenderer(renderer: THREE.WebGLRenderer, tier: (typeof QUALITY_TIERS)[QualityId]): void {
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.maxPixelRatio));
+    renderer.shadowMap.enabled = tier.shadowMapSize > 0;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+  }
+
+  private handleContextLost = (event: Event): void => {
+    // Preventing the default is what tells the browser we intend to restore.
+    event.preventDefault();
+    this.options.onContextLost();
+  };
+
+  private handleContextRestored = (): void => {
+    this.options.onContextRestored();
+  };
+
+  get domElement(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
+  setSize(width: number, height: number): void {
+    this.renderer.setSize(width, height, false);
+    this.chase.setAspect(width / Math.max(1, height));
+  }
+
+  setReducedMotion(value: boolean): void {
+    this.reducedMotion = value;
+    this.chase.shakeScale = value ? 0 : 1;
+  }
+
+  /**
+   * Applies a quality tier. The world is rebuilt because scenery density and
+   * terrain resolution are baked into geometry; the caller is expected to do
+   * this between races or during a pause, never mid-corner.
+   */
+  setQuality(quality: QualityId, simulation: Simulation | null): void {
+    if (quality === this.quality) return;
+    const previousQuality = this.quality;
+    const tier = QUALITY_TIERS[quality];
+    const previousTier = QUALITY_TIERS[previousQuality];
+    if (tier.antialias !== previousTier.antialias) {
+      const size = this.renderer.getSize(new THREE.Vector2());
+      const replacement = this.canvas.cloneNode(false) as HTMLCanvasElement;
+      const nextRenderer = this.createRenderer(tier.antialias, replacement);
+      this.configureRenderer(nextRenderer, tier);
+      nextRenderer.setSize(size.x, size.y, false);
+      const previousRenderer = this.renderer;
+      const previousCanvas = this.canvas;
+      this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
+      this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
+      this.canvas.replaceWith(replacement);
+      this.canvas = replacement;
+      this.options.onCanvasReplaced?.(replacement);
+      this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
+      this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
+      this.renderer = nextRenderer;
+      previousRenderer.forceContextLoss();
+      previousRenderer.dispose();
+      previousCanvas.width = 1;
+      previousCanvas.height = 1;
+    } else {
+      this.configureRenderer(this.renderer, tier);
+    }
+    this.quality = quality;
+
+    for (const mesh of this.particles.meshes) this.scene.remove(mesh);
+    this.particles.dispose();
+    this.particles = new ParticleSystem(tier.particleBudget);
+    for (const mesh of this.particles.meshes) this.scene.add(mesh);
+
+    if (simulation) {
+      this.trackId = null;
+      this.buildWorld(simulation);
+    }
+  }
+
+  get qualityId(): QualityId {
+    return this.quality;
+  }
+
+  /** Builds (or rebuilds) the static world and the racer models. */
+  buildWorld(simulation: Simulation): void {
+    const tier = QUALITY_TIERS[this.quality];
+    const track = simulation.track;
+    const theme = track.definition.theme;
+
+    if (this.trackId !== track.definition.id) {
+      this.clearWorld();
+      this.trackId = track.definition.id;
+
+      this.scene.fog = new THREE.FogExp2(theme.fogColor, theme.fogDensity);
+      this.scene.background = null;
+
+      this.sky = buildSky(theme, track.definition.id === 'saltflat-reliquary' ? 0.55 : 0.8);
+      this.scene.add(this.sky.mesh);
+
+      this.lighting = buildLighting(theme, tier.shadowMapSize, tier.shadowRadius);
+      this.scene.add(this.lighting.group);
+
+      const terrain = buildTerrain(track, tier.terrainResolution);
+      this.world.add(terrain.mesh);
+      this.world.add(buildTrackMesh(track));
+      this.world.add(buildScenery(track, {
+        densityScale: tier.sceneryDensity,
+        visibilityDistance: tier.sceneryDistance,
+        heightAt: terrain.heightAt,
+        castShadows: tier.shadowMapSize > 0,
+      }));
+      this.world.add(buildObstacles(track));
+      this.world.add(buildHazardMarkers(track));
+
+      this.dustColor = new THREE.Color(theme.dustColor);
+    }
+
+    // Racer models are cheap; rebuild them whenever the field changes.
+    for (const visual of this.vehicles.values()) {
+      this.world.remove(visual.group);
+      visual.dispose();
+    }
+    this.vehicles.clear();
+    for (const racer of simulation.racers) {
+      const visual = buildVehicle(getRacer(racer.profileId), tier.vehicleShadows);
+      this.vehicles.set(racer.index, visual);
+      this.world.add(visual.group);
+    }
+
+    this.particles.reset();
+    const player = simulation.player ?? simulation.racers[0];
+    if (player) this.chase.reset(player);
+  }
+
+  private clearWorld(): void {
+    for (const child of [...this.world.children]) {
+      this.world.remove(child);
+      disposeObject(child);
+    }
+    if (this.sky) {
+      this.scene.remove(this.sky.mesh);
+      disposeObject(this.sky.mesh);
+      this.sky = null;
+    }
+    if (this.lighting) {
+      this.scene.remove(this.lighting.group);
+      this.lighting = null;
+    }
+  }
+
+  /** Turns simulation events into effects. Called once per rendered frame. */
+  consumeEvents(events: readonly SimEvent[], simulation: Simulation): void {
+    for (const event of events) {
+      switch (event.type) {
+        case 'collision': {
+          const racer = simulation.racers[event.racer];
+          if (!racer) break;
+          this.particles.emit('impact', racer.pos.x, racer.y + 0.8, racer.pos.z, 0xffd9a0, 8, clamp01(event.speed / 18));
+          this.particles.emit('spark', racer.pos.x, racer.y + 0.7, racer.pos.z, 0xffb95c, 10, clamp01(event.speed / 14));
+          if (racer.isPlayer) this.chase.addShake(clamp01(event.speed / 16) * 0.8);
+          break;
+        }
+        case 'wallHit': {
+          const racer = simulation.racers[event.racer];
+          if (!racer) break;
+          this.particles.emit('spark', event.pos.x, racer.y + 0.6, event.pos.z, 0xffc36b, 7, clamp01(event.speed / 16));
+          if (racer.isPlayer) this.chase.addShake(clamp01(event.speed / 20) * 0.7);
+          break;
+        }
+        case 'strikeHit': {
+          const target = simulation.racers[event.target];
+          const y = target ? target.y + 1.1 : 1.1;
+          this.particles.emit('impact', event.pos.x, y, event.pos.z, 0xfff0b8, 12, event.strength);
+          this.particles.emit('spark', event.pos.x, y, event.pos.z, 0xffe08a, 14, event.strength);
+          if (target?.isPlayer || simulation.racers[event.attacker]?.isPlayer) {
+            this.chase.addShake(0.55 * event.strength);
+          }
+          break;
+        }
+        case 'strikeCounter': {
+          const a = simulation.racers[event.a];
+          if (a) this.particles.emit('impact', a.pos.x, a.y + 1.2, a.pos.z, 0xbfefff, 14, 1);
+          if (a?.isPlayer || simulation.racers[event.b]?.isPlayer) this.chase.addShake(0.4);
+          break;
+        }
+        case 'driftRelease': {
+          const racer = simulation.racers[event.racer];
+          if (!racer) break;
+          const colors = [0x9fd8ff, 0xffc46b, 0xff7ad9];
+          this.particles.emit(
+            'boost',
+            racer.pos.x, racer.y + 0.5, racer.pos.z,
+            colors[Math.min(event.tier, colors.length) - 1] ?? 0xffffff,
+            10 + event.tier * 5,
+            1,
+          );
+          break;
+        }
+        case 'jumpLand': {
+          const racer = simulation.racers[event.racer];
+          if (!racer) break;
+          this.particles.emit('dust', racer.pos.x, racer.y + 0.2, racer.pos.z, this.dustColor, event.clean ? 8 : 16, 1.4);
+          if (racer.isPlayer && !event.clean) this.chase.addShake(clamp01(event.speed / 22) * 0.6);
+          break;
+        }
+        case 'hazard': {
+          this.particles.emit('boost', event.pos.x, 0.6, event.pos.z, 0x7fe8ff, 16, 1.3);
+          break;
+        }
+        case 'respawn': {
+          const racer = simulation.racers[event.racer];
+          if (racer) this.particles.emit('boost', racer.pos.x, racer.y + 0.9, racer.pos.z, 0xa8f0e0, 22, 1.2);
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }
+
+  /**
+   * Draws one frame. `elapsed` is wall-clock seconds since the last frame.
+   * `focusIndex` overrides which racer the camera and audio listener follow,
+   * which is how the attract race can follow the leader instead of a player.
+   */
+  render(simulation: Simulation, elapsed: number, focusIndex?: number): void {
+    if (this.disposed) return;
+    this.elapsedTotal += elapsed;
+    const tier = QUALITY_TIERS[this.quality];
+
+    const focus =
+      (focusIndex === undefined ? undefined : simulation.racers[focusIndex]) ??
+      simulation.player ??
+      simulation.racers[0];
+    for (const racer of simulation.racers) {
+      const visual = this.vehicles.get(racer.index);
+      if (!visual) continue;
+      visual.update(racer, elapsed);
+      this.emitTrail(racer, elapsed, tier.particleBudget > 0, focus);
+    }
+
+    if (focus) {
+      const roughness = focus.onTrack
+        ? SURFACES[focus.surface].roughness * clamp01(Math.hypot(focus.velocity.x, focus.velocity.z) / 40)
+        : SURFACES[focus.surface].roughness;
+      this.chase.update(focus, elapsed, this.reducedMotion ? 0 : roughness);
+      this.lighting?.follow(focus.pos.x, focus.y, focus.pos.z);
+      if (this.sky) {
+        this.sky.mesh.position.copy(this.chase.camera.position);
+        this.sky.update(elapsed);
+      }
+    }
+
+    this.particles.update(elapsed, this.chase.camera.quaternion);
+    this.renderer.render(this.scene, this.chase.camera);
+  }
+
+  /** Continuous per-racer effects: tyre dust, boost flare, drift smoke. */
+  private emitTrail(racer: RacerState, elapsed: number, enabled: boolean, focus: RacerState | undefined): void {
+    if (!enabled) return;
+    const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
+    if (speed < 4) return;
+
+    // Trails from racers the player cannot make out are pure cost: they fill
+    // the pool, which starves the effects that do matter, and they stack into a
+    // haze. Beyond 90 m nothing is emitted at all.
+    if (focus) {
+      const distance = Math.hypot(racer.pos.x - focus.pos.x, racer.pos.z - focus.pos.z);
+      if (distance > 90) return;
+    }
+
+    const surface = SURFACES[racer.surface];
+    const behindX = racer.pos.x - Math.cos(racer.heading) * 2;
+    const behindZ = racer.pos.z - Math.sin(racer.heading) * 2;
+
+    // Rate is per second and scaled by how rough the surface is and how hard
+    // the skiff is sliding, so a clean line on tarmac is visually quiet and a
+    // drift on dirt throws a proper rooster tail.
+    const slideFactor = clamp01(Math.abs(racer.slip) / 0.4);
+    const rate = surface.roughness * 16 * clamp01(speed / 35) + slideFactor * 13;
+    const count = Math.floor(rate * elapsed + (this.elapsedTotal * 60 + racer.index) % 1);
+    if (count > 0) {
+      const color = racer.surface === 'water' ? 0xcfe8ff : this.dustColor;
+      const kind = racer.surface === 'water' ? 'splash' : 'dust';
+      this.particles.emit(kind, behindX, racer.y + 0.25, behindZ, color, Math.min(count, 2), 1 + slideFactor);
+    }
+
+    if (racer.boosting) {
+      this.particles.emit(
+        'boost',
+        racer.pos.x - Math.cos(racer.heading) * 2.6,
+        racer.y + 0.6,
+        racer.pos.z - Math.sin(racer.heading) * 2.6,
+        getRacer(racer.profileId).colors.glow,
+        2,
+        1,
+      );
+    }
+  }
+
+  stats(): RenderStats {
+    const info = this.renderer.info;
+    return {
+      drawCalls: info.render.calls,
+      triangles: info.render.triangles,
+      particles: this.particles.live,
+      programs: info.programs?.length ?? 0,
+      geometries: info.memory.geometries,
+      textures: info.memory.textures,
+    };
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
+    for (const visual of this.vehicles.values()) visual.dispose();
+    this.vehicles.clear();
+    this.clearWorld();
+    this.particles.dispose();
+    disposeTextures();
+    this.renderer.dispose();
+  }
+}
+
+/** Recursively releases GPU resources for a subtree. */
+function disposeObject(root: THREE.Object3D): void {
+  root.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const material = mesh.material;
+    if (Array.isArray(material)) {
+      for (const m of material) m.dispose();
+    } else if (material) {
+      material.dispose();
+    }
+  });
+}

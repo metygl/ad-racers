@@ -1,0 +1,76 @@
+name: Deploy to GitHub Pages
+
+# Deploys only from main, after a change lands. Pull requests are verified by
+# ci.yml but never published.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one in flight — a half-published
+# site is worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify before publishing
+        # Deliberately re-run here rather than trusting the CI job: a deploy is
+        # the one place where shipping a broken build has consequences beyond
+        # a red tick.
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run test
+
+      - name: Build
+        # The repository name is the Pages sub-path, so the base is derived
+        # rather than hard-coded — a fork under a different name still works.
+        run: BASE_PATH="/${GITHUB_REPOSITORY#*/}/" npm run build
+
+      - name: Check download budget
+        run: npm run check:budget
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  deploy:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

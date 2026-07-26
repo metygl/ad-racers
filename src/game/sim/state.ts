@@ -1,0 +1,184 @@
+import type { Vec2 } from '../../core/math';
+import type { Path, SurfaceId } from '../track/types';
+import type { VehicleSpec } from '../racers';
+
+/** One frame of driver intent. Identical shape for the player and the AI. */
+export interface ControlInput {
+  /** -1 (full left) to 1 (full right). */
+  steer: number;
+  /** 0 to 1. */
+  throttle: number;
+  /** 0 to 1. */
+  brake: boolean;
+  drift: boolean;
+  boost: boolean;
+  /** -1 strikes to the left, 1 to the right, 0 does not strike. */
+  strike: -1 | 0 | 1;
+  /** Request a respawn back onto the track. */
+  respawn: boolean;
+}
+
+export function emptyInput(): ControlInput {
+  return { steer: 0, throttle: 0, brake: false, drift: false, boost: false, strike: 0, respawn: false };
+}
+
+export type StrikePhase = 'idle' | 'windup' | 'active' | 'recovery';
+
+export interface StrikeState {
+  phase: StrikePhase;
+  /** Seconds remaining in the current phase. */
+  timer: number;
+  side: -1 | 1;
+  /** Seconds until another strike may start. */
+  cooldown: number;
+  /** Racers already hit by the current swing, so one swing lands once each. */
+  hitThisSwing: number[];
+}
+
+export interface GuardEntry {
+  attacker: number;
+  hits: number;
+  /** Seconds until this guard entry expires. */
+  timer: number;
+}
+
+export interface DriftState {
+  active: boolean;
+  /** Sign of the drift direction; 0 when not yet committed. */
+  direction: number;
+  charge: number;
+}
+
+export interface AiState {
+  difficultyId: string;
+  /** 0-1; how far the driver will push the tyres. */
+  skill: number;
+  /** 0-1; how eagerly it uses the companion. */
+  aggression: number;
+  /** 0-1; how willing it is to take a shortcut. */
+  boldness: number;
+  /** Chance per second of a small, self-correcting mistake. */
+  mistakeRate: number;
+  /** 0-1; how much surge it will spend rather than hoard. */
+  surgeDiscipline: number;
+  /** Fraction of the skiff's straight-line pace this driver asks for. */
+  pace: number;
+  /** Baseline lateral bias, so cars do not stack on one line. */
+  lineBias: number;
+  /** Reaction delay, seconds. */
+  reaction: number;
+  /** Slow wander phase for organic-looking line variation. */
+  noisePhase: number;
+  targetLateral: number;
+  smoothedTargetLateral: number;
+  /** Speed the driver is currently asking for; surfaced for tests and tuning. */
+  targetSpeed: number;
+  overtakeTimer: number;
+  overtakeSide: number;
+  strikeCooldown: number;
+  mistakeTimer: number;
+  /** Minimum remaining commitment to the current drift, seconds. */
+  driftHold: number;
+  /** Minimum remaining commitment to the current boost, seconds. */
+  boostHold: number;
+  recovery: 'none' | 'reverse' | 'realign';
+  recoveryTimer: number;
+  /** Shortcut chosen for the current lap, or null for the main line. */
+  branchChoice: string | null;
+  /** Main-line distance at which the current branch decision was made. */
+  branchDecidedAt: number;
+  /** Rolling record of applied catch-up, for the fairness assertion. */
+  catchUpScale: number;
+}
+
+export interface RacerState {
+  index: number;
+  profileId: string;
+  spec: VehicleSpec;
+  isPlayer: boolean;
+
+  pos: Vec2;
+  /** Elevation of the vehicle body. */
+  y: number;
+  heading: number;
+  velocity: Vec2;
+  verticalVelocity: number;
+  airborne: boolean;
+  /** Smoothed steering actually applied, after input shaping. */
+  steer: number;
+  /** Signed slip angle, exposed for drift smoke and the HUD. */
+  slip: number;
+
+  surge: number;
+  boosting: boolean;
+  /** True while sitting in a rival's wake; feeds drag relief and surge gain. */
+  slipstreaming: boolean;
+  drift: DriftState;
+  strike: StrikeState;
+  /** Seconds of degraded control remaining after being struck. */
+  stagger: number;
+  guards: GuardEntry[];
+  /** Strikes landed this race, shown on the results screen. */
+  strikesLanded: number;
+  strikesTaken: number;
+
+  /** Path the racer is currently being tracked against. */
+  path: Path;
+  mainDistance: number;
+  previousMainDistance: number;
+  lateral: number;
+  /** Half-width of the corridor at the racer's current position. */
+  currentHalfWidth: number;
+  onTrack: boolean;
+  surface: SurfaceId;
+
+  lapsCompleted: number;
+  nextCheckpoint: number;
+  checkpointsPassed: number;
+  /** Main-line distance of the last checkpoint claimed; anchors the score. */
+  lastCheckpointDistance: number;
+  /** Monotone ordering key used for live positions. */
+  progress: number;
+  position: number;
+  /** True only after crossing the finish line for the final required lap. */
+  completed: boolean;
+  finished: boolean;
+  finishTime: number;
+  /** Final classification, filled in when the racer crosses the line. */
+  finishPosition: number;
+  lapTimes: number[];
+  bestLap: number;
+  currentLapStart: number;
+
+  stuckTimer: number;
+  /**
+   * Continuous time spent below walking pace. Unlike `stuckTimer` this is not
+   * reset by the AI's recovery manoeuvres, so a car that keeps failing to free
+   * itself still reaches the respawn threshold instead of looping forever.
+   */
+  wedgeTimer: number;
+  wrongWayTimer: number;
+  /** Seconds of collision cooldown, so one bump is not counted many times. */
+  contactCooldown: number;
+
+  ai: AiState | null;
+}
+
+export type SimEvent =
+  | { type: 'countdown'; value: number }
+  | { type: 'raceStart' }
+  | { type: 'lap'; racer: number; lap: number; time: number }
+  | { type: 'checkpoint'; racer: number; checkpoint: number }
+  | { type: 'finish'; racer: number; position: number; time: number }
+  | { type: 'raceEnd' }
+  | { type: 'strikeSwing'; racer: number; side: -1 | 1 }
+  | { type: 'strikeHit'; attacker: number; target: number; strength: number; pos: Vec2 }
+  | { type: 'strikeCounter'; a: number; b: number }
+  | { type: 'collision'; racer: number; other: number | null; speed: number; pos: Vec2 }
+  | { type: 'wallHit'; racer: number; speed: number; pos: Vec2 }
+  | { type: 'driftRelease'; racer: number; tier: number }
+  | { type: 'boostStart'; racer: number }
+  | { type: 'jumpLand'; racer: number; clean: boolean; speed: number }
+  | { type: 'respawn'; racer: number }
+  | { type: 'surfaceChange'; racer: number; surface: SurfaceId }
+  | { type: 'hazard'; racer: number; kind: string; pos: Vec2 };

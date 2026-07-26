@@ -3,7 +3,6 @@ import type { AudioSettings } from '../audio/AudioEngine';
 import { DEFAULT_KEY_BINDINGS } from '../game/input/bindings';
 import type { KeyBindings } from '../game/input/bindings';
 import type { QualityId } from '../render/quality';
-import { RACERS } from '../game/racers';
 
 /**
  * Local settings and best times.
@@ -119,7 +118,7 @@ function migrate(raw: unknown): SaveData {
   copyIf(incoming, 'showPerformance', save.settings, isBoolean);
   copyIf(incoming, 'seenControls', save.settings, isBoolean);
   copyIf(incoming, 'lastTrack', save.settings, isString);
-  copyIf(incoming, 'lastRacer', save.settings, (v): v is string => isString(v) && RACERS.some((racer) => racer.id === v));
+  copyIf(incoming, 'lastRacer', save.settings, isString);
   copyIf(incoming, 'lastDifficulty', save.settings, isString);
   copyIf(incoming, 'cameraMode', save.settings, (v): v is 'chase' | 'close' => v === 'chase' || v === 'close');
 

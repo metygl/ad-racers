@@ -139,3 +139,7 @@ export function getRacer(id: string): RacerProfile {
   if (!found) throw new Error(`Unknown racer: ${id}`);
   return found;
 }
+
+export function normalizeRacerId(id: string): string {
+  return RACERS.some((racer) => racer.id === id) ? id : (RACERS[0]?.id ?? 'thornline');
+}

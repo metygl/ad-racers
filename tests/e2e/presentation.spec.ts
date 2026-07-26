@@ -174,6 +174,37 @@ test.describe('accessibility', () => {
     await expect(page.getByRole('radiogroup', { name: 'Graphics quality' })).toBeVisible();
   });
 
+  test('rebuilds the menu world when quality changes', async ({ page }) => {
+    await openGame(page);
+    await page.locator('#scene').evaluate((canvas) => {
+      (canvas as HTMLCanvasElement & { originalCanvas?: boolean }).originalCanvas = true;
+    });
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('radio', { name: 'Low' }).check();
+    await expect
+      .poll(() =>
+        page.locator('#scene').evaluate(
+          (canvas) => (canvas as HTMLCanvasElement & { originalCanvas?: boolean }).originalCanvas ?? false,
+        ),
+      )
+      .toBe(false);
+    await page.getByRole('button', { name: 'Back' }).click();
+    await expect(page.getByRole('button', { name: 'Race', exact: true })).toBeVisible();
+  });
+
+  test('cancels key capture when settings returns to pause', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Change the key for Accelerate' }).click();
+    await page.getByRole('button', { name: 'Back' }).click();
+    await page.keyboard.press('KeyQ');
+    expect(await page.evaluate(() => window.adRacers?.settings().bindings)).toMatchObject({
+      accelerate: ['KeyW', 'ArrowUp'],
+    });
+  });
+
   test('honours the reduced-motion preference', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await openGame(page);

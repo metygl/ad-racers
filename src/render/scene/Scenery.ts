@@ -170,42 +170,32 @@ export function buildScenery(track: Track, options: SceneryOptions): THREE.Group
 
     if (placements.length === 0) continue;
 
-    const chunkSize = Math.max(40, options.visibilityDistance / 3);
-    const chunks = new Map<string, typeof placements>();
-    for (const placement of placements) {
-      const key = `${Math.floor(placement.x / chunkSize)},${Math.floor(placement.z / chunkSize)}`;
-      const chunk = chunks.get(key) ?? [];
-      chunk.push(placement);
-      chunks.set(key, chunk);
-    }
-
+    const budget = Math.ceil(placements.length * Math.min(1, options.visibilityDistance / 650));
+    const selected = Array.from(
+      { length: budget },
+      (_, index) => placements[Math.floor((index * placements.length) / budget)] as (typeof placements)[number],
+    );
     const { geometry, material } = prototype(spec.kind, theme);
-    for (const [key, chunk] of chunks) {
-      const [cellX, cellZ] = key.split(',').map(Number) as [number, number];
-      const originX = (cellX + 0.5) * chunkSize;
-      const originZ = (cellZ + 0.5) * chunkSize;
-      const mesh = new THREE.InstancedMesh(geometry, material, chunk.length);
-      mesh.name = `scenery-${spec.kind}`;
-      mesh.position.set(originX, 0, originZ);
-      mesh.castShadow = options.castShadows;
-      mesh.receiveShadow = false;
-      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    const mesh = new THREE.InstancedMesh(geometry, material, selected.length);
+    mesh.name = `scenery-${spec.kind}`;
+    mesh.castShadow = options.castShadows;
+    mesh.receiveShadow = false;
+    mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
 
-      const matrix = new THREE.Matrix4();
-      const quaternion = new THREE.Quaternion();
-      const position = new THREE.Vector3();
-      const scale = new THREE.Vector3();
-      chunk.forEach((p, index) => {
-        position.set(p.x - originX, options.heightAt(p.x, p.z) - 0.2, p.z - originZ);
-        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rotation);
-        scale.setScalar(p.scale);
-        matrix.compose(position, quaternion, scale);
-        mesh.setMatrixAt(index, matrix);
-      });
-      mesh.instanceMatrix.needsUpdate = true;
-      mesh.computeBoundingSphere();
-      group.add(mesh);
-    }
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    const position = new THREE.Vector3();
+    const scale = new THREE.Vector3();
+    selected.forEach((p, index) => {
+      position.set(p.x, options.heightAt(p.x, p.z) - 0.2, p.z);
+      quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rotation);
+      scale.setScalar(p.scale);
+      matrix.compose(position, quaternion, scale);
+      mesh.setMatrixAt(index, matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    group.add(mesh);
   }
 
   return group;

@@ -4,6 +4,9 @@ import { ACTIONS, DEFAULT_KEY_BINDINGS, bindingLabel, keyLabel } from '../../src
 import { AdaptiveQuality, QUALITY_ORDER, QUALITY_TIERS } from '../../src/render/quality';
 import { formatLapTime, ordinal } from '../../src/core/math';
 import { InputManager } from '../../src/game/input/InputManager';
+import { buildScenery } from '../../src/render/scene/Scenery';
+import { getTrack } from '../../src/game/track/tracks';
+import { normalizeRacerId } from '../../src/game/racers';
 
 const { migrate } = __internal;
 
@@ -62,9 +65,10 @@ describe('save migration', () => {
     expect(save.settings.cameraMode).toBe(fallback.cameraMode);
   });
 
-  it('falls back when the saved racer id is unknown', () => {
+  it('keeps saved racer ids structural for application-level validation', () => {
     const save = migrate({ version: 2, settings: { lastRacer: 'removed-racer' } });
-    expect(save.settings.lastRacer).toBe(defaultSettings().lastRacer);
+    expect(save.settings.lastRacer).toBe('removed-racer');
+    expect(normalizeRacerId(save.settings.lastRacer)).toBe(defaultSettings().lastRacer);
   });
 
   it('preserves best times across a migration', () => {
@@ -171,6 +175,25 @@ describe('key bindings', () => {
 });
 
 describe('quality tiers', () => {
+  it('keeps one batched mesh per species while scaling instance budgets', () => {
+    const track = getTrack('overgrown-interchange');
+    const build = (tier: 'low' | 'high') =>
+      buildScenery(track, {
+        densityScale: QUALITY_TIERS[tier].sceneryDensity,
+        visibilityDistance: QUALITY_TIERS[tier].sceneryDistance,
+        heightAt: () => 0,
+        castShadows: false,
+      });
+    const low = build('low');
+    const high = build('high');
+    expect(low.children.length).toBeLessThanOrEqual(track.definition.scenery.length);
+    expect(high.children.length).toBeLessThanOrEqual(track.definition.scenery.length);
+    expect(low.children.reduce((sum, child) => sum + ((child as { count?: number }).count ?? 0), 0)).toBeLessThan(
+      high.children.reduce((sum, child) => sum + ((child as { count?: number }).count ?? 0), 0),
+    );
+    expect(low.children.every((child) => child.frustumCulled)).toBe(true);
+  });
+
   it('orders the tiers monotonically on every budget', () => {
     for (let i = 1; i < QUALITY_ORDER.length; i++) {
       const lower = QUALITY_TIERS[QUALITY_ORDER[i - 1] as 'low'];

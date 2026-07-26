@@ -32,6 +32,7 @@ export interface RendererOptions {
   reducedMotion: boolean;
   onContextLost: () => void;
   onContextRestored: () => void;
+  onCanvasReplaced?: (canvas: HTMLCanvasElement) => void;
 }
 
 export interface RenderStats {
@@ -79,9 +80,9 @@ export class GameRenderer {
     this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
   }
 
-  private createRenderer(antialias: boolean): THREE.WebGLRenderer {
+  private createRenderer(antialias: boolean, canvas = this.canvas): THREE.WebGLRenderer {
     return new THREE.WebGLRenderer({
-      canvas: this.canvas,
+      canvas,
       antialias,
       powerPreference: 'high-performance',
       // The game never reads the canvas back, and keeping the drawing buffer
@@ -137,17 +138,24 @@ export class GameRenderer {
     const previousTier = QUALITY_TIERS[previousQuality];
     if (tier.antialias !== previousTier.antialias) {
       const size = this.renderer.getSize(new THREE.Vector2());
+      const replacement = this.canvas.cloneNode(false) as HTMLCanvasElement;
+      const nextRenderer = this.createRenderer(tier.antialias, replacement);
+      const previousRenderer = this.renderer;
+      const previousCanvas = this.canvas;
       this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
       this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
-      this.renderer.dispose();
-      const replacement = this.canvas.cloneNode(false) as HTMLCanvasElement;
       this.canvas.replaceWith(replacement);
       this.canvas = replacement;
+      this.options.onCanvasReplaced?.(replacement);
       this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
       this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
-      this.renderer = this.createRenderer(tier.antialias);
+      this.renderer = nextRenderer;
       this.configureRenderer(tier);
       this.renderer.setSize(size.x, size.y, false);
+      previousRenderer.forceContextLoss();
+      previousRenderer.dispose();
+      previousCanvas.width = 1;
+      previousCanvas.height = 1;
     } else {
       this.configureRenderer(tier);
     }
@@ -338,13 +346,6 @@ export class GameRenderer {
     }
 
     this.particles.update(elapsed, this.chase.camera.quaternion);
-    const scenery = this.world.getObjectByName('scenery');
-    if (scenery) {
-      const maxDistance = QUALITY_TIERS[this.quality].sceneryDistance;
-      for (const child of scenery.children) {
-        child.visible = child.position.distanceTo(this.chase.camera.position) <= maxDistance;
-      }
-    }
     this.renderer.render(this.scene, this.chase.camera);
   }
 

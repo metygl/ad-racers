@@ -8,7 +8,7 @@ import { getDifficulty } from '../game/ai/driver';
 import { InputManager } from '../game/input/InputManager';
 import { bindingLabel } from '../game/input/bindings';
 import type { ActionId } from '../game/input/bindings';
-import { RACERS } from '../game/racers';
+import { normalizeRacerId, RACERS } from '../game/racers';
 import { Simulation } from '../game/sim/simulation';
 import { emptyInput } from '../game/sim/state';
 import type { ControlInput, SimEvent } from '../game/sim/state';
@@ -43,7 +43,7 @@ export interface AppOptions {
 
 export class App {
   private readonly root: HTMLElement;
-  private readonly canvas: HTMLCanvasElement;
+  private canvas: HTMLCanvasElement;
   private readonly ui: HTMLElement;
   private readonly hud: Hud;
   private readonly input = new InputManager();
@@ -84,6 +84,7 @@ export class App {
     this.root = options.root;
     this.canvas = options.canvas;
     this.save = loadSave();
+    this.save.settings.lastRacer = normalizeRacerId(this.save.settings.lastRacer);
 
     this.ui = el('div', { class: 'ui', 'data-testid': 'ui' });
     this.hud = new Hud();
@@ -132,6 +133,9 @@ export class App {
         reducedMotion: this.save.settings.reducedMotion,
         onContextLost: this.handleContextLost,
         onContextRestored: this.handleContextRestored,
+        onCanvasReplaced: (canvas) => {
+          this.canvas = canvas;
+        },
       });
     } catch (error) {
       this.showUnsupported(error);
@@ -189,7 +193,12 @@ export class App {
     if (nextQuality !== previousQuality && this.renderer) {
       const tier: QualityId = next.autoQuality ? detectInitialQuality() : next.quality;
       this.adaptive.reset(tier);
-      this.renderer.setQuality(tier, this.simulation);
+      const active = this.simulation ?? this.attract;
+      this.renderer.setQuality(tier, active);
+      if (!this.simulation) {
+        if (tier === 'low') this.stopAttract();
+        else if (!this.attract) this.startAttract();
+      }
     }
     this.renderer?.setReducedMotion(next.reducedMotion);
     if (this.renderer) this.renderer.chase.mode = next.cameraMode;
@@ -454,6 +463,7 @@ export class App {
   }
 
   private showPause(): void {
+    this.input.cancelCapture();
     this.paused = true;
     this.input.setEnabled(false);
     this.audio.suspend();
@@ -689,7 +699,12 @@ export class App {
     if (this.save.settings.autoQuality && this.renderer && !this.paused) {
       const changed = this.adaptive.sample(elapsed, elapsed);
       if (changed) {
-        this.renderer.setQuality(changed, this.simulation);
+        const active = this.simulation ?? this.attract;
+        this.renderer.setQuality(changed, active);
+        if (!this.simulation) {
+          if (changed === 'low') this.stopAttract();
+          else if (!this.attract) this.startAttract();
+        }
         this.hud.notify(`Graphics set to ${changed}`, 'info');
       }
     }

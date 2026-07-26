@@ -1,5 +1,6 @@
 import { formatLapTime, ordinal } from '../../core/math';
 import { shouldUseTouch } from '../ui/TouchControls';
+import { crewSilhouette } from '../ui/garage';
 import type { GameSettings } from '../../core/storage';
 import { getDifficulty } from '../../game/ai/driver';
 import { getSpeedClass } from '../../game/config';
@@ -282,11 +283,51 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
     : `${actions.track.definition.name} · ${actions.track.laps} laps · ` +
       `${getDifficulty(actions.difficultyId).label} · ${getSpeedClass(actions.speedClassId).label}`;
 
+  /*
+   * A hero card, then the table.
+   *
+   * A review's verdict on this screen was "winning feels like entering a
+   * spreadsheet": a heading, a line of text, a classification table and three
+   * buttons, with no podium, no crew, no reward and nothing that belonged to
+   * the race that had just happened. The information was all there; the
+   * *occasion* was missing entirely.
+   *
+   * So the outcome leads with the crew who earned it — their machine, their
+   * names, their place and their time at a size that means something — and the
+   * table stays underneath for the detail. It is built from the same silhouette
+   * the garage and the 3D scene use, so the card cannot show a machine the
+   * player did not just drive, and it reads at 320 px because it is a stack
+   * rather than a row.
+   */
+  const heroCard = player
+    ? (() => {
+        const profile = getRacer(player.profileId);
+        const card = el(
+          'div',
+          { class: `results__hero${player.finishPosition === 1 && player.completed ? ' results__hero--won' : ''}` },
+          el('div', { class: 'results__hero-art' }, crewSilhouette(profile) as unknown as HTMLElement),
+          el('div', { class: 'results__hero-body' },
+            el('p', { class: 'results__hero-place', text: player.completed ? ordinal(player.finishPosition) : 'DNF' }),
+            el('p', { class: 'results__hero-crew', text: profile.crew }),
+            el('p', { class: 'results__hero-pilots', text: `${profile.pilot} & ${profile.wrench} · ${profile.skiff}` }),
+            el('p', {
+              class: 'results__hero-time',
+              text: player.completed ? formatLapTime(player.finishTime) : 'Did not finish',
+            }),
+          ),
+        );
+        card.style.setProperty('--crew', `#${profile.colors.body.toString(16).padStart(6, '0')}`);
+        card.style.setProperty('--crew-trim', `#${profile.colors.trim.toString(16).padStart(6, '0')}`);
+        return card;
+      })()
+    : null;
+
   return el(
     'section',
     { class: 'screen screen--results', 'data-screen': 'results', 'aria-labelledby': 'results-heading' },
     el('h1', { class: 'screen__heading', id: 'results-heading', text: headline }),
     el('p', { class: 'screen__lead', text: subtitle }),
+    heroCard,
     circuit?.unlocked
       ? el('p', { class: 'results__record results__record--unlock', text: `Unlocked: ${circuit.unlocked} class` })
       : null,

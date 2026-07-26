@@ -91,12 +91,48 @@ coordinate so it cannot drift away from the corner it marks during tuning.
 
 ---
 
+## Round-3 corrections
+
+All five round-2 lanes failed. The full finding-to-proof ledger is the
+correction checkpoint's own document; what belongs *here*, because it changes
+how the slice is built rather than what it looks like, is the small number of
+rules that came out of it.
+
+**One route source, and containment beats proximity.** The projection scored
+corridors by distance to a centreline, so a skiff in the middle of the main road
+was handed to a narrower branch running beside it and reported off-track on
+sand. A corridor that *contains* the point now always wins, and the one a racer
+is already on wins again over that, so a merge hands off exactly once instead of
+flipping every frame. `tests/unit/route-truth.test.ts` audits it in both
+directions on every course.
+
+**A junction cannot be walled**, and a branch stops claiming a racer twelve
+metres before it ends. Both are the same lesson: at a mouth the two corridors
+are the same tarmac, so anything that treats them as separate places delivers a
+car into a wall or leaves it steering a line that is about to stop existing.
+
+**Nothing may stay pinned.** Walls and obstacles both separate fully and walk a
+persisting contact off; obstacles also slide the car around, which is the thing
+a rock has that a wall does not. Stuck is measured by *progress*, not speed,
+because the failure state has speed.
+
+**A shortcut is a decision or it is a trap.** Every branch carries the seconds
+it actually saves, measured from surface speed caps at build time. A route that
+loses time is never offered to anyone; nerve only decides how thin a margin
+counts. Two shipped branches were strictly slower than the road they cut.
+
+**A hero shot has to be lit.** On a night course an unlit flat-shaded hull has
+no form at all, so adding hard-surface detail to the machine made the finish
+orbit *worse* — unlit detail is only more edges. The shot carries its own key
+light and is framed at 14.5 m for the silhouette rather than pressed against it.
+
 ## Budgets on this commit
 
 | Budget | Target | Measured |
 |---|---|---|
 | Frame time, High, six cars | ≤ 16.7 ms | 8.3 ms median, 9.5–9.9 ms p95 |
 | World draw calls, bunched grid, High | 10 < n < 100 | **95** |
+| World draw calls, hero course, mid-race | 10 < n < 100 | 57–86 |
 | Post passes | ≤ 4 | 4 |
 | Triangles | < 500 k | 320–329 k |
 | Download, total | ≤ 260 kB gzip | see below |

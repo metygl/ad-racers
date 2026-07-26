@@ -232,23 +232,87 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
       position: [HULL_LENGTH / 2 + noseLength * 0.28, 0.85, 0],
       rotation: [0, Math.PI / 4, -HALF_PI],
     },
-    // Swept tail fin (or a split pair): the strongest silhouette cue from
-    // directly behind, which is where the player sees five of these all race.
-    ...Array.from({ length: fin.blades }, (_, i): MergePart => {
+    /*
+     * The tail fin, built rather than extruded.
+     *
+     * A review called this "a huge featureless rectangular fin", and it was: a
+     * single 1.1 x H box. It is the largest flat area on the machine and the
+     * one the player stares at for a whole race, so it is the worst possible
+     * place to have nothing. It is now a tapered blade with a swept leading
+     * edge, a lightening cut-out through the middle, and a stiffening rib down
+     * the outside — the shape a crew would actually cut from plate, and enough
+     * negative space that the silhouette reads as fabricated rather than
+     * moulded.
+     */
+    ...Array.from({ length: fin.blades }, (_, i): MergePart[] => {
       const side = fin.blades === 1 ? 0 : (i === 0 ? -1 : 1) * halfWidth * 0.62;
-      return {
-        geometry: new THREE.BoxGeometry(1.1, fin.height, 0.16),
-        position: [-HULL_LENGTH / 2 + 0.35, 0.95 + fin.height / 2, side],
-        rotation: [0, 0, -fin.sweep],
-      };
-    }),
-    ...[-1, 1].map(
-      (side): MergePart => ({
-        geometry: new THREE.CylinderGeometry(0.3, 0.34, 1.4, 8),
-        position: [-HULL_LENGTH / 2 + 0.35, 0.6, side * halfWidth * 0.78],
+      const root: [number, number, number] = [-HULL_LENGTH / 2 + 0.35, 0.95 + fin.height / 2, side];
+      const sweep: [number, number, number] = [0, 0, -fin.sweep];
+      return [
+        // Lower half: full chord, carrying the load into the hull.
+        {
+          geometry: new THREE.BoxGeometry(1.15, fin.height * 0.42, 0.16),
+          position: [root[0], 0.95 + fin.height * 0.21, side],
+          rotation: sweep,
+        },
+        // Upper half: shorter chord, so the blade tapers instead of ending.
+        {
+          geometry: new THREE.BoxGeometry(0.72, fin.height * 0.46, 0.14),
+          position: [root[0] - fin.height * 0.14, 0.95 + fin.height * 0.68, side],
+          rotation: sweep,
+        },
+        // Leading-edge spar: the diagonal that makes it a blade, not a slab.
+        {
+          geometry: new THREE.BoxGeometry(0.2, fin.height * 0.9, 0.2),
+          position: [root[0] + 0.42, 0.95 + fin.height * 0.46, side],
+          rotation: [0, 0, -fin.sweep - 0.16],
+        },
+        // Two ribs across the cut-out, which is what reads at distance.
+        ...[0.34, 0.62].map((at): MergePart => ({
+          geometry: new THREE.BoxGeometry(0.9, 0.11, 0.22),
+          position: [root[0] - fin.height * (at - 0.3) * 0.3, 0.95 + fin.height * at, side],
+          rotation: sweep,
+        })),
+      ];
+    }).flat(),
+    /*
+     * The thruster cans, with the mechanical detail a can actually has: a
+     * body, a narrower throat, and a flared bell. Three stacked cylinders
+     * instead of one is the difference between "an engine" and "a tube".
+     */
+    ...[-1, 1].flatMap((side): MergePart[] => [
+      {
+        geometry: new THREE.CylinderGeometry(0.3, 0.34, 1.1, 8),
+        position: [-HULL_LENGTH / 2 + 0.5, 0.6, side * halfWidth * 0.78],
         rotation: [0, 0, HALF_PI],
-      }),
-    ),
+      },
+      {
+        geometry: new THREE.CylinderGeometry(0.22, 0.28, 0.22, 8),
+        position: [-HULL_LENGTH / 2 - 0.14, 0.6, side * halfWidth * 0.78],
+        rotation: [0, 0, HALF_PI],
+      },
+      {
+        geometry: new THREE.CylinderGeometry(0.36, 0.24, 0.34, 8),
+        position: [-HULL_LENGTH / 2 - 0.38, 0.6, side * halfWidth * 0.78],
+        rotation: [0, 0, HALF_PI],
+      },
+    ]),
+    /*
+     * A cowl over the nose with a real intake under it.
+     *
+     * The nose was a bare four-sided cone. A cowl that stands proud of it, with
+     * a shadowed gap beneath, gives the front of the machine a hard edge and a
+     * hole — the two things that read as engineering at any distance.
+     */
+    {
+      geometry: new THREE.BoxGeometry(noseLength * 0.72, 0.16, halfWidth * 1.25),
+      position: [HULL_LENGTH / 2 + noseLength * 0.16, 1.02, 0],
+      rotation: [0, 0, 0.06],
+    },
+    ...[-1, 1].map((side): MergePart => ({
+      geometry: new THREE.BoxGeometry(noseLength * 0.5, 0.3, 0.14),
+      position: [HULL_LENGTH / 2 + noseLength * 0.2, 0.86, side * halfWidth * 0.52],
+    })),
     /*
      * The roll hoop over the pilot.
      *
@@ -676,18 +740,74 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   pod.name = 'pod';
   chassis.add(pod);
 
-  const podGeometry = new THREE.CapsuleGeometry(0.46, 0.9, 4, 8);
+  /*
+   * The pod: a working station, not a capsule.
+   *
+   * A review read this as "a pale faceted torso or egg attached to a dark
+   * faceted ball" — because it was a capsule with a capsule on it. What makes
+   * it read as a place someone works is the furniture: an open cradle with a
+   * lip to brace against, a bracket where the arm is anchored, and a rack of
+   * salvage behind. All merged into the existing hull materials, so the whole
+   * station is still one draw call.
+   */
+  const podGeometry = mergeGeometries([
+    // The cradle: a tub, open at the top, rather than a sealed pill.
+    { geometry: new THREE.BoxGeometry(1.5, 0.5, 0.92), position: [0, 0, 0] },
+    { geometry: new THREE.BoxGeometry(1.6, 0.14, 1.02), position: [0, 0.26, 0] },
+    // A raked front so it has a direction.
+    { geometry: new THREE.BoxGeometry(0.5, 0.42, 0.8), position: [0.86, 0.02, 0], rotation: [0, 0, 0.34] },
+    // The bracket the arm is anchored to.
+    { geometry: new THREE.BoxGeometry(0.3, 0.44, 0.34), position: [-0.62, 0.18, -0.3] },
+    // A rack of salvage behind the seat: the crew carry their own spares.
+    ...[-0.28, 0, 0.28].map((at): MergePart => ({
+      geometry: new THREE.CylinderGeometry(0.09, 0.09, 0.5, 6),
+      position: [-0.5, 0.3, at],
+      rotation: [0, 0, HALF_PI * 0.9],
+    })),
+  ]);
   const podShell = new THREE.Mesh(podGeometry, body);
-  podShell.rotation.z = HALF_PI;
   podShell.castShadow = castShadow;
   pod.add(podShell);
   disposables.push(podGeometry);
 
-  const wrenchGeometry = new THREE.CapsuleGeometry(0.26, 0.42, 3, 6);
-  const wrench = new THREE.Mesh(wrenchGeometry, trim);
-  wrench.position.set(0, 0.62, 0);
+  /*
+   * Vex: a person braced in the cradle, working.
+   *
+   * The read has to survive being small and mostly seen from behind, so the
+   * silhouette is doing all of it: shoulders wider than the hips, a head that
+   * sits forward of them because they are leaning out to watch the road, and
+   * one arm out along the pod's lip holding on. The gear takes the dark value
+   * and the shoulders the crew colour, exactly as the rider does, so the two of
+   * them read as the same crew at a glance.
+   */
+  const companionParts: MergePart[] = [
+    { geometry: new THREE.BoxGeometry(0.34, 0.44, 0.36), position: [-0.02, 0.42, 0], rotation: [0, 0, 0.18], color: GEAR },
+    { geometry: new THREE.BoxGeometry(0.2, 0.16, 0.54), position: [0.04, 0.62, 0], color: profile.colors.trim },
+    // The arm out along the lip, which is what says "holding on".
+    { geometry: new THREE.CylinderGeometry(0.06, 0.07, 0.5, 5), position: [0.26, 0.5, 0.24], rotation: [0.4, 0, -0.9], color: GEAR },
+    // Knees drawn up in the tub.
+    { geometry: new THREE.BoxGeometry(0.38, 0.16, 0.3), position: [0.22, 0.26, 0], rotation: [0, 0, 0.5], color: GEAR },
+  ];
+  const wrenchGeometry = mergeGeometries(companionParts);
+  const wrench = new THREE.Mesh(wrenchGeometry, gear);
+  wrench.position.set(0, 0.1, 0);
+  wrench.castShadow = castShadow;
   pod.add(wrench);
   disposables.push(wrenchGeometry);
+
+  /*
+   * Vex's head, separate for the same reason Bramble's is: where a crew member
+   * is *looking* is the cheapest character animation there is, and a companion
+   * who tracks the road ahead reads as a person rather than as cargo.
+   */
+  const companionHeadGeometry = mergeGeometries([
+    { geometry: new THREE.CylinderGeometry(0.15, 0.145, 0.26, 10), rotation: [HALF_PI, 0, 0] },
+    { geometry: new THREE.BoxGeometry(0.16, 0.1, 0.24), position: [0.12, -0.07, 0] },
+  ]);
+  const companionHead = new THREE.Mesh(companionHeadGeometry, helmetMaterial);
+  companionHead.position.set(0.06, 0.86, 0);
+  wrench.add(companionHead);
+  disposables.push(companionHeadGeometry);
 
   // At rest the grapple arm is folded back along the hull. Only a swing brings
   // it out, which is what makes an incoming strike readable from behind.

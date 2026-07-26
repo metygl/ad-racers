@@ -998,6 +998,9 @@ export class App {
           // Reduced motion keeps the beat and drops the orbit: the camera holds
           // a steady three-quarter view rather than travelling around the car.
           if (!this.save.settings.reducedMotion) renderer.chase.startFinish();
+          // Reduced motion drops the orbit, not the lighting: the hero still
+          // has to be visible, it just does not travel.
+          renderer.setHeroLight(true);
         }
 
         if (events.some((event) => event.type === 'raceEnd')) {
@@ -1021,6 +1024,7 @@ export class App {
         this.finishHold -= elapsed;
         if (this.finishHold <= 0) {
           renderer.chase.endFinish();
+          renderer.setHeroLight(false);
           renderer.render(simulation, 0);
           this.finishRace();
           return;

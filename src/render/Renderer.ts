@@ -150,6 +150,22 @@ export class GameRenderer {
   private scenery: SceneryResult | null = null;
   private life: CourseLifeResult | null = null;
   private readonly nearFade = new NearFade();
+  /**
+   * A key light that exists only for the finish shot.
+   *
+   * On a night course a flat-shaded hull has no *form*: every surface falls to
+   * near-black and all the eye is left with is the emissive trim, so the
+   * machine reads as a scatter of bright panels on a dark mass — which is what
+   * an art review meant by the finish orbit "magnifying the box construction",
+   * and adding real hard-surface detail made it worse rather than better,
+   * because unlit detail is only more edges.
+   *
+   * A hero shot is lit. This is the smallest honest version of that: one short-
+   * range light carried with the camera, on only while the finish sequence is
+   * running, so the skiff, its rider and its companion are modelled by
+   * something during the one moment the game asks the player to look at them.
+   */
+  private heroLight: THREE.PointLight | null = null;
   /** Meshes the camera ray tests against; scenery and obstacles only. */
   private occluders: THREE.Object3D[] = [];
   private readonly raycaster = new THREE.Raycaster();
@@ -451,6 +467,10 @@ export class GameRenderer {
       this.sky = null;
     }
     this.scenery = null;
+    if (this.heroLight) {
+      this.scene.remove(this.heroLight);
+      this.heroLight = null;
+    }
     this.life?.dispose();
     this.life = null;
     this.occluders = [];
@@ -741,6 +761,17 @@ export class GameRenderer {
     this.presentationHold = Math.min(0.09, Math.max(this.presentationHold, seconds));
   }
 
+  /** Turns the finish shot's key light on or off. */
+  setHeroLight(on: boolean): void {
+    if (on && !this.heroLight) {
+      // Short range so it models the skiff and leaves the course to the moon.
+      const light = new THREE.PointLight(0xfff1dc, 0, 22, 1.6);
+      this.scene.add(light);
+      this.heroLight = light;
+    }
+    if (this.heroLight) this.heroLight.userData.wanted = on ? 1 : 0;
+  }
+
   render(simulation: Simulation, elapsed: number, focusIndex?: number): void {
     if (this.disposed) return;
 
@@ -777,6 +808,23 @@ export class GameRenderer {
       this.chase.setClearance(this.measureClearance(focus));
       this.chase.update(focus, elapsed, this.reducedMotion ? 0 : roughness);
       this.nearFade.update(this.chase.camera);
+
+      if (this.heroLight) {
+        /*
+         * Placed above and to one side of the camera rather than at it, so the
+         * machine gets a direction to be lit from instead of a flat frontal
+         * wash — and eased rather than switched, so the reveal is part of the
+         * moment instead of a light coming on.
+         */
+        const camera = this.chase.camera;
+        this.heroLight.position.set(
+          camera.position.x + (focus.pos.x - camera.position.x) * 0.25,
+          camera.position.y + 3.4,
+          camera.position.z + (focus.pos.z - camera.position.z) * 0.25,
+        );
+        const wanted = (this.heroLight.userData.wanted as number | undefined) ?? 0;
+        this.heroLight.intensity += (wanted * 46 - this.heroLight.intensity) * (1 - Math.exp(-4 * elapsed));
+      }
       this.detectNearMiss(focus, simulation, elapsed);
       this.lighting?.follow(focus.pos.x, focus.y, focus.pos.z);
       if (this.sky) {

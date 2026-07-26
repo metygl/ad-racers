@@ -235,20 +235,37 @@ export class ChaseCamera {
      * moment in the game with nothing to react to, and the pacing should say so.
      */
     if (this.finish > 0) {
+      /*
+       * Framed for the whole machine, not pressed against it.
+       *
+       * The first version orbited at seven and a half metres and looked at a
+       * point barely above the deck. A skiff is four metres long with a
+       * two-metre fin, so at that range it fills the frame and its panels read
+       * as a scatter of disconnected plates — an art review's exact complaint
+       * was that this shot "magnifies the box construction" and hides the
+       * rider, and adding real hard-surface detail to the hull made it worse
+       * rather than better, because detail at that distance is just more edges.
+       *
+       * A hero shot needs the silhouette. Thirteen metres out and four up, with
+       * the look-at at the top of the roll hoop, puts the whole machine and
+       * both crew inside the frame with air around them, which is the framing
+       * the shot was always supposed to be.
+       */
       const ease = this.finish * this.finish * (3 - 2 * this.finish);
-      this.orbitAngle += elapsed * 0.34;
+      this.orbitAngle += elapsed * 0.3;
       const angle = racer.heading + 2.35 + this.orbitAngle;
-      const radius = 9.2 - ease * 1.6;
+      const radius = 14.5 - ease * 1.4;
       const orbitX = racer.pos.x + Math.cos(angle) * radius;
+      const orbitY = racer.y + 4.1;
       const orbitZ = racer.pos.z + Math.sin(angle) * radius;
-      const orbitY = racer.y + 2.35;
       this.position.x = lerp(this.position.x, orbitX, ease);
       this.position.y = lerp(this.position.y, orbitY, ease);
       this.position.z = lerp(this.position.z, orbitZ, ease);
       this.camera.position.copy(this.position);
-      this.camera.lookAt(racer.pos.x, racer.y + 1.15, racer.pos.z);
+      this.camera.lookAt(racer.pos.x, racer.y + 1.9, racer.pos.z);
       // Back to the base field of view: the speed cue has nothing left to say.
-      this.fov = lerp(this.fov, MODE_SETTINGS.chase.fov - 4, 1 - Math.exp(-3 * elapsed));
+      // Slightly long, which flatters a silhouette and calms the orbit.
+      this.fov = lerp(this.fov, MODE_SETTINGS.chase.fov - 12, 1 - Math.exp(-3 * elapsed));
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
       return;

@@ -1743,6 +1743,96 @@ body {
   }
 }
 
+/*
+ * The result's hero card.
+ *
+ * A stack, not a row, so the same markup composes at 320 px and at 1440 without
+ * a second layout. The crew colour is a border and a wash rather than a fill:
+ * the outcome has to read first, and a card flooded with a team colour reads as
+ * decoration before it reads as a result.
+ */
+.results__hero {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.9rem 0 1.1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--crew, var(--ink-faint)) 55%, transparent);
+  border-left-width: 4px;
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--crew, transparent) 18%, rgba(8, 12, 18, 0.72)),
+    rgba(8, 12, 18, 0.72) 62%
+  );
+}
+
+/* A win gets the trim colour as a second, brighter edge. Nothing else does. */
+.results__hero--won {
+  border-color: color-mix(in srgb, var(--crew-trim, var(--signal)) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--crew-trim, var(--signal)) 30%, transparent) inset;
+}
+
+.results__hero-art {
+  flex: 0 0 auto;
+  width: 6.5rem;
+  display: grid;
+  place-items: center;
+}
+
+.results__hero-art svg {
+  width: 100%;
+  height: auto;
+}
+
+.results__hero-body {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.results__hero-place {
+  margin: 0;
+  font-size: 2.1rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.results__hero-crew {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--crew-trim, var(--ink));
+}
+
+.results__hero-pilots {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-faint);
+}
+
+.results__hero-time {
+  margin: 0.25rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+}
+
+@media (max-width: 620px) {
+  .results__hero {
+    gap: 0.7rem;
+    padding: 0.7rem 0.8rem;
+  }
+
+  .results__hero-art {
+    width: 4.4rem;
+  }
+
+  .results__hero-place {
+    font-size: 1.7rem;
+  }
+}
+
 /* ------------------------------------------------------------ animation --- */
 
 @keyframes spin {

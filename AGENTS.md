@@ -57,6 +57,12 @@ These cost real debugging time. Each is documented at its site in the code.
   texture clones with `ownTexture`, release materials through
   `disposeMaterial`, and dispose lights when their world is torn down. See
   `src/render/materials/ownership.ts`.
+- **`.ui` is the scroller on a wide viewport, so anything overlaying the canvas
+  must be `fixed`, not `absolute`.** An absolutely positioned overlay is laid
+  out against `.ui`'s scrolled content and rides the menu off the screen, while
+  the thing it annotates is drawn on the canvas and never moves. The narrow
+  layout scrolls `.screen` inside a clipped `.ui`, so the bug is invisible on a
+  phone. `.stage-caption` in `src/styles.css` is the worked example.
 - **A branch must meet the road in the right place *and* the right direction.**
   `chordAlong` blends into the main line at both mouths so the merge is
   tangential; where it has eased back on it inherits the road's half-width and

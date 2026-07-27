@@ -441,9 +441,19 @@ body {
   }
 }
 
-/* The caption that names the machine on the stage. */
+/*
+ * The caption that names the machine on the stage.
+ *
+ * Fixed, not absolute, because the machine it names is drawn on the canvas and
+ * so never moves, while `.ui` is the element that scrolls on a wide viewport -
+ * and an absolutely positioned caption is laid out against `.ui`'s scrolled
+ * content. It therefore rode the crew list up and off the top of the screen
+ * (measured at 1440x900: top 711 to -528), leaving a lit, unnamed skiff. The
+ * narrow layout scrolls `.screen` inside a clipped `.ui` instead, so the two
+ * position values are identical there and this changes nothing.
+ */
 .stage-caption {
-  position: absolute;
+  position: fixed;
   pointer-events: none;
   display: grid;
   gap: 0.1rem;

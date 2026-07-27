@@ -417,6 +417,55 @@ test.describe('audio', () => {
 });
 
 /*
+ * The caption stays with the machine it names.
+ *
+ * The garage and the finish shot draw the selected skiff on the canvas, which
+ * does not scroll, and name it with a caption in the space beside the panel.
+ * The caption is positioned against `.ui`, and on a wide viewport `.ui` is the
+ * scroller - so an absolutely positioned one was laid out against scrolled
+ * content and slid off the top while the skiff stayed lit in place. Both
+ * screens scroll at this viewport (the setup panel by ~1440 px, the results
+ * panel by ~170), so both genuinely exercise it.
+ */
+test.describe('the stage caption holds its place', () => {
+  for (const screen of ['setup', 'results'] as const) {
+    test(`${screen}: the caption does not scroll away from the machine`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 700 });
+      await openGame(page);
+      if (screen === 'setup') {
+        await goToSetup(page);
+      } else {
+        await startSeededRace(page, 77);
+        await page.evaluate(() => window.adRacers?.skipToFinish());
+        await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      }
+
+      const captionTop = async (): Promise<number> =>
+        page.evaluate(() => document.querySelector('.stage-caption')?.getBoundingClientRect().top ?? NaN);
+
+      const before = await captionTop();
+      expect(Number.isNaN(before)).toBe(false);
+
+      // Scroll the panel to its end. If it cannot scroll, this proves nothing.
+      const scrolled = await page.evaluate(() => {
+        const ui = document.querySelector<HTMLElement>('.ui');
+        if (!ui) return 0;
+        ui.scrollTop = ui.scrollHeight;
+        return ui.scrollTop;
+      });
+      expect(scrolled, `${screen} panel did not scroll, so the caption is untested`).toBeGreaterThan(0);
+
+      // The caption has not moved, and is still wholly on screen.
+      expect(Math.abs((await captionTop()) - before)).toBeLessThanOrEqual(1);
+      const box = await page.locator('.stage-caption').boundingBox();
+      expect(box).not.toBeNull();
+      expect(box?.y ?? -1).toBeGreaterThanOrEqual(0);
+      expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(700);
+    });
+  }
+});
+
+/*
  * Completion screens on a phone.
  *
  * The championship completion screen is the payoff for four races, and it used

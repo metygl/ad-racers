@@ -144,7 +144,8 @@ export function trapFocus(container: HTMLElement, autoFocus = true): () => void 
     if (items.length === 0) return;
     const first = items[0] as HTMLElement;
     const last = items[items.length - 1] as HTMLElement;
-    if (event.shiftKey && document.activeElement === first) {
+    const preferred = container.querySelector<HTMLElement>('[data-autofocus]');
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === preferred)) {
       event.preventDefault();
       last.focus();
     } else if (!event.shiftKey && document.activeElement === last) {

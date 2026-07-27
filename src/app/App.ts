@@ -962,8 +962,8 @@ export class App {
    * Back is the most common accidental action on a phone there is.
    *
    * So starting a race pushes one history entry and the first Back lands here
-   * instead of leaving: it pauses and re-arms, which makes the gesture mean
-   * "stop and let me decide".
+   * instead of leaving: it pauses, which makes the gesture mean "stop and let
+   * me decide".
    *
    * The re-arm is what has to be conditional. Pushing a replacement entry on
    * *every* popstate - including the ones that arrive while the race is already
@@ -979,7 +979,6 @@ export class App {
     if (this.screen !== 'race' || !this.simulation) return;
     if (this.paused) return;
     this.togglePause(true);
-    this.armBackGuard();
   };
 
   private handleVisibility = (): void => {

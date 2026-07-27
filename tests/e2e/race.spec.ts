@@ -430,7 +430,6 @@ test.describe('race surface transitions', () => {
 test.describe('preview corrections', () => {
   test('Back pauses a race once, and a second Back is allowed to leave', async ({ page }) => {
     await openGame(page);
-    const before = await page.evaluate(() => history.length);
     await startSeededRace(page);
     await waitForGreenLight(page);
 
@@ -440,23 +439,23 @@ test.describe('preview corrections', () => {
      * popstate, including the ones that arrived while already paused, so Back
      * could never leave the page and every press grew the history stack. The
      * player could not escape by holding it either.
-     */
+    */
     await page.goBack();
     await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
-    const armed = await page.evaluate(() => history.length);
 
     // A second, deliberate Back from the pause dialog is not re-armed.
     await page.goBack();
-    await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
-    const afterSecond = await page.evaluate(() => history.length);
-    expect(afterSecond, 'the Back guard re-armed itself and trapped the player').toBeLessThanOrEqual(armed);
+    await expect(page.getByRole('dialog', { name: 'Paused' })).toHaveCount(0);
+    expect(page.url(), 'the second Back did not leave the paused race').toBe('about:blank');
 
     // And the guard never stacks: racing repeatedly adds at most one entry.
+    await openGame(page);
+    const beforeRestart = await page.evaluate(() => history.length);
     await page.evaluate(() => window.adRacers?.startRace(99));
     await page.evaluate(() => window.adRacers?.startRace(98));
     await page.evaluate(() => window.adRacers?.startRace(97));
     const afterThreeRaces = await page.evaluate(() => history.length);
-    expect(afterThreeRaces - before, 'each race pushed its own history entry').toBeLessThanOrEqual(2);
+    expect(afterThreeRaces - beforeRestart, 'each race pushed its own history entry').toBeLessThanOrEqual(1);
   });
 
   test('resuming with the key that confirmed it does not hop', async ({ page }) => {

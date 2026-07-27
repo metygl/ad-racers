@@ -149,6 +149,10 @@ test.describe('accessibility', () => {
     });
     expect(focus?.insideScreen, 'focus left the screen it opened').toBe(true);
     expect(focus?.onScreen, `focus landed off-screen on a ${focus?.tag ?? '?'}`).toBe(true);
+
+    await expect(page.getByRole('heading', { name: 'Controls' })).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.getByRole('button', { name: 'Continue' })).toBeFocused();
   });
 
   test('traps focus inside the pause dialog', async ({ page }) => {

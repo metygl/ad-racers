@@ -48,24 +48,15 @@ These cost real debugging time. Each is documented at its site in the code.
 - **Scenery must clear the run-off, not just the road.** Only declared obstacles
   are collidable, so a tree two metres off the tarmac is one the player drives
   *through*, camera and all. The boom raycast cannot help with a canopy the
-  camera is already inside, so every scenery material also carries a
-  per-instance dither dissolve keyed off the camera; `onBeforeCompile` is a
-  single slot, so wind and dissolve are installed together or one silently wins.
-- **Banking is a rotation of the ribbon, and `projection.y` applies it to any
-  lateral offset it is handed.** That is right on the road and wrong everywhere
-  else: the terrain draws 220 m past the course, so an unclamped bank put the
-  far landscape tens of metres in the air, and the crest ledger read a lane
-  change across a banked bend as the ground falling away and paid the flyover
-  reward on the flattest course in the game. Clamp the bank term to the road
-  edge for ground height (`Terrain.ts`) and take it back out entirely for
-  anything measuring the road's profile *along its length* (`profileY` in
-  `vehicle.ts`).
-- **A cloned texture is a GPU object of its own.** `familyMaterial` and the
-  skiff's `panel` clone a shared map to carry their own `repeat`, and disposing
-  the material does not release the clone. Register owned clones with
-  `ownTexture` and release materials through `disposeMaterial`; see
-  `src/render/materials/ownership.ts`. Lights are the same shape of problem -
-  only `Light.dispose()` frees a shadow map.
+  camera is already inside, so scenery also dissolves per instance around the
+  camera. Keep wind and dissolve in the same `onBeforeCompile` hook.
+- **Banking rotates the road ribbon, not the surrounding landscape.** Clamp its
+  height contribution at the road edge in `Terrain.ts`, and remove it from
+  longitudinal road-profile measurements through `profileY` in `vehicle.ts`.
+- **Cloned textures and shadow-casting lights own GPU resources.** Register
+  texture clones with `ownTexture`, release materials through
+  `disposeMaterial`, and dispose lights when their world is torn down. See
+  `src/render/materials/ownership.ts`.
 - **A branch must meet the road in the right place *and* the right direction.**
   `chordAlong` blends into the main line at both mouths so the merge is
   tangential; where it has eased back on it inherits the road's half-width and
@@ -98,16 +89,9 @@ These cost real debugging time. Each is documented at its site in the code.
 - **Never wait on the wall clock for ordinary race progress in browser tests.**
   The loop caps catch-up steps, so on a slow renderer simulated time
   deliberately runs behind real time. Use `waitForRaceTime` / `waitForSteps`
-  from `tests/e2e/support.ts`; use a real-time deadline only when wall-clock
-  behavior is itself the contract under test.
-- **Waiting for race time costs *rendering* time, and it is measured.** Only
-  `MAX_STEPS_PER_FRAME` fixed steps run per drawn frame - 67 ms of race - so a
-  locally measured 5.56 s of race time (the 3 s countdown plus the 2 s strike
-  grace) cost 16.4 s of wall clock at ~5 fps under SwiftShader, and that is what
-  put the gamepad shoulder-button test over `waitForRaceTime`'s 60 s budget and
-  into quarantine. Get *past* a stretch nothing is asserted about with
-  `skipRaceTime`, which steps the simulation without drawing; wait for real only
-  where the loop's own pacing is the contract.
+  from `tests/e2e/support.ts`; use `skipRaceTime` for stretches whose rendering
+  is irrelevant, and a real-time deadline only when wall-clock behavior is the
+  contract under test.
 - **Dust particles must not be additively blended.** Six cars kicking up grass
   becomes a white sheet across the screen.
 - **Run-off pushes the car back positionally, not with a force.** A force
@@ -119,10 +103,8 @@ These cost real debugging time. Each is documented at its site in the code.
 - **Difficulty is competence; `CrewStyle` in `racers.ts` is character.** Style is
   per crew and immutable, so a crew races the same wherever the player's own
   choice puts it in the grid; the six styles average to 1 so the field's pace is
-  unchanged. Anything that moves a car across the road mid-corner is a physics
-  change in disguise: the first defence behaviour swung the line at any
-  curvature and broke both the F4 body-angle bound and the flat-course landing
-  gate. Defend on straights only.
+  unchanged. Keep defensive line changes on straights so tactics do not become
+  an accidental cornering-physics change.
 - **Pick obscure ports for local servers.** 5173 and 4173 were both already
   serving unrelated projects on this machine, and Playwright happily tested one
   of them.

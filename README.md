@@ -80,6 +80,14 @@ refusals; release it and press again to swing again. The same rule applies on
 every device, and nothing that was already held when a menu closed counts as a
 press - resuming with the button that confirmed Resume does not hop.
 
+During a race, browser Back opens the pause screen instead of discarding the
+run. A second Back from that screen follows the browser normally.
+
+If the race is called while part of the field is still running, a crew with
+enough progress is classified on its projected pace and marked `≈` in the
+results. `DNF` is reserved for a crew that did not make enough progress for a
+credible projection.
+
 ### Getting quicker
 
 - Hold the drift *through* the corner. Charge banks in three tiers, shown as
@@ -208,12 +216,8 @@ Browser tests cover menu-to-finish, pause/resume, resize, five viewports,
 keyboard-only navigation, focus trapping, reduced motion, high contrast, WebGL
 failure, context loss and unavailable storage.
 
-They wait on *simulated* time rather than the wall clock, because the loop caps
-how much simulation a single rendered frame may catch up - so under software
-WebGL a race deliberately runs behind real time. The corollary is that waiting
-for race time costs rendering time: a test that needs to be past the countdown
-and the strike grace uses `skipRaceTime`, which advances the simulation without
-drawing, and only tests that are *about* the loop's pacing wait on it for real.
+Browser timing helpers and their intended uses are documented at their
+authoritative implementation in `tests/e2e/support.ts`.
 
 The gamepad seam is tested with a synthetic Standard Gamepad injected at
 `navigator.getGamepads()` — Playwright cannot plug in a controller, but

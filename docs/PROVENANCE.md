@@ -123,7 +123,7 @@ Not present, and never were:
 - Any code, mesh, texture, sprite or screenshot
 - Any parody of a real person's name
 
-The title screen states this in the footer, where a player can see it.
+These claims are documented here, in this file.
 
 ---
 

@@ -339,18 +339,6 @@ body {
   color: var(--amber);
 }
 
-.title__footer {
-  margin-top: 0.4rem;
-  border-top: 1px solid var(--line-soft);
-  padding-top: 0.8rem;
-  color: var(--ink-faint);
-  font-size: 0.78rem;
-}
-
-.title__footer p {
-  margin: 0;
-}
-
 /* --------------------------------------------------------------- setup --- */
 
 .setup__section {

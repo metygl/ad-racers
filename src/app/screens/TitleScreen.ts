@@ -56,12 +56,5 @@ export function buildTitleScreen(actions: TitleActions): HTMLElement {
       actions.bestSummary ? el('p', { class: 'title__best', text: actions.bestSummary }) : null,
       actions.circuitSummary ? el('p', { class: 'title__best', text: actions.circuitSummary }) : null,
     ),
-    el(
-      'footer',
-      { class: 'title__footer' },
-      el('p', {
-        text: 'Original game. Not affiliated with, and containing no assets from, any existing racing title.',
-      }),
-    ),
   );
 }

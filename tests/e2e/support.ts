@@ -26,6 +26,7 @@ declare global {
       settings: () => Record<string, unknown>;
       screen: () => string;
       input: () => Record<string, unknown>;
+      advance: (seconds: number) => void;
       skipToFinish: () => void;
     };
   }
@@ -87,6 +88,24 @@ export async function waitForRaceTime(page: Page, seconds: number): Promise<void
   );
 }
 
+/**
+ * Advances the race by `seconds` of simulated time, immediately.
+ *
+ * For the parts of a race a test has to get *past* rather than observe - the
+ * three-second countdown, the two-second strike grace. Waiting those out
+ * through the render loop is the single most expensive thing a browser test
+ * here can do, because simulated time is capped at eight fixed steps per drawn
+ * frame: under CI's software WebGL that is roughly nine seconds of wall clock
+ * per second of race, and it is what pushed the gamepad shoulder-button test
+ * over `waitForRaceTime`'s budget and into quarantine.
+ *
+ * Use `waitForRaceTime` or `waitForSteps` instead wherever the loop's own
+ * behaviour is the thing under test.
+ */
+export async function skipRaceTime(page: Page, seconds: number): Promise<void> {
+  await page.evaluate((value) => window.adRacers?.advance(value), seconds);
+}
+
 /** Waits until the countdown has finished and the race is under way. */
 export async function waitForGreenLight(page: Page): Promise<void> {
   await page.waitForFunction(
@@ -104,6 +123,56 @@ export async function waitForSteps(page: Page, steps: number): Promise<void> {
     from + steps,
     { timeout: 60_000 },
   );
+}
+
+export interface StrikeSnapshot {
+  phase: string;
+  side: number;
+  cooldown: number;
+}
+
+/** The player's pod-arm state machine, which is what a strike request drives. */
+export async function strikeState(page: Page): Promise<StrikeSnapshot> {
+  return page.evaluate(() => {
+    const sim = window.adRacers?.simulation() as
+      | { racers: { isPlayer: boolean; strike: { phase: string; side: number; cooldown: number } }[] }
+      | null;
+    const player = sim?.racers.find((racer) => racer.isPlayer);
+    return {
+      phase: player?.strike.phase ?? 'none',
+      side: player?.strike.side ?? 0,
+      cooldown: player?.strike.cooldown ?? 0,
+    };
+  });
+}
+
+/**
+ * Records every notice the HUD *creates*, not the four it shows.
+ *
+ * The round-3 live review measured the held-strike defect exactly this way and
+ * it is the only way to see it: the HUD caps the visible stack at four, so a
+ * hundred duplicate refusals and one look identical on screen while the audio
+ * engine plays a hundred sounds. Counting creations is counting the events.
+ */
+export async function watchNotices(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const store = window as unknown as { __notices?: string[] };
+    store.__notices = [];
+    const root = document.querySelector('.hud__notifications');
+    if (!root) return;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof HTMLElement) store.__notices?.push(node.textContent ?? '');
+        }
+      }
+    }).observe(root, { childList: true });
+  });
+}
+
+/** Everything `watchNotices` has seen since it was installed. */
+export async function noticesSeen(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { __notices?: string[] }).__notices ?? []);
 }
 
 /** Reads a snapshot of the player's simulation state. */

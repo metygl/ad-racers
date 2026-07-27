@@ -235,6 +235,30 @@ const BLOOM_SCALE = 0.25;
 const REDUCED_MOTION_BLOOM = 0.35;
 /** Extra threshold under reduced motion, so only true emitters bloom. */
 const REDUCED_MOTION_THRESHOLD_LIFT = 0.45;
+/** Vignette retained under reduced motion. */
+const REDUCED_MOTION_VIGNETTE = 0.6;
+
+/**
+ * The bloom and vignette a frame is actually drawn with.
+ *
+ * Split out and computed *before* anything is rendered, which is the whole
+ * point: the reduced-motion adjustments used to be applied to the uniforms
+ * after the bright pass had already run, and the next frame's bright pass
+ * overwrote the threshold with the unlifted value before drawing. The lift was
+ * therefore never once applied to a pixel - reduced motion dimmed the bloom but
+ * still extracted the whole frame into it, which is the opposite of "mark the
+ * emitters instead of flooding the frame".
+ *
+ * Exported so the budget can be asserted without a GPU.
+ */
+export function bloomBudget(settings: PostSettings): { threshold: number; intensity: number; vignette: number } {
+  const reduced = settings.motion < 1;
+  return {
+    threshold: settings.bloomThreshold + (reduced ? REDUCED_MOTION_THRESHOLD_LIFT : 0),
+    intensity: settings.bloomIntensity * (reduced ? REDUCED_MOTION_BLOOM : 1),
+    vignette: settings.vignette * (reduced ? REDUCED_MOTION_VIGNETTE : 1),
+  };
+}
 
 function fullscreenGeometry(): THREE.BufferGeometry {
   // A single oversized triangle rather than a quad: no diagonal seam, one fewer
@@ -399,8 +423,21 @@ export class PostComposer {
     const renderer = this.renderer;
     const u = this.u;
 
-    if (settings.bloomIntensity > 0.001) {
-      u.threshold.value = settings.bloomThreshold;
+    /*
+     * Reduced motion is a designed mode, not a switch that removes one effect.
+     *
+     * The warp and the fringe going to zero left the large bloom pulses fully
+     * intact, which are the highest-risk thing in the frame for sensory
+     * overload and photosensitivity. Bloom is therefore budgeted independently:
+     * it stays - an unlit night course needs it to be readable at all - but at
+     * a fraction of the intensity and with a higher threshold, so it marks
+     * emissive surfaces instead of flooding the frame. Resolved before the
+     * bright pass, because that is the pass the threshold governs.
+     */
+    const bloom = bloomBudget(settings);
+
+    if (bloom.intensity > 0.001) {
+      u.threshold.value = bloom.threshold;
       this.quad.material = this.bright;
       renderer.setRenderTarget(this.bloomA);
       renderer.render(this.scene, this.camera);
@@ -422,31 +459,16 @@ export class PostComposer {
       u.bloom.value = this.bloomA.texture;
     }
 
-    u.bloomIntensity.value = settings.bloomIntensity;
+    u.bloomIntensity.value = bloom.intensity;
     u.exposure.value = settings.exposure;
     u.lift.value.copy(settings.lift);
     u.gamma.value.copy(settings.gamma);
     u.gain.value.copy(settings.gain);
     u.saturation.value = settings.saturation;
     u.contrast.value = settings.contrast;
-    u.vignette.value = settings.vignette;
+    u.vignette.value = bloom.vignette;
     u.speed.value = settings.speed * 0.11 * settings.motion;
     u.fringe.value = settings.speed * 0.0035 * settings.motion;
-    /*
-     * Reduced motion is a designed mode, not a switch that removes one effect.
-     *
-     * The warp and the fringe going to zero left the large bloom pulses fully
-     * intact, which are the highest-risk thing in the frame for sensory
-     * overload and photosensitivity. Bloom is therefore budgeted independently:
-     * it stays — an unlit night course needs it to be readable at all — but at
-     * a fraction of the intensity and with a higher threshold, so it marks
-     * emissive surfaces instead of flooding the frame.
-     */
-    if (settings.motion < 1) {
-      u.bloomIntensity.value = settings.bloomIntensity * REDUCED_MOTION_BLOOM;
-      u.threshold.value = settings.bloomThreshold + REDUCED_MOTION_THRESHOLD_LIFT;
-      u.vignette.value = settings.vignette * 0.6;
-    }
 
     this.quad.material = this.composite;
     renderer.setRenderTarget(null);

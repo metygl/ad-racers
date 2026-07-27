@@ -7,6 +7,7 @@ import { getSpeedClass } from '../../game/config';
 import type { CircuitStanding } from '../../game/circuit';
 import { getRacer } from '../../game/racers';
 import { ACTIONS, bindingLabel } from '../../game/input/bindings';
+import { classify } from '../../game/sim/race';
 import type { RacerState } from '../../game/sim/state';
 import type { Track } from '../../game/track/buildTrack';
 import { button, el } from '../ui/dom';
@@ -76,7 +77,9 @@ export function buildControlsCard(settings: GameSettings, onDismiss: () => void,
   return el(
     'section',
     { class: 'screen screen--controls', 'data-screen': 'controls', 'aria-labelledby': 'controls-heading' },
-    el('h1', { class: 'screen__heading', id: 'controls-heading', text: 'Controls' }),
+    // Focus opens at the top of the page rather than on a Continue button that
+    // can be 700 px below the fold on a landscape phone. See `trapFocus`.
+    el('h1', { class: 'screen__heading', id: 'controls-heading', tabindex: '-1', 'data-autofocus': true, text: 'Controls' }),
     el('p', {
       class: 'screen__lead',
       text:
@@ -220,16 +223,37 @@ export function buildStandingsTable(
   );
 }
 
+/**
+ * The mark a projected classification carries, everywhere it appears.
+ *
+ * One glyph rather than a word, because it has to sit inside a time column at
+ * 320 px; the legend under the table is what says what it means, and every
+ * projected cell also carries the words for a screen reader.
+ */
+const PROJECTED_MARK = '≈';
+
 export function buildResultsScreen(actions: ResultsActions): HTMLElement {
   const player = actions.results.find((r) => r.index === actions.playerIndex);
   const rows = el('tbody', { class: 'results__list' });
+  let anyProjected = false;
 
   const leader = actions.results[0];
   for (const racer of actions.results) {
     const profile = getRacer(racer.profileId);
+    const outcome = classify(racer);
+    if (outcome === 'projected') anyProjected = true;
+    /*
+     * A gap needs two comparable times, not two *completed* ones.
+     *
+     * Requiring `completed` on both meant a field where the leader finished and
+     * everyone else was classified on pace showed a column of dashes, which
+     * throws away the one number that says how close the race was.
+     */
+    const comparable = leader !== undefined && Number.isFinite(leader.finishTime) && Number.isFinite(racer.finishTime);
+    const approximate = outcome === 'projected' || (leader !== undefined && classify(leader) === 'projected');
     const gap =
-      leader?.completed && racer.completed && racer !== leader
-        ? `+${(racer.finishTime - leader.finishTime).toFixed(2)}s`
+      comparable && leader !== undefined && racer !== leader
+        ? `${approximate ? PROJECTED_MARK : '+'}${(racer.finishTime - leader.finishTime).toFixed(2)}s`
         : '—';
     const isPlayer = racer.index === actions.playerIndex;
     const row = el(
@@ -241,7 +265,20 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
         el('span', { class: 'results__pilots', text: `${profile.pilot} & ${profile.wrench}` }),
         isPlayer ? el('span', { class: 'sr-only', text: ' (your crew)' }) : null,
       ),
-      el('td', { class: 'results__time', text: racer.completed ? formatLapTime(racer.finishTime) : 'DNF' }),
+      el(
+        'td',
+        {
+          class: `results__time${outcome === 'projected' ? ' results__time--projected' : ''}`,
+          ...(outcome === 'projected' ? { title: 'Projected on the pace they were running' } : {}),
+        },
+        el('span', {
+          text:
+            outcome === 'dnf'
+              ? 'DNF'
+              : `${outcome === 'projected' ? PROJECTED_MARK : ''}${formatLapTime(racer.finishTime)}`,
+        }),
+        outcome === 'projected' ? el('span', { class: 'sr-only', text: ' projected finish' }) : null,
+      ),
       el('td', { class: 'results__gap', text: gap }),
       el('td', {
         class: 'results__best',
@@ -265,13 +302,18 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
     ? circuit.standings.findIndex((standing) => standing.profileId === circuit.playerProfileId) + 1
     : 0;
 
+  const playerOutcome = player ? classify(player) : null;
   const headline = circuit?.complete
     ? playerPlace === 1
       ? 'Circuit won'
       : `Circuit finished ${ordinal(playerPlace)}`
-    : player
-    ? !player.completed
+    : player && playerOutcome
+    ? playerOutcome === 'dnf'
       ? 'Did not finish'
+      : playerOutcome === 'projected'
+      ? // Classified, not failed. The race was called while this crew was still
+        // running, and their own pace is what places them.
+        `Classified ${ordinal(player.finishPosition)}`
       : player.finishPosition === 1
       ? 'Race won'
       : `Finished ${ordinal(player.finishPosition)}`
@@ -299,25 +341,43 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
    * player did not just drive, and it reads at 320 px because it is a stack
    * rather than a row.
    */
-  const heroCard = player
+  const heroCard = player && playerOutcome
     ? (() => {
         const profile = getRacer(player.profileId);
+        const won = player.finishPosition === 1 && playerOutcome === 'finished';
+        const podium = player.finishPosition <= 3 && playerOutcome !== 'dnf';
         const card = el(
           'div',
-          { class: `results__hero${player.finishPosition === 1 && player.completed ? ' results__hero--won' : ''}` },
+          {
+            class:
+              `results__hero${won ? ' results__hero--won' : ''}` +
+              `${podium && !won ? ' results__hero--podium' : ''}`,
+          },
           el('div', { class: 'results__hero-art' }, crewSilhouette(profile) as unknown as HTMLElement),
           el('div', { class: 'results__hero-body' },
-            el('p', { class: 'results__hero-place', text: player.completed ? ordinal(player.finishPosition) : 'DNF' }),
+            el(
+              'p',
+              { class: 'results__hero-place' },
+              el('span', { text: playerOutcome === 'dnf' ? 'DNF' : ordinal(player.finishPosition) }),
+              playerOutcome === 'projected'
+                ? el('span', { class: 'results__hero-tag', text: 'classified on pace' })
+                : null,
+              won ? el('span', { class: 'results__hero-tag results__hero-tag--won', text: 'race won' }) : null,
+            ),
             el('p', { class: 'results__hero-crew', text: profile.crew }),
             el('p', { class: 'results__hero-pilots', text: `${profile.pilot} & ${profile.wrench} · ${profile.skiff}` }),
             el('p', {
               class: 'results__hero-time',
-              text: player.completed ? formatLapTime(player.finishTime) : 'Did not finish',
+              text:
+                playerOutcome === 'dnf'
+                  ? 'Did not finish'
+                  : `${playerOutcome === 'projected' ? PROJECTED_MARK : ''}${formatLapTime(player.finishTime)}`,
             }),
           ),
         );
         card.style.setProperty('--crew', `#${profile.colors.body.toString(16).padStart(6, '0')}`);
         card.style.setProperty('--crew-trim', `#${profile.colors.trim.toString(16).padStart(6, '0')}`);
+        card.style.setProperty('--crew-glow', `#${profile.colors.glow.toString(16).padStart(6, '0')}`);
         return card;
       })()
     : null;
@@ -359,6 +419,13 @@ export function buildResultsScreen(actions: ResultsActions): HTMLElement {
       ),
       rows,
     ),
+    // Said once, under the table, rather than repeated in every cell.
+    anyProjected
+      ? el('p', {
+          class: 'results__legend',
+          text: `${PROJECTED_MARK} Projected finish - classified on the pace that crew was running when the race was called.`,
+        })
+      : null,
     circuit
       ? el(
           'div',

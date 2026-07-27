@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Rng } from '../../core/rng';
+import { ownTexture } from './ownership';
 
 /**
  * Material families.
@@ -168,6 +169,7 @@ export interface FamilyOptions {
  */
 export function familyMaterial(family: MaterialFamily, options: FamilyOptions): THREE.MeshStandardMaterial {
   const recipe = RECIPES[family];
+  // A clone so this material can carry its own repeat; the pixels are shared.
   const map = breakupMap(family).clone();
   map.needsUpdate = true;
   const repeat = options.repeat ?? 1;
@@ -180,6 +182,8 @@ export function familyMaterial(family: MaterialFamily, options: FamilyOptions): 
     metalness: recipe.metalness,
     flatShading: recipe.flatShading,
   });
+  // The clone belongs to this material and dies with it. See `ownership.ts`.
+  ownTexture(material, map);
   if (recipe.transparent) {
     material.transparent = true;
     material.opacity = recipe.opacity ?? 1;

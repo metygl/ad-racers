@@ -109,7 +109,7 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
     racer.hopCooldown = HOP.cooldown;
     racer.airTime = 0;
     racer.airClearance = 0;
-    racer.airGroundStart = ctx.track.project(racer.pos, racer.path).y;
+    racer.airGroundStart = projection.y - Math.sin(projection.bank) * projection.lateral;
     racer.airGroundDrop = 0;
     // Hops in quick succession are a chain, and a chain pays less each time.
     racer.hopChain = racer.sinceLanding <= HOP.chainWindow ? racer.hopChain + 1 : 0;
@@ -352,6 +352,19 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
 
   // --- vertical -----------------------------------------------------------
   const groundY = projection.y;
+  /*
+   * The road's elevation along its *length*, with the banking taken back out.
+   *
+   * `projection.y` is the surface at this lateral offset, which is what the
+   * skiff sits on and is right for everything else here. It is wrong for the
+   * crest ledger: banking rotates the ribbon about its centreline, so on a
+   * nine-degree bend a car moving three metres across the road sees half a
+   * metre of "ground" appear or disappear without the road going anywhere.
+   * `airGroundDrop` exists to say whether the road fell away - a lane change on
+   * the salt flat's long banked bend is not a crest, and scoring it as one pays
+   * the flyover reward on the flattest course in the game.
+   */
+  const profileY = projection.y - Math.sin(projection.bank) * projection.lateral;
   if (racer.airborne) {
     racer.verticalVelocity -= PHYSICS.gravity * dt;
     racer.y += racer.verticalVelocity * dt;
@@ -369,7 +382,7 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
      * How far the *ground* fell away underneath, which is what makes air a
      * crest rather than a pogo.
      */
-    racer.airGroundDrop = Math.max(racer.airGroundDrop, racer.airGroundStart - projection.y);
+    racer.airGroundDrop = Math.max(racer.airGroundDrop, racer.airGroundStart - profileY);
     if (racer.y <= groundY) {
       const impact = -racer.verticalVelocity;
       // Captured before the reset below: both are the flight that just ended.
@@ -497,7 +510,22 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
       racer.verticalVelocity =
         slope * vLong + Math.min(PHYSICS.crestUnloadMax, PHYSICS.crestUnload * launchExcess);
       racer.y = groundY;
+      /*
+       * A launch starts a *new* flight, so it opens the same books a hop does.
+       *
+       * Leaving `airGroundStart` and `airGroundDrop` on the previous flight's
+       * values makes the landing reward read a crest that is not there: the
+       * drop is measured from wherever the last hop took off, so a flick over a
+       * ripple part-way down a descent inherits metres of "fallen ground" and
+       * pays the flyover bonus, while a genuine crest taken straight after a
+       * deep one is scored against a take-off height it never had. The whole
+       * point of `airGroundDrop` is that it distinguishes a crest from a pogo,
+       * and a stale one distinguishes nothing.
+       */
+      racer.airTime = 0;
       racer.airClearance = 0;
+      racer.airGroundStart = profileY;
+      racer.airGroundDrop = 0;
       // A crest is not part of a hop chain; it is the thing the reward is for.
       racer.hopChain = 0;
     } else {

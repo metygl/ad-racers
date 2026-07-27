@@ -18,6 +18,9 @@ import { buildTerrain } from './scene/Terrain';
 import { buildTrackMesh } from './scene/TrackMesh';
 import { buildVehicle } from './scene/VehicleModel';
 import type { VehicleVisual } from './scene/VehicleModel';
+import { buildHeroStage } from './scene/HeroStage';
+import type { HeroMood, HeroStageResult } from './scene/HeroStage';
+import type { RacerProfile } from '../game/racers';
 import { QUALITY_TIERS } from './quality';
 import type { QualityId } from './quality';
 import { DEFAULT_GRADE, toColor } from './palette';
@@ -25,6 +28,7 @@ import { PostComposer, defaultPostSettings } from './post/Composer';
 import type { PostSettings } from './post/Composer';
 import { disposeTextures } from './textures/procedural';
 import { disposeFamilyMaps } from './materials/families';
+import { disposeMaterialsOf } from './materials/ownership';
 
 /**
  * Everything that draws.
@@ -166,6 +170,23 @@ export class GameRenderer {
    * something during the one moment the game asks the player to look at them.
    */
   private heroLight: THREE.PointLight | null = null;
+  /**
+   * A short-range light carried with the focused racer, on night courses only.
+   *
+   * The art bible's value hierarchy is enforceable rather than aspirational, and
+   * on Glasshouse it was not being met: the round-3 live review found the road
+   * legible and everything else - the player's own hull, its orientation, and
+   * the ground between it and the road - collapsed into a near-black band. Some
+   * of that is grading, but the structural part is that a night course has no
+   * key worth the name, so a dark-hulled crew off the illuminated road has
+   * nothing lighting it at all.
+   *
+   * This is deliberately not a headlight and not a spotlight: a small radius
+   * around the machine so its own form, its rider and a couple of metres of
+   * ground read at any crew colour, and nothing beyond that - the course still
+   * belongs to the moon and the lamps.
+   */
+  private routeLight: THREE.PointLight | null = null;
   /** Meshes the camera ray tests against; scenery and obstacles only. */
   private occluders: THREE.Object3D[] = [];
   private readonly raycaster = new THREE.Raycaster();
@@ -198,6 +219,29 @@ export class GameRenderer {
   private sceneStats = { drawCalls: 0, triangles: 0 };
   /** Seconds of frozen presentation left. See `holdPresentation`. */
   private presentationHold = 0;
+  /** The garage / finish stage, when a menu screen has asked for one. */
+  private hero: HeroStageResult | null = null;
+  private heroProfileId: string | null = null;
+  private readonly heroCamera = new THREE.PerspectiveCamera(38, 1, 0.4, 90);
+  /**
+   * Where in the viewport the hero is framed, 0-1.
+   *
+   * The stage is drawn full-screen behind the menu panel - there is one canvas
+   * and one context, and a second WebGL surface for a still life would be an
+   * expensive way to say very little. The panel moves aside instead, exactly as
+   * it already does for the attract race on the title screen, and this is how
+   * the machine is put in the gap rather than behind the text.
+   */
+  private heroAnchor = { x: 0.5, y: 0.5, fill: 0.36 };
+  /**
+   * The stage's own grade.
+   *
+   * `this.post` carries whatever course was last built, and a garage graded for
+   * a night course arrives lifted, cooled and exposed nearly two stops - which
+   * is right for that course and wrong for a room. The stage looks the same
+   * whatever the player last raced.
+   */
+  private readonly heroPost: PostSettings = defaultPostSettings();
   /** Per-rival near-miss cooldowns, so one pass fires exactly one cue. */
   private readonly nearMissCooldowns = new Map<number, number>();
   /** Audio hook for a near miss; the renderer has no business making sound. */
@@ -358,6 +402,15 @@ export class GameRenderer {
       this.lighting = buildLighting(theme, tier.shadowMapSize, tier.shadowRadius);
       this.scene.add(this.lighting.group);
 
+      if (theme.night ?? false) {
+        // Warm against the course's cold key, so the machine separates from the
+        // blue it is standing in rather than merging further into it.
+        const light = new THREE.PointLight(0xffe6c4, 13, 15, 1.7);
+        light.name = 'route-light';
+        this.scene.add(light);
+        this.routeLight = light;
+      }
+
       const terrain = buildTerrain(track, tier.terrainResolution);
       this.world.add(terrain.mesh);
       const trackMesh = buildTrackMesh(track);
@@ -469,13 +522,27 @@ export class GameRenderer {
     this.scenery = null;
     if (this.heroLight) {
       this.scene.remove(this.heroLight);
+      disposeObject(this.heroLight);
       this.heroLight = null;
+    }
+    if (this.routeLight) {
+      this.scene.remove(this.routeLight);
+      disposeObject(this.routeLight);
+      this.routeLight = null;
     }
     this.life?.dispose();
     this.life = null;
     this.occluders = [];
     if (this.lighting) {
       this.scene.remove(this.lighting.group);
+      /*
+       * The sun's shadow map is a full render target - 1024² or 2048² of depth
+       * - and dropping the reference to the light does not free it. Four
+       * courses of a championship therefore retained four of them, which is up
+       * to 64 MB of GPU memory nothing could ever reach again. `disposeObject`
+       * calls `Light.dispose`, which is what owns the map.
+       */
+      disposeObject(this.lighting.group);
       this.lighting = null;
     }
   }
@@ -761,6 +828,79 @@ export class GameRenderer {
     this.presentationHold = Math.min(0.09, Math.max(this.presentationHold, seconds));
   }
 
+  /**
+   * Puts a crew's machine on the garage stage, or takes it off.
+   *
+   * Rebuilding is skipped when the same crew is already standing there, because
+   * this is called from a radio group's `change` handler and a player arrowing
+   * through six crews must not rebuild six skiffs a keystroke.
+   */
+  setHero(profile: RacerProfile | null, mood: HeroMood = 'garage'): void {
+    if (profile && this.heroProfileId === `${profile.id}:${mood}`) return;
+    this.hero?.dispose();
+    this.hero = null;
+    this.heroProfileId = null;
+    if (!profile) return;
+    this.hero = buildHeroStage(profile, mood);
+    this.heroProfileId = `${profile.id}:${mood}`;
+  }
+
+  get hasHero(): boolean {
+    return this.hero !== null;
+  }
+
+  /**
+   * Where the stage sits in the viewport and how much of its height the machine
+   * spans, all as 0-1 fractions of the viewport.
+   */
+  setHeroAnchor(x: number, y: number, fill: number): void {
+    this.heroAnchor = { x, y, fill };
+  }
+
+  /**
+   * Draws the garage stage. `elapsed` is 0 under reduced motion, which holds
+   * the turntable on its opening three-quarter view rather than removing it.
+   */
+  renderHero(elapsed: number): void {
+    const hero = this.hero;
+    if (this.disposed || !hero) return;
+
+    hero.update(elapsed);
+    const width = Math.max(1, this.size.width);
+    const height = Math.max(1, this.size.height);
+    this.heroCamera.aspect = width / height;
+    /*
+     * The frustum is shifted rather than the model moved.
+     *
+     * Moving the skiff off-centre in world space would swing it through the
+     * turntable's own arc and change how it is lit; offsetting the projection
+     * moves the *picture*, so the composition is identical wherever on screen
+     * the panel has left room for it.
+     */
+    this.heroCamera.setViewOffset(
+      width,
+      height,
+      width * (0.5 - this.heroAnchor.x),
+      height * (0.5 - this.heroAnchor.y),
+      width,
+      height,
+    );
+    this.heroCamera.updateProjectionMatrix();
+    hero.frame(this.heroCamera, this.heroAnchor.fill);
+
+    this.heroPost.motion = this.reducedMotion ? 0 : 1;
+    if (this.composer) {
+      this.renderer.setRenderTarget(this.composer.target);
+      this.renderer.render(hero.scene, this.heroCamera);
+      this.captureSceneStats();
+      this.composer.render(this.heroPost);
+    } else {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(hero.scene, this.heroCamera);
+      this.captureSceneStats();
+    }
+  }
+
   /** Turns the finish shot's key light on or off. */
   setHeroLight(on: boolean): void {
     if (on && !this.heroLight) {
@@ -825,6 +965,13 @@ export class GameRenderer {
         const wanted = (this.heroLight.userData.wanted as number | undefined) ?? 0;
         this.heroLight.intensity += (wanted * 46 - this.heroLight.intensity) * (1 - Math.exp(-4 * elapsed));
       }
+      // Above and slightly behind, so it models the hull and the rider from the
+      // side the camera is on rather than flaring the nose flat.
+      this.routeLight?.position.set(
+        focus.pos.x - Math.cos(focus.heading) * 1.4,
+        focus.y + 3.1,
+        focus.pos.z - Math.sin(focus.heading) * 1.4,
+      );
       this.detectNearMiss(focus, simulation, elapsed);
       this.lighting?.follow(focus.pos.x, focus.y, focus.pos.z);
       if (this.sky) {
@@ -833,7 +980,9 @@ export class GameRenderer {
       }
     }
 
-    this.scenery?.update(elapsed);
+    // The dissolve needs the camera every frame, so this runs after the chase
+    // camera has been moved rather than before it.
+    this.scenery?.update(elapsed, this.chase.camera.position);
     /*
      * The crowd reacts to the *leader*, not to the player.
      *
@@ -1090,6 +1239,8 @@ export class GameRenderer {
     this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
     for (const visual of this.vehicles.values()) visual.dispose();
     this.vehicles.clear();
+    this.hero?.dispose();
+    this.hero = null;
     this.clearWorld();
     this.particles.dispose();
     this.composer?.dispose();
@@ -1099,16 +1250,21 @@ export class GameRenderer {
   }
 }
 
-/** Recursively releases GPU resources for a subtree. */
+/**
+ * Recursively releases GPU resources for a subtree.
+ *
+ * Materials go through `disposeMaterial` rather than `Material.dispose`, so the
+ * breakup-map clone `familyMaterial` hands every piece of scenery is released
+ * with it. Disposing the material alone left one texture per scenery material
+ * behind on every course change.
+ */
 function disposeObject(root: THREE.Object3D): void {
   root.traverse((object) => {
     const mesh = object as THREE.Mesh;
     if (mesh.geometry) mesh.geometry.dispose();
-    const material = mesh.material;
-    if (Array.isArray(material)) {
-      for (const m of material) m.dispose();
-    } else if (material) {
-      material.dispose();
-    }
+    disposeMaterialsOf(object);
+    // A light's own GPU allocation is its shadow map, and only the light knows
+    // about it - nothing above reaches it.
+    if (object instanceof THREE.Light) object.dispose();
   });
 }

@@ -269,8 +269,18 @@ export const GLASSHOUSE_VIGIL: TrackDefinition = {
     roadColor: 0x646d78,
     shoulderColor: 0x4e5a58,
     kerbColor: 0x7fe8ff,
-    terrainColor: 0x1b262e,
-    terrainAccent: 0x27403a,
+    /*
+     * A floor under the night, not a brighter night.
+     *
+     * These were 0x1b262e and 0x27403a, which after the course's own grade put
+     * the ground off the road at a value a review could not distinguish from
+     * black - so a skiff one width off the tarmac had no ground to read its
+     * position against and a dark-hulled crew had no edge at all. Lifted just
+     * far enough to separate; still four value steps under the road, which is
+     * what the art bible requires of anything that is not the route.
+     */
+    terrainColor: 0x27333d,
+    terrainAccent: 0x334c46,
     dustColor: 0x8fa8c0,
     speedLineColor: 0xbfe9ff,
     cloudiness: 0.35,

@@ -125,6 +125,32 @@ export interface AiState {
   branchDecidedAt: number;
   /** Rolling record of applied catch-up, for the fairness assertion. */
   catchUpScale: number;
+  /**
+   * The crew's own behavioural profile, copied from its immutable style.
+   *
+   * Difficulty stays the competence layer and lives in the fields above; these
+   * decide *which* of several legal choices this crew prefers. See `CrewStyle`
+   * in `racers.ts`.
+   */
+  style: {
+    shortcut: number;
+    towPatience: number;
+    strike: number;
+    drift: number;
+    room: number;
+  };
+  /**
+   * How hard this driver covers the line a rival behind is coming down, 0-1.
+   *
+   * The competence layer's contribution to *tactics* rather than to pace: a
+   * Rookie leaves the door open, an Ace closes it. The live review's finding
+   * was that the Ace step read purely as speed, which it did, because nothing
+   * in the AI behaved differently at the top level - only faster.
+   */
+  defence: number;
+  /** Which side is currently being covered, and for how much longer. */
+  defendSide: number;
+  defendTimer: number;
 }
 
 export interface RacerState {
@@ -219,6 +245,20 @@ export interface RacerState {
   /** True only after crossing the finish line for the final required lap. */
   completed: boolean;
   finished: boolean;
+  /**
+   * Classified on extrapolated pace rather than on a real finish.
+   *
+   * A racer most of the way round when the race is called did not fail to
+   * finish; they were slower, and `finishTime` holds the credible time their
+   * own pace projects to. This flag is what stops a presentation layer
+   * flattening that back into DNF - which is exactly what happened, so a player
+   * on the last lap of a race that timed out was told "Did not finish" beside a
+   * best lap two seconds off the winner's.
+   *
+   * `completed`, `projected` and neither are the three outcomes, and they are
+   * mutually exclusive. See `classify` in `race.ts`.
+   */
+  projected: boolean;
   finishTime: number;
   /** Final classification, filled in when the racer crosses the line. */
   finishPosition: number;

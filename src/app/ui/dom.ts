@@ -168,7 +168,23 @@ export function trapFocus(container: HTMLElement, autoFocus = true): () => void 
    * The focus is still correct for a keyboard user; it just no longer decides
    * what the player sees first.
    */
-  if (autoFocus) queueMicrotask(() => focusable()[0]?.focus({ preventScroll: true }));
+  /*
+   * And onto the *top* of a screen taller than the viewport.
+   *
+   * `preventScroll` stopped the page jumping, which left the other half of the
+   * problem: on a 844x390 landscape phone the Controls screen is 810 px of
+   * content and its only control - Continue - starts at y = 713, so first-run
+   * focus landed on a button nothing on screen showed and there was no visible
+   * focus ring anywhere. A screen that opts in with `data-autofocus` names what
+   * should receive focus instead, which is its heading, and the sticky actions
+   * footer keeps Continue reachable without hunting for it.
+   */
+  if (autoFocus) {
+    queueMicrotask(() => {
+      const preferred = container.querySelector<HTMLElement>('[data-autofocus]');
+      (preferred ?? focusable()[0])?.focus({ preventScroll: true });
+    });
+  }
 
   return () => {
     container.removeEventListener('keydown', onKeyDown);

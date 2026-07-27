@@ -281,6 +281,77 @@ function buildStartLine(track: Track, theme: TrackTheme): THREE.Group {
   return group;
 }
 
+/** Spacing between route markers along the course, in metres. */
+const MARKER_SPACING = 26;
+
+/**
+ * Unlit route markers just outside the road edge, for night courses.
+ *
+ * On Glasshouse the road is legible and everything beside it is not: the round-3
+ * live review found that one vehicle width off the tarmac a player "cannot
+ * reliably read the vehicle's orientation or the terrain between vehicle and
+ * road". The kerb is emissive, but it is a strip *on the ground* facing up, so
+ * from out in the dark at eye level it is the one piece of route information
+ * that foreshortens to nothing.
+ *
+ * These are the smallest honest answer: a short unlit blade every 26 m on each
+ * side, in the course's own kerb colour. Unlit is the point - a marker that
+ * depends on the key light fails in exactly the conditions it exists for - and
+ * one instanced draw covers the whole course. They stand *outside* the road, so
+ * they read as the boundary rather than as something to aim at, and they are
+ * deliberately small: the art bible reserves the top value band for racers,
+ * hazards and effects, and a course lined with lanterns would take it.
+ */
+function buildRouteMarkers(track: Track, theme: TrackTheme): THREE.Mesh | null {
+  const samples = track.main.samples;
+  if (samples.length === 0) return null;
+
+  const placements: { x: number; y: number; z: number; angle: number }[] = [];
+  let nextAt = 0;
+  for (const sample of samples) {
+    if (sample.distance < nextAt) continue;
+    nextAt = sample.distance + MARKER_SPACING;
+    const angle = -Math.atan2(sample.tangent.z, sample.tangent.x);
+    for (const side of [-1, 1]) {
+      const offset = sample.halfWidth + 1.5;
+      placements.push({
+        x: sample.pos.x + sample.normal.x * offset * side,
+        y: sample.y + Math.sin(sample.bank) * offset * side,
+        z: sample.pos.z + sample.normal.z * offset * side,
+        angle,
+      });
+    }
+  }
+  if (placements.length === 0) return null;
+
+  const geometry = new THREE.BoxGeometry(0.1, 1.15, 0.34);
+  const material = new THREE.MeshBasicMaterial({
+    color: theme.kerbColor ?? 0xd8dee2,
+    transparent: true,
+    opacity: 0.72,
+    // Facing both ways, because half of them are seen from behind.
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.InstancedMesh(geometry, material, placements.length);
+  mesh.name = 'route-markers';
+  mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+
+  const matrix = new THREE.Matrix4();
+  const quaternion = new THREE.Quaternion();
+  const position = new THREE.Vector3();
+  const scale = new THREE.Vector3(1, 1, 1);
+  const up = new THREE.Vector3(0, 1, 0);
+  placements.forEach((place, index) => {
+    position.set(place.x, place.y + 0.6, place.z);
+    quaternion.setFromAxisAngle(up, place.angle);
+    matrix.compose(position, quaternion, scale);
+    mesh.setMatrixAt(index, matrix);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.computeBoundingSphere();
+  return mesh;
+}
+
 export function buildTrackMesh(track: Track): THREE.Group {
   const group = new THREE.Group();
   group.name = 'track';
@@ -289,6 +360,11 @@ export function buildTrackMesh(track: Track): THREE.Group {
   group.add(buildRibbon(track.main, theme));
   for (const branch of track.branches) group.add(buildRibbon(branch, theme));
   group.add(buildStartLine(track, theme));
+  // Only where the dark makes the road hard to find from outside it.
+  if (theme.night) {
+    const markers = buildRouteMarkers(track, theme);
+    if (markers) group.add(markers);
+  }
 
   return group;
 }

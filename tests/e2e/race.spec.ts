@@ -6,6 +6,7 @@ import {
   measureFrames,
   openGame,
   playerSnapshot,
+  skipRaceTime,
   startSeededRace,
   waitForGreenLight,
   waitForRaceTime,
@@ -49,11 +50,17 @@ test.describe('menu to finish', () => {
     await expect(page.getByTestId('hud')).toBeVisible();
     expect(await currentScreen(page)).toBe('race');
 
-    // Let the countdown run and drive for a moment, so the race is genuinely
-    // under way rather than being fast-forwarded from the grid.
+    /*
+     * Drive for a moment through the real loop, so the race is genuinely under
+     * way rather than fast-forwarded from the grid - but do not pay to render
+     * the three-second countdown first. Simulated time advances at most 67 ms
+     * per drawn frame, so under software WebGL the countdown alone can cost
+     * ten seconds of the test's budget and it is not what is under test here.
+     */
     await waitForGreenLight(page);
+    await skipRaceTime(page, 0.5);
     await page.keyboard.down('w');
-    await waitForRaceTime(page, 4);
+    await waitForRaceTime(page, 2);
     await page.keyboard.up('w');
 
     const running = await playerSnapshot(page);
@@ -63,7 +70,7 @@ test.describe('menu to finish', () => {
     // Fast-forward the remainder rather than driving three laps in real time.
     await page.evaluate(() => window.adRacers?.skipToFinish());
 
-    await expect(page.getByRole('heading', { name: /Race won|Finished|Did not finish/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Race won|Finished|Classified|Did not finish/i })).toBeVisible();
     expect(await currentScreen(page)).toBe('results');
 
     // Every entry is classified, once.
@@ -81,10 +88,11 @@ test.describe('menu to finish', () => {
     await openGame(page);
     await startSeededRace(page);
 
-    // Past the countdown, then accelerate down the opening straight.
+    // Past the countdown, then accelerate down the opening straight. The
+    // acceleration is driven for real; only the countdown is skipped.
     await waitForGreenLight(page);
     await page.keyboard.down('w');
-    await waitForRaceTime(page, 4);
+    await waitForRaceTime(page, 2);
     await page.keyboard.up('w');
 
     const speedText = await page.locator('.hud__speed').textContent();
@@ -198,7 +206,7 @@ test.describe('menu to finish', () => {
       await page.evaluate(() => window.adRacers?.startRace(90210));
       await expect(page.getByTestId('hud')).toBeVisible();
       await page.evaluate(() => window.adRacers?.skipToFinish());
-      await expect(page.getByRole('heading', { name: /Race won|Finished|Did not finish/i })).toBeVisible();
+      await expect(page.getByRole('heading', { name: /Race won|Finished|Classified|Did not finish/i })).toBeVisible();
       return page.evaluate(() =>
         Array.from(document.querySelectorAll('.results__row')).map(
           (row) =>
@@ -219,7 +227,7 @@ test.describe('pause and resume', () => {
     await startSeededRace(page);
     await waitForGreenLight(page);
     await page.keyboard.down('w');
-    await waitForRaceTime(page, 1.5);
+    await waitForRaceTime(page, 1);
     await page.keyboard.up('w');
 
     await page.keyboard.press('Escape');
@@ -409,5 +417,101 @@ test.describe('race surface transitions', () => {
       return sim?.player?.profileId ?? '';
     });
     expect(`racer-${playerId}`).toBe(chosen);
+  });
+});
+
+/*
+ * Corrections to the round-3 preview, exercised the way a player meets them.
+ *
+ * Every one of these reproduces something a live review or the pipeline found
+ * in the shipped preview and asserts the corrected behaviour through the real
+ * browser flow, because that is where each of them was found.
+ */
+test.describe('preview corrections', () => {
+  test('Back pauses a race once, and a second Back is allowed to leave', async ({ page }) => {
+    await openGame(page);
+    const before = await page.evaluate(() => history.length);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    /*
+     * A single Back must not throw a race away - it pauses instead, absorbed by
+     * one pushed history entry. But the guard used to re-push on *every*
+     * popstate, including the ones that arrived while already paused, so Back
+     * could never leave the page and every press grew the history stack. The
+     * player could not escape by holding it either.
+     */
+    await page.goBack();
+    await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
+    const armed = await page.evaluate(() => history.length);
+
+    // A second, deliberate Back from the pause dialog is not re-armed.
+    await page.goBack();
+    await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
+    const afterSecond = await page.evaluate(() => history.length);
+    expect(afterSecond, 'the Back guard re-armed itself and trapped the player').toBeLessThanOrEqual(armed);
+
+    // And the guard never stacks: racing repeatedly adds at most one entry.
+    await page.evaluate(() => window.adRacers?.startRace(99));
+    await page.evaluate(() => window.adRacers?.startRace(98));
+    await page.evaluate(() => window.adRacers?.startRace(97));
+    const afterThreeRaces = await page.evaluate(() => history.length);
+    expect(afterThreeRaces - before, 'each race pushed its own history entry').toBeLessThanOrEqual(2);
+  });
+
+  test('resuming with the key that confirmed it does not hop', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+    await skipRaceTime(page, 1);
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
+
+    /*
+     * Space activates the focused button *and* is the hop. Resuming with it
+     * used to hand the still-recorded press straight to the simulation, so the
+     * skiff hopped the instant the dialog closed.
+     */
+    await page.getByRole('button', { name: 'Resume' }).focus();
+    await page.keyboard.press('Space');
+    await expect(page.getByRole('dialog', { name: 'Paused' })).toBeHidden();
+
+    const hopped = await page.evaluate(() => {
+      const sim = window.adRacers?.simulation() as { racers: { isPlayer: boolean; airborne: boolean }[] } | null;
+      return sim?.racers.find((racer) => racer.isPlayer)?.airborne ?? false;
+    });
+    expect(hopped, 'confirming Resume launched the skiff').toBe(false);
+    expect(await page.evaluate(() => (window.adRacers?.input() as { hop: boolean }).hop)).toBe(false);
+  });
+
+  test('classifies a racer on pace rather than calling it a DNF', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await page.evaluate(() => window.adRacers?.skipToFinish());
+    await expect(page.getByRole('heading', { name: /Race won|Finished|Classified|Did not finish/i })).toBeVisible();
+
+    /*
+     * The player is fast-forwarded from the grid, so the field finishes and the
+     * player is classified on the progress they made. Whatever that comes to,
+     * the screen must not turn a projected time back into "DNF" - which is what
+     * it did, beside a best lap two seconds off the winner's.
+     */
+    const outcome = await page.evaluate(() => {
+      const sim = window.adRacers?.simulation() as
+        | { racers: { isPlayer: boolean; completed: boolean; projected: boolean }[] }
+        | null;
+      const player = sim?.racers.find((racer) => racer.isPlayer);
+      const row = document.querySelector('.results__row--player .results__time')?.textContent ?? '';
+      return { completed: player?.completed ?? false, projected: player?.projected ?? false, row };
+    });
+
+    if (outcome.projected) {
+      expect(outcome.row, 'a projected finish was rendered as DNF').not.toBe('DNF');
+      expect(outcome.row).toMatch(/≈/);
+      await expect(page.locator('.results__legend')).toContainText('Projected finish');
+    } else if (outcome.completed) {
+      expect(outcome.row).not.toBe('DNF');
+    }
   });
 });

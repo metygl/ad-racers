@@ -122,6 +122,18 @@ function racerCard(racer: RacerProfile, selected: boolean, onSelect: () => void)
       el('span', { class: 'card__title', text: racer.crew }),
       el('span', { class: 'card__crew', text: `${racer.pilot} & ${racer.wrench} · ${racer.skiff}` }),
       el('span', { class: 'card__blurb', text: racer.blurb }),
+      /*
+       * What this crew *does*, as opposed to who they are.
+       *
+       * The stat bars say how fast the machine is and the blurb says who the
+       * pilot is; neither told a player what to expect when this crew is the
+       * one alongside. Naming the tactic is what lets a player recognise it
+       * happening, which is the whole point of giving crews one.
+       */
+      el('span', { class: 'card__tactics' },
+        el('span', { class: 'card__tactics-label', text: 'Tactics' }),
+        el('span', { text: racer.style.tactics }),
+      ),
       el(
         'span',
         { class: 'card__stats' },
@@ -223,7 +235,15 @@ export function buildSetupScreen(actions: SetupActions): HTMLElement {
   return el(
     'section',
     { class: 'screen screen--setup', 'data-screen': 'setup', 'aria-labelledby': 'setup-heading' },
-    el('h1', { class: 'screen__heading', id: 'setup-heading', text: circuit ? 'Circuit setup' : 'Race setup' }),
+    // The garage is the tallest screen in the game; focus belongs at its top,
+    // not on whichever card happens to be first in the DOM. See `trapFocus`.
+    el('h1', {
+      class: 'screen__heading',
+      id: 'setup-heading',
+      tabindex: '-1',
+      'data-autofocus': true,
+      text: circuit ? 'Circuit setup' : 'Race setup',
+    }),
     circuit
       ? el('p', {
           class: 'screen__lead',

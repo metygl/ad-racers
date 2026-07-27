@@ -149,5 +149,11 @@ function referenceBrain(difficultyId: string): NonNullable<RacerState['ai']> {
     branchChoice: null,
     branchDecidedAt: -1,
     catchUpScale: 1,
+    // A neutral crew. The reference brain exists to measure what a *difficulty*
+    // does, so it deliberately carries no crew character at all.
+    style: { shortcut: 1, towPatience: 1, strike: 1, drift: 1, room: 1 },
+    defence: 0,
+    defendSide: 0,
+    defendTimer: 0,
   };
 }

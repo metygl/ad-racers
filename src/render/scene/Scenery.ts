@@ -27,50 +27,114 @@ function shade(color: number, factor: number): THREE.Color {
  */
 
 /**
- * Adds a wind sway to an instanced material, in the vertex shader.
+ * Distance from the camera at which a scenery instance has dissolved away, and
+ * the distance by which it is solid again.
  *
- * Foliage that does not move is the loudest possible statement that a world is
- * geometry rather than a place — and animating it on the CPU would mean
- * rewriting an instance matrix buffer every frame for two thousand trees. The
- * sway is a function of world position and time, so every instance gets its own
- * phase for free and the whole species still costs one draw call.
+ * The boom raycast can only find something *between* the camera and the car; it
+ * cannot do anything about the canopy the camera is already inside. The round-3
+ * live review caught exactly that on Overgrown: an off-road excursion into the
+ * broadleaf band left the road "reduced to a narrow strip at the far right
+ * while dark foliage occupies the centre and left", precisely when the player
+ * needed to see a way back. Anything this close to the lens is not scenery any
+ * more, it is an obstruction.
  *
- * The displacement scales with height above the instance origin, so trunks stay
- * planted and only the canopy moves. Anything else looks like the tree is
- * sliding around on the ground.
+ * `NearFade` already does this for gantries and landmarks, but it works on
+ * whole objects and every tree of a species is one instanced draw. Per-instance
+ * is the only useful granularity here, which is why this is a shader dissolve
+ * rather than a material opacity.
  */
-function applyWind(material: THREE.Material, strength: number, speed: number): { time: { value: number } } {
+const DISSOLVE_GONE = 5.5;
+const DISSOLVE_SOLID = 13;
+
+/**
+ * Patches a scenery material with the per-instance camera dissolve, and
+ * optionally with wind sway.
+ *
+ * The sway is a function of world position and time in the vertex shader, so
+ * every instance gets its own phase for free and the whole species still costs
+ * one draw call - animating two thousand trees on the CPU would mean rewriting
+ * an instance matrix buffer every frame. The displacement scales with height
+ * above the instance origin, so trunks stay planted and only the canopy moves;
+ * anything else looks like the tree is sliding around on the ground.
+ *
+ * One patch, because `onBeforeCompile` is a single slot: a second assignment
+ * silently replaces the first, so wind and dissolve have to be installed
+ * together or one of them quietly does nothing.
+ *
+ * The dissolve is an ordered dither rather than alpha, so it needs no
+ * transparency, no depth sorting and no second draw - an instance thins out and
+ * is gone, and the road behind it is simply there.
+ */
+function patchScenery(
+  material: THREE.Material,
+  camera: { value: THREE.Vector3 },
+  wind?: { strength: number; speed: number },
+): { time: { value: number } } {
   const time = { value: 0 };
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.uWindTime = time;
-    shader.uniforms.uWindStrength = { value: strength };
-    shader.uniforms.uWindSpeed = { value: speed };
+    shader.uniforms.uCameraAt = camera;
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
         `#include <common>
-         uniform float uWindTime;
-         uniform float uWindStrength;
-         uniform float uWindSpeed;`,
+         uniform vec3 uCameraAt;
+         varying float vDissolve;
+         ${wind ? 'uniform float uWindTime;\nuniform float uWindStrength;\nuniform float uWindSpeed;' : ''}`,
       )
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
          {
            vec3 instanceOrigin = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
-           float phase = instanceOrigin.x * 0.13 + instanceOrigin.z * 0.11;
+           vDissolve = smoothstep(${DISSOLVE_GONE.toFixed(1)}, ${DISSOLVE_SOLID.toFixed(1)},
+             distance(instanceOrigin.xz, uCameraAt.xz));
+           ${
+             wind
+               ? `float phase = instanceOrigin.x * 0.13 + instanceOrigin.z * 0.11;
            float height = max(transformed.y, 0.0);
            float sway = sin(uWindTime * uWindSpeed + phase) * 0.7
                       + sin(uWindTime * uWindSpeed * 1.7 + phase * 2.3) * 0.3;
            transformed.x += sway * uWindStrength * height * height * 0.02;
-           transformed.z += sway * uWindStrength * height * height * 0.012;
+           transformed.z += sway * uWindStrength * height * height * 0.012;`
+               : ''
+           }
          }`,
       );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+         varying float vDissolve;
+         // A 4x4 ordered dither. Screen-space and stable, so a dissolving
+         // canopy stipples out instead of flickering as the camera moves.
+         float sceneryDither(vec2 fragment) {
+           int x = int(mod(fragment.x, 4.0));
+           int y = int(mod(fragment.y, 4.0));
+           int index = x + y * 4;
+           float table[16];
+           table[0]=0.0;   table[1]=8.0;  table[2]=2.0;  table[3]=10.0;
+           table[4]=12.0;  table[5]=4.0;  table[6]=14.0; table[7]=6.0;
+           table[8]=3.0;   table[9]=11.0; table[10]=1.0; table[11]=9.0;
+           table[12]=15.0; table[13]=7.0; table[14]=13.0;table[15]=5.0;
+           for (int i = 0; i < 16; i++) if (i == index) return (table[i] + 0.5) / 16.0;
+           return 0.5;
+         }`,
+      )
+      .replace(
+        '#include <clipping_planes_fragment>',
+        `#include <clipping_planes_fragment>
+         if (vDissolve < sceneryDither(gl_FragCoord.xy)) discard;`,
+      );
+    if (wind) {
+      shader.uniforms.uWindTime = time;
+      shader.uniforms.uWindStrength = { value: wind.strength };
+      shader.uniforms.uWindSpeed = { value: wind.speed };
+    }
   };
   // Changing `onBeforeCompile` after a material has been used needs a new
   // program; setting the key up front keeps three from caching the unmodified
   // shader against this material.
-  material.customProgramCacheKey = () => `wind-${strength}-${speed}`;
+  material.customProgramCacheKey = () => `scenery-${wind ? `${wind.strength}-${wind.speed}` : 'still'}`;
   return { time };
 }
 
@@ -352,8 +416,11 @@ export interface SceneryOptions {
 
 export interface SceneryResult {
   group: THREE.Group;
-  /** Advances every wind-swayed material. */
-  update: (elapsed: number) => void;
+  /**
+   * Advances every wind-swayed material and tells the dissolve where the
+   * camera is.
+   */
+  update: (elapsed: number, cameraAt: THREE.Vector3) => void;
 }
 
 /**
@@ -369,6 +436,8 @@ export function buildScenery(track: Track, options: SceneryOptions): SceneryResu
   const theme = track.definition.theme;
   const clocks: { value: number }[] = [];
   const lights: { material: THREE.MeshStandardMaterial; amplitude: number; speed: number; base: number; phase: number }[] = [];
+  // One shared uniform for the whole course, written once a frame.
+  const cameraAt = { value: new THREE.Vector3() };
 
   for (const spec of track.definition.scenery) {
     const rng = new Rng(hashSeed(spec.kind, track.definition.seed));
@@ -420,7 +489,10 @@ export function buildScenery(track: Track, options: SceneryOptions): SceneryResu
       (_, index) => placements[Math.floor((index * placements.length) / budget)] as (typeof placements)[number],
     );
     const { geometry, material, wind, extra, flicker } = prototype(spec.kind, theme);
-    if (wind) clocks.push(applyWind(material, wind, 1.1).time);
+    // Every scenery material gets the dissolve; only some get wind.
+    const patched = patchScenery(material, cameraAt, wind === undefined ? undefined : { strength: wind, speed: 1.1 });
+    if (wind) clocks.push(patched.time);
+    if (extra) patchScenery(extra.material, cameraAt);
     if (flicker) lights.push({ material: material as THREE.MeshStandardMaterial, ...flicker, base: (material as THREE.MeshStandardMaterial).emissiveIntensity, phase: rng.range(0, 6.28) });
 
     const matrix = new THREE.Matrix4();
@@ -454,8 +526,9 @@ export function buildScenery(track: Track, options: SceneryOptions): SceneryResu
   let clock = 0;
   return {
     group,
-    update: (elapsed: number) => {
+    update: (elapsed: number, camera: THREE.Vector3) => {
       clock += elapsed;
+      cameraAt.value.copy(camera);
       for (const c of clocks) c.value += elapsed;
       for (const light of lights) {
         // Two incommensurate sines, so the flicker never settles into a

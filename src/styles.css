@@ -251,12 +251,54 @@ body {
   max-width: 62ch;
 }
 
+/*
+ * The primary action never scrolls away.
+ *
+ * A live review on a 844x390 landscape phone found the first-run Controls page
+ * 810 px tall with `Continue` starting at y = 713: the one thing the player had
+ * to do was two screens down, nothing on screen said so, and first-run focus
+ * had landed on it invisibly. The setup screen is worse - 4,503 px of content
+ * at 320 px wide, with `Start race` at the very bottom.
+ *
+ * Sticking the actions row to the bottom of the scroller costs nothing on a
+ * screen that fits and fixes both. The backdrop is what keeps it legible over
+ * the content passing underneath it.
+ *
+ * The bleed is vertical only. Pulling the row out sideways to the panel's edges
+ * would be prettier and is a horizontal-overflow bug waiting to happen: the
+ * panel has a border, so a row inset by exactly the padding is two pixels wider
+ * than the box it sits in, and a 320 px results screen then reports the
+ * scrollbar the completion-screen test exists to forbid.
+ */
 .screen__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;
   margin-top: auto;
-  padding-top: 0.5rem;
+  /* Deep enough that the fade has somewhere to happen: with a shallow one the
+     line of content passing behind the row sits half-visible beside the button
+     and reads as a rendering fault rather than as a footer. */
+  padding-top: 1.5rem;
+  position: sticky;
+  bottom: calc(-1 * clamp(1.1rem, 3vw, 2.2rem));
+  z-index: 2;
+  background: linear-gradient(to top, var(--bg-panel-solid) 74%, transparent);
+  padding-bottom: clamp(1.1rem, 3vw, 2.2rem);
+  margin-bottom: calc(-1 * clamp(1.1rem, 3vw, 2.2rem));
+}
+
+/* A heading that takes programmatic focus must still show a ring, but it is
+   not an interactive control and must not look like one - so the ring hugs the
+   words rather than drawing a box across the whole panel. */
+.screen__heading[tabindex] {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.screen__heading:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 4px;
+  border-radius: 4px;
 }
 
 /* --------------------------------------------------------------- title --- */
@@ -341,12 +383,152 @@ body {
 
 /* --------------------------------------------------------------- setup --- */
 
+/*
+ * The garage and the finish shot get out of the machine's way.
+ *
+ * Both screens draw the selected crew's skiff, lit, on the canvas behind the
+ * UI - see `HeroStage` and `App.updateHeroAnchor`. A full-bleed opaque panel
+ * would hide the whole point of doing that, so the panel is narrowed and pushed
+ * to one side and the backdrop becomes a gradient that leaves the stage side
+ * legible. This is the same move the title screen already makes for the attract
+ * race, applied to the two screens that now have something to show.
+ */
+@media (min-width: 68rem) {
+  .ui[data-screen='setup'],
+  .ui[data-screen='results'] {
+    place-items: center start;
+    padding-left: clamp(2rem, 5vw, 4rem);
+    background: linear-gradient(
+      100deg,
+      rgba(6, 9, 13, 0.95) 0%,
+      rgba(6, 9, 13, 0.9) 40%,
+      rgba(6, 9, 13, 0.4) 72%,
+      rgba(6, 9, 13, 0.16) 100%
+    );
+  }
+
+  .ui[data-screen='setup'] .screen,
+  .ui[data-screen='results'] .screen {
+    width: min(56rem, 62%);
+  }
+}
+
+/*
+ * Narrow: the panel takes the bottom of the viewport and the machine stands in
+ * the band above it. The panel scrolls inside itself rather than letting the
+ * page scroll, so the stage stays put instead of sliding off the top the moment
+ * a player reaches for the crew list.
+ */
+@media (max-width: 67.99rem) {
+  .ui[data-screen='setup'],
+  .ui[data-screen='results'] {
+    place-items: end center;
+    overflow: hidden;
+    background: linear-gradient(
+      to bottom,
+      rgba(6, 9, 13, 0.2) 0%,
+      rgba(6, 9, 13, 0.35) 34%,
+      rgba(6, 9, 13, 0.92) 52%,
+      rgba(6, 9, 13, 0.96) 100%
+    );
+  }
+
+  .ui[data-screen='setup'] .screen,
+  .ui[data-screen='results'] .screen {
+    max-height: 66%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+/* The caption that names the machine on the stage. */
+.stage-caption {
+  position: absolute;
+  pointer-events: none;
+  display: grid;
+  gap: 0.1rem;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.9);
+}
+
+.stage-caption__kicker {
+  margin: 0;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--signal-dim);
+}
+
+.stage-caption__crew {
+  margin: 0;
+  font-size: clamp(1.3rem, 2.6vw, 2rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.015em;
+  color: var(--crew-trim, var(--ink));
+}
+
+.stage-caption__skiff {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--ink-dim);
+}
+
+.stage-caption__pilots {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+
+@media (min-width: 68rem) {
+  .stage-caption {
+    right: clamp(2rem, 5vw, 5rem);
+    bottom: clamp(3rem, 12vh, 8rem);
+    text-align: right;
+    justify-items: end;
+  }
+}
+
+@media (max-width: 67.99rem) {
+  .stage-caption {
+    top: calc(0.9rem + var(--safe-top));
+    left: calc(1rem + var(--safe-left));
+    text-align: left;
+  }
+}
+
 .setup__section {
   min-width: 0;
 }
 
 .screen--setup {
   gap: 0.85rem;
+}
+
+/*
+ * What this crew does, under what the machine is.
+ *
+ * Set apart from the blurb because it is a different kind of statement: the
+ * blurb is characterisation and this is a prediction the player can check
+ * against the next three laps.
+ */
+.card__tactics {
+  display: block;
+  margin-top: 0.15rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--line-soft);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--ink-dim);
+}
+
+.card__tactics-label {
+  display: block;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--signal-dim);
+  margin-bottom: 0.15rem;
 }
 
 /*
@@ -1779,12 +1961,59 @@ body {
   min-width: 0;
 }
 
+/* A podium finish gets the crew colour carried across the whole edge. */
+.results__hero--podium {
+  border-color: color-mix(in srgb, var(--crew-glow, var(--crew)) 60%, transparent);
+}
+
 .results__hero-place {
   margin: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem;
   font-size: 2.1rem;
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.01em;
+}
+
+/*
+ * The qualifier next to the place, not instead of it.
+ *
+ * "Classified 4th" and "4th" are different claims and the difference matters to
+ * the player, but the place is still the headline - so the tag rides alongside
+ * at label size rather than replacing the number, which is what the old `DNF`
+ * did to every projected finish.
+ */
+.results__hero-tag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-dim);
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+}
+
+.results__hero-tag--won {
+  color: var(--bg-panel-solid);
+  background: var(--crew-trim, var(--signal));
+  border-color: transparent;
+}
+
+/* The projected-finish legend under the classification table. */
+.results__legend {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+  line-height: 1.5;
+}
+
+.results__time--projected {
+  color: var(--ink-dim);
+  font-style: italic;
 }
 
 .results__hero-crew {

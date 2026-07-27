@@ -126,11 +126,29 @@ test.describe('accessibility', () => {
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: 'Race', exact: true })).toBeFocused();
 
-    // Enter activates it, and focus lands inside the next screen.
+    /*
+     * Enter activates it, and focus lands inside the next screen - *visibly*.
+     *
+     * The tag used to be the assertion, and it was the wrong one: on a
+     * landscape phone the Controls screen is 810 px of content whose only
+     * control starts at y = 713, so focus was on a real button that nothing on
+     * screen showed. A long screen focuses its heading instead. What actually
+     * has to hold is that the player can see where focus went.
+     */
     await page.keyboard.press('Enter');
     await expect(page.getByRole('button', { name: /Continue|Back/ }).first()).toBeVisible();
-    const focusedTag = await page.evaluate(() => document.activeElement?.tagName ?? '');
-    expect(['BUTTON', 'INPUT', 'A']).toContain(focusedTag);
+    const focus = await page.evaluate(() => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return null;
+      const rect = active.getBoundingClientRect();
+      return {
+        insideScreen: active.closest('[data-testid="ui"]') !== null,
+        onScreen: rect.top >= 0 && rect.bottom <= window.innerHeight && rect.height > 0,
+        tag: active.tagName,
+      };
+    });
+    expect(focus?.insideScreen, 'focus left the screen it opened').toBe(true);
+    expect(focus?.onScreen, `focus landed off-screen on a ${focus?.tag ?? '?'}`).toBe(true);
   });
 
   test('traps focus inside the pause dialog', async ({ page }) => {

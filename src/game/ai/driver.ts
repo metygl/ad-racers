@@ -173,6 +173,7 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
   ai.overtakeTimer = Math.max(0, ai.overtakeTimer - ctx.dt);
   ai.driftHold = Math.max(0, ai.driftHold - ctx.dt);
   ai.boostHold = Math.max(0, ai.boostHold - ctx.dt);
+  ai.defendTimer = Math.max(0, ai.defendTimer - ctx.dt);
 
   if (racer.finished) {
     // Keep rolling gently so finished cars clear the line rather than parking.
@@ -205,6 +206,19 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
 
   const overtake = planOvertake(racer, ctx, projection.halfWidth);
   if (overtake !== null) targetLateral = overtake;
+
+  /*
+   * Cover the line the car behind is coming down.
+   *
+   * Attacking was already modelled and defending was not, so a rival being
+   * caught simply carried on driving its own line and let the pass happen -
+   * which is most of why the Ace field read as "the same race, faster". A
+   * defence never outranks an overtake of the defender's own: doing both at
+   * once puts a car in the middle of the road holding nobody up. See
+   * `planDefence` for what keeps it a race move rather than blocking.
+   */
+  const defend = planDefence(racer, ctx, projection.halfWidth, Math.abs(apexCurvature));
+  if (defend !== null && overtake === null) targetLateral = defend;
 
   // Aiming at a shortcut mouth outranks both the racing line and an overtake:
   // the window to make the split is short, and half-committing to it is the
@@ -294,7 +308,9 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
 
   // --- drift ---------------------------------------------------------------
   const cornerTightness = Math.abs(apexCurvature);
-  const canDrift = speed > DRIFT.minSpeed + 6 && racer.onTrack && ai.boldness > 0.45;
+  // A crew that likes being sideways commits at a lower bar than one that does
+  // not; the difficulty still decides whether it can carry the line.
+  const canDrift = speed > DRIFT.minSpeed + 6 && racer.onTrack && ai.boldness * ai.style.drift > 0.45;
   if (canDrift && cornerTightness > 0.009 && Math.abs(input.steer) > 0.28) {
     // Commit for long enough to actually bank a charge tier. Reacting frame by
     // frame produces a stutter of half-second drifts that never reward
@@ -328,8 +344,14 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
     // Committing to the pull-out is the same manoeuvre as an overtake, so it
     // reuses the overtake timer rather than inventing a second lane-change
     // controller that would fight it.
+    //
+    // How long the crew is prepared to sit there first is the readable part:
+    // an impatient one goes on the first usable charge, a patient one waits for
+    // the tether to be nearly full. Bounded so nobody waits past what a tow can
+    // actually give them.
     const corneringSoon = !straightAhead;
-    if (corneringSoon || racer.towCharge > 0.92) ai.overtakeTimer = Math.max(ai.overtakeTimer, 1.4);
+    const patience = clamp(0.72 * ai.style.towPatience, 0.5, 0.97);
+    if (corneringSoon || racer.towCharge > patience) ai.overtakeTimer = Math.max(ai.overtakeTimer, 1.4);
   }
 
   // --- the hop -------------------------------------------------------------
@@ -454,11 +476,79 @@ function planOvertake(racer: RacerState, ctx: AiContext, halfWidth: number): num
   const rightRoom = halfWidth + closest.lateral;
   const side = leftRoom > rightRoom ? 1 : -1;
   const room = Math.max(leftRoom, rightRoom);
-  if (room < 3.2) return null;
+  // How much room the crew insists on before committing. A crew that will take
+  // a gap that is not really there and one that wants the whole lane are the
+  // two ends of the same decision, and it is one of the most visible.
+  if (room < 3.2 * ai.style.room) return null;
 
   ai.overtakeSide = side;
   ai.overtakeTimer = ctx.rng.range(1.8, 3.4);
   return clamp(side * halfWidth * 0.72, -halfWidth * 0.9, halfWidth * 0.9);
+}
+
+/**
+ * Covers the side a challenger is coming down, or returns null to leave the
+ * racing line alone.
+ *
+ * The tactical half of the difficulty ladder. Everything else the AI does
+ * treats the cars behind as scenery, which is why an Ace field read as a Pro
+ * field with more pace: it never denied anybody anything. A defence here is one
+ * committed move to the challenger's side, held for a beat so the player has to
+ * do something about it, and abandoned as soon as the challenger is no longer
+ * there.
+ *
+ * Four bounds keep it from becoming blocking, and the first two are what stop
+ * it costing races rather than winning them.
+ *
+ * It only defends on a *straight*. Covering a line into a corner is what a
+ * driver does; swinging across the road mid-corner is what a driver who has
+ * stopped racing does, and the first version of this did exactly that - it cost
+ * a second a lap and produced sustained body angles the F4 bound is there to
+ * prevent. It is also a *shift* from wherever the defender already is rather
+ * than a jump to a fixed offset, so it is a lane change and not a lunge.
+ *
+ * Then: it only ever moves towards the side already being attacked, never past
+ * two thirds of the corridor, and never while the defender is mid-overtake of
+ * its own, because a car doing both at once simply drives into the middle and
+ * holds nobody up.
+ */
+function planDefence(racer: RacerState, ctx: AiContext, halfWidth: number, curvature: number): number | null {
+  const ai = racer.ai;
+  if (!ai || ai.defence < 0.35) return null;
+  // Anything the racing line has an opinion about belongs to the racing line.
+  if (curvature > 0.006) {
+    ai.defendTimer = 0;
+    return null;
+  }
+
+  const cover = (side: number): number =>
+    clamp(racer.lateral + side * halfWidth * 0.34, -halfWidth * 0.66, halfWidth * 0.66);
+
+  if (ai.defendTimer > 0) return cover(ai.defendSide);
+
+  const forward = fromHeading(racer.heading);
+  for (const other of ctx.racers) {
+    if (other.index === racer.index || other.finished) continue;
+    const rel: Vec2 = { x: other.pos.x - racer.pos.x, z: other.pos.z - racer.pos.z };
+    const behind = -dot(rel, forward);
+    // Close enough to be a threat, far enough back that this is not contact.
+    if (behind < 2.5 || behind > 16) continue;
+    if (Math.abs(other.y - racer.y) > 3) continue;
+    // Only a challenger who is actually catching. Someone matched on pace is
+    // not attacking, and covering them wastes the whole move.
+    const closing = dot({ x: other.velocity.x - racer.velocity.x, z: other.velocity.z - racer.velocity.z }, forward);
+    if (closing < 1.5) continue;
+
+    // The side they have committed to, which is where the door has to shut.
+    const side = Math.sign(other.lateral - racer.lateral);
+    if (side === 0) continue;
+    ai.defendSide = side;
+    // A Rookie's cover is a token gesture; an Ace holds it. The difficulty term
+    // is the whole difference in how long the door stays shut.
+    ai.defendTimer = ctx.rng.range(0.5, 0.9) * (0.5 + ai.defence);
+    return cover(side);
+  }
+  return null;
 }
 
 /**

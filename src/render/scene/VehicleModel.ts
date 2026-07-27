@@ -5,6 +5,7 @@ import type { RacerProfile } from '../../game/racers';
 import type { RacerState } from '../../game/sim/state';
 import { SURFACES } from '../../game/track/types';
 import { helmetTexture, liveryTexture, particleTexture, plateTexture } from '../textures/procedural';
+import { disposeMaterial, ownTexture } from '../materials/ownership';
 import { SkiffRig } from './skiffRig';
 import { mergeGeometries } from './mergeGeometry';
 import type { MergePart } from './mergeGeometry';
@@ -155,14 +156,19 @@ export interface VehicleVisual {
  * three-hundred-year-old machines rebuilt in a shed, and their plating should
  * read as panels that were cut, bolted and then weathered at different rates.
  *
- * The map is shared and its repeat is per material, so the whole grid still
- * costs one texture.
+ * The map's *pixels* are shared and its repeat is per material, so the whole
+ * grid still costs one texture upload - but the clone that carries the repeat
+ * is a GPU object of its own, and it is registered as owned so that disposing
+ * the material releases it. Six skiffs rebuilt on every race start otherwise
+ * leak three of these each, forever. See `materials/ownership.ts`.
  */
 function panel(color: number, roughness = 0.55, metalness = 0.35, repeat = 1.6): THREE.MeshStandardMaterial {
   const map = plateTexture().clone();
   map.needsUpdate = true;
   map.repeat.set(repeat, repeat);
-  return new THREE.MeshStandardMaterial({ color, map, roughness, metalness, flatShading: true });
+  const material = new THREE.MeshStandardMaterial({ color, map, roughness, metalness, flatShading: true });
+  ownTexture(material, map);
+  return material;
 }
 
 export function buildVehicle(profile: RacerProfile, castShadow: boolean): VehicleVisual {
@@ -661,6 +667,15 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   );
   const thrust = new THREE.Mesh(thrustGeometry, thrustMaterial);
   thrust.name = 'thrust';
+  /*
+   * Every effect part starts hidden.
+   *
+   * These are all driven by `update`, so before the first one there is no
+   * state that could justify drawing them - and one of them is a twelve-metre
+   * tow cone. In a race that is a single frame nobody sees; on the garage
+   * stage, which never calls `update` at all, it is the whole picture.
+   */
+  thrust.visible = false;
   group.add(thrust);
   disposables.push(thrustGeometry);
 
@@ -728,6 +743,7 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   });
   const wakeGeometry = new THREE.ConeGeometry(2.2, 12, 10, 1, true);
   const wake = new THREE.Mesh(wakeGeometry, wakeMaterial);
+  wake.visible = false;
   wake.rotation.z = HALF_PI;
   wake.position.set(-7, 0.7, 0);
   wake.renderOrder = 1;
@@ -899,6 +915,7 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   });
   disposables.push(debrisMaterial);
   const debris = new THREE.Group();
+  debris.visible = false;
   debris.position.set(-0.3, 0.68, POD_OFFSET);
   group.add(debris);
   /*
@@ -949,6 +966,7 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
     ),
   );
   const vents = new THREE.Mesh(ventGeometry, ventMaterial);
+  vents.visible = false;
   vents.renderOrder = 2;
   group.add(vents);
   disposables.push(ventGeometry);
@@ -1063,7 +1081,12 @@ export function buildVehicle(profile: RacerProfile, castShadow: boolean): Vehicl
   };
 
   const dispose = (): void => {
-    for (const item of disposables) item.dispose();
+    // Materials go through `disposeMaterial` so their cloned plating maps go
+    // with them; geometry disposes itself.
+    for (const item of disposables) {
+      if (item instanceof THREE.Material) disposeMaterial(item);
+      else item.dispose();
+    }
   };
 
   return {

@@ -946,11 +946,16 @@ export class App {
     if (!this.paused) {
       const input: ControlInput = this.input.poll(elapsed);
       this.lastPlayerInput = input;
-      this.accumulator += elapsed;
-      // Capping the accumulator is what stops a long stall from being "paid
-      // back" as a burst of simulation the player never sees.
-      const maxAccumulated =
-        FIXED_STEP * (simulation.resolvingAfterPlayer ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME);
+      const resolving = simulation.resolvingAfterPlayer;
+      const maxAccumulated = FIXED_STEP * (resolving ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME);
+      // Once the player has finished, the field resolves on a deterministic
+      // simulated-step budget rather than one paced by wall-clock elapsed
+      // time: raising the per-frame step ceiling alone does nothing, because
+      // an ordinary frame's real elapsed time is still only enough for a
+      // couple of fixed steps. Outside resolve, capping the accumulator to
+      // real elapsed time is what stops a long stall from being "paid back"
+      // as a burst of simulation the player never sees.
+      this.accumulator += resolving ? maxAccumulated : elapsed;
       if (this.accumulator > maxAccumulated) this.accumulator = maxAccumulated;
 
       /*
@@ -964,7 +969,7 @@ export class App {
        * camera". Nothing about the outcome changes; only how long the player
        * watches it happen.
        */
-      const maxSteps = simulation.resolvingAfterPlayer ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME;
+      const maxSteps = resolving ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME;
       const events: SimEvent[] = [];
       while (this.accumulator >= FIXED_STEP && steps < maxSteps) {
         simulation.step(steps === 0 ? input : { ...input, strike: 0, respawn: false });

@@ -119,6 +119,32 @@ test.describe('menu to finish', () => {
     expect(simulatedSeconds).toBeCloseTo(stepsTaken / 120, 3);
   });
 
+  test('resolves the field on a fast step budget once the player finishes', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    const before = await page.evaluate(() => (window.adRacers?.simulation() as { steps: number }).steps);
+
+    // Force the player across the line while the field is still mid-race, the
+    // same state a real finish leaves behind, without waiting out a real lap.
+    await page.evaluate(() => {
+      const sim = window.adRacers?.simulation() as { player: { finished: boolean } | null } | null;
+      if (sim?.player) sim.player.finished = true;
+    });
+
+    // Once resolvingAfterPlayer is true, the loop is meant to run hundreds of
+    // steps a frame on a deterministic budget rather than one paced by real
+    // elapsed time (RESOLVE_STEPS_PER_FRAME in App.ts) — a regression here
+    // means the field finishes behind the player in real time again, which
+    // used to cost up to the 75s post-race timeout.
+    await page.waitForFunction(
+      (target) => ((window.adRacers?.simulation() as { steps: number } | null)?.steps ?? 0) >= target,
+      before + 1000,
+      { timeout: 5_000 },
+    );
+  });
+
   test('restarting with the same seed replays the same race', async ({ page }) => {
     await openGame(page);
 

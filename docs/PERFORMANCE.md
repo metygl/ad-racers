@@ -4,10 +4,10 @@
 
 | Budget | Target | Measured | Enforced by |
 | --- | --- | --- | --- |
-| Frame time, desktop | ≤ 16.7 ms (60 fps) | **8.3 ms median, 9.2–9.5 ms p95** | Measured by hand; see below |
-| Draw calls, world | 10 < n < 100 | **40–73** | `tests/e2e/race.spec.ts` |
+| Frame time, desktop | ≤ 16.7 ms (60 fps) | **8.3 ms median, 9.5–9.9 ms p95** | Measured by hand; see below |
+| Draw calls, world | 10 < n < 100 | **95** on a bunched grid | `tests/e2e/race.spec.ts` |
 | Draw calls, post | ≤ 4 | **4** | `tests/e2e/race.spec.ts` |
-| Triangles | < 500 k | **143 k–315 k** | Performance overlay |
+| Triangles | < 500 k | **320 k–329 k** | Performance overlay |
 | Particles | ≤ 800 (High) | Hard cap, pre-allocated | `ParticleSystem` budget |
 | JS heap | < 150 MB | **42–48 MB** | Performance overlay |
 | Download, total | ≤ 260 kB gzip | **191.5 kB** | `npm run check:budget` |
@@ -29,17 +29,12 @@ measurement.
 ## Desktop measurement
 
 Apple silicon laptop, Chrome, hardware WebGL, 1440 × 900, High quality,
-Overgrown Interchange, six cars, mid-race with the player at full throttle:
+six cars, High quality with shadows and the post chain on:
 
 ```
-Overgrown Interchange   120 fps · median 8.3 ms · p95 9.5 ms · draws 73 +4 post · tris 315k · heap 43 MB
-Saltflat Reliquary      120 fps · median 8.3 ms · p95 10.2 ms · draws 41 +4 post · tris 168k · heap 46 MB
-Glasshouse Vigil        120 fps · median 8.3 ms · p95 9.2 ms · draws 40 +4 post · tris 173k · heap 48 MB
-Emberfall Quarry        120 fps · median 8.3 ms · p95 9.3 ms · draws 56 +4 post · tris 143k · heap 42 MB
+Bunched grid at green   median 8.3 ms · p95 9.5–9.9 ms · draws 95 +4 post
+Hero course, mid-race   draws 57–86 · tris 320k–329k
 ```
-
-All four courses, six cars, mid-race at full throttle, High quality with the
-post chain on.
 
 120 fps is the display refresh rate, so the renderer is refresh-capped rather
 than GPU-bound; the 8.3 ms median against a 16.7 ms 60 fps budget is the real
@@ -89,12 +84,11 @@ per species — a thousand trees are one call. The road, shoulder and barrier ar
 three merged buffer geometries per path. Particles are two instanced quad
 meshes. Adding more trees costs nothing in draw calls.
 
-> The browser tests caught this one. Each skiff was built from about twenty
-> small meshes, so six cars on a grid cost roughly a hundred and twenty draw
-> calls — more than the entire rest of the scene put together, and the reason
-> the measured figure was 160 rather than the 88 seen from a favourable camera
-> angle. Merging each skiff's static parts by material took the whole scene from
-> 160 to **58**, and the heap from 49 MB to 31 MB, for identical pixels.
+> The browser tests caught this one. Each skiff was originally built from about
+> twenty small meshes, so six cars on a grid cost more than the rest of the
+> scene. Static parts are now merged by material, independently moving strut
+> stations are instanced, and only the player casts into the shadow map. The
+> bunched-grid worst case is 95 calls.
 
 **Particles are pre-allocated.** The pool is fixed at construction and the
 oldest slot is recycled when it is exhausted, so nothing is allocated after
@@ -149,7 +143,8 @@ trusting that every GPU resource survived. Covered by
 ## Load time
 
 There is no loading bar because there is nothing to load. The download is
-177.7 kB gzipped and the world is generated in code.
+the measured total in the budget table above, and the world is generated in
+code.
 
 The one measurable cost at startup is building the first course — the spline is
 resampled, the terrain heightfield is projected against the track corridor, and

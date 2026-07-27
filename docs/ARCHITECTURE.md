@@ -293,7 +293,7 @@ will actually do.
 
 **`skill` is capped well below 1**, even at Ace, and that is not timidity: the
 model reads curvature from the centreline while the car drives an offset line
-with a control lag. Measured across all three courses, targeting 0.86 of the
+with a control lag. Measured across all four courses, targeting 0.86 of the
 limit is both dirtier *and slower* than targeting 0.72.
 
 Difficulty separation therefore comes from `pace`, `reaction` and

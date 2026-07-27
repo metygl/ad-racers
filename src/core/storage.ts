@@ -6,14 +6,13 @@ import type { CameraMode } from '../render/camera/ChaseCamera';
 import type { QualityId } from '../render/quality';
 
 /**
- * Local settings and best times.
+ * Local settings, best times and Circuit records.
  *
- * Only two kinds of thing are ever stored: preferences the player set, and the
- * best lap and race times they achieved. No identifiers, no analytics, nothing
- * that leaves the machine. Everything lives under one key so clearing it is one
- * action, and the schema is versioned so an old save is migrated rather than
- * discarded — losing someone's records because a field was renamed is not
- * acceptable.
+ * Only preferences and results the player earned are stored. No identifiers,
+ * no analytics, nothing that leaves the machine. Everything lives under one
+ * key so clearing it is one action, and the schema is versioned so an old save
+ * is migrated rather than discarded - losing someone's records because a field
+ * was renamed is not acceptable.
  */
 
 export const STORAGE_KEY = 'ad-racers';

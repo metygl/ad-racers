@@ -126,47 +126,10 @@ no form at all, so adding hard-surface detail to the machine made the finish
 orbit *worse* — unlit detail is only more edges. The shot carries its own key
 light and is framed at 14.5 m for the silhouette rather than pressed against it.
 
-## Budgets on this commit
+## Performance evidence
 
-| Budget | Target | Measured |
-|---|---|---|
-| Frame time, High, six cars | ≤ 16.7 ms | 8.3 ms median, 9.5–9.9 ms p95 |
-| World draw calls, bunched grid, High | 10 < n < 100 | **95** |
-| World draw calls, hero course, mid-race | 10 < n < 100 | 57–86 |
-| Post passes | ≤ 4 | 4 |
-| Triangles | < 500 k | 320–329 k |
-| Download, total | ≤ 260 kB gzip | see below |
-| Binary assets | 0 | 0 |
-
-### The draw-call number, and a measurement I had reported wrongly
-
-The "62" in the previous checkpoint was not the worst case, and I should not
-have quoted it as the budget figure. It was sampled mid-race with the field
-strung out and most rivals frustum-culled. Measured where it actually matters —
-all six skiffs bunched on the grid at the green light, High tier, shadows on —
-the *previous* commit was already at **136**, and this slice's additions took it
-to **161**. The browser suite's ceiling only passed because it samples on a
-software renderer at a lower tier.
-
-Three changes brought it to **95**, and none of them is a budget adjustment:
-
-- **Strut stations are one instanced draw per skiff.** Merging the two sides of
-  a station halved the cost once; instancing the stations finishes it. Each
-  station still moves independently, so the rig writes a per-instance matrix
-  through a proxy that presents the same interface it had as a node.
-- **The rider is one mesh, not three.** `MergePart` gained an optional
-  per-part `color` that becomes a vertex-colour attribute, so dark gear and a
-  crew-coloured shoulder yoke are one draw rather than two materials.
-- **Only the player's skiff casts into the shadow map.** A cast shadow is a
-  second draw of every casting mesh, so a six-car grid was paying for twelve
-  skiffs of geometry to render one — and at racing distance a rival's cast
-  shadow is indistinguishable from the height-aware ground shadow every skiff
-  already carries. The player's is the one that does real work: it is the cue
-  they read their altitude off over a crest.
-
-Net: the slice added a rider, flank livery, three landmarks, three ambient-life
-systems and a second material on the glazing frames, and the scene still draws
-in **30% fewer calls than the commit before it**.
+[PERFORMANCE.md](./PERFORMANCE.md) owns the current budgets, measurements and
+the bunched-grid draw-call methodology.
 
 ### Where `bodyAngleMax` came from, and two versions that were wrong
 

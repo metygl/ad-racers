@@ -88,9 +88,9 @@ a name from any existing game, and none is derived from a real person.
 
 ### Courses (`src/game/track/tracks/`)
 
-Overgrown Interchange, Saltflat Reliquary and Emberfall Quarry are original
-layouts, authored as radius profiles in this repository. No layout was traced,
-imported or adapted from any existing course.
+Overgrown Interchange, Saltflat Reliquary, Glasshouse Vigil and Emberfall
+Quarry are original layouts, authored as radius profiles in this repository.
+No layout was traced, imported or adapted from any existing course.
 
 ### Art, audio and interface
 
@@ -135,8 +135,11 @@ AD Racers has no backend. Nothing is transmitted anywhere at any point.
 
 - Interface preferences (volumes, quality, reduced motion, contrast, camera)
 - Key bindings
-- Last selected course, crew and difficulty
-- Best race time and best lap per course
+- Last selected course, crew, difficulty and speed class
+- Whether the controls card has been seen
+- Best race time and best lap per course, including the difficulty and speed
+  class of the best race
+- Best Circuit result per difficulty and speed-class pair
 
 **Not present anywhere in the codebase:** accounts, analytics, telemetry, ads,
 monetisation, tracking pixels, third-party scripts, network requests during a

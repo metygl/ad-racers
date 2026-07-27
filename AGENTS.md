@@ -25,12 +25,9 @@ points at the viewer. The rule is stated once on `rotate` in `src/core/math.ts`;
 use `rightOf` / `leftOf` / `rightNormal` from there and never re-derive it.
 
 This is worth its own section because getting it backwards is *invisible*: the
-original build named that vector `leftOf`, then negated the yaw to match, then
-negated the AI's steering to match that. Every internal invariant held and the
-whole test suite passed for the life of the project. Only a human pressing
-"right" could tell. `tests/unit/handedness.test.ts` therefore asserts in screen
-space, through the camera the renderer builds — anything else can be
-self-consistently wrong.
+simulation and AI can agree with each other while both are wrong in screen
+space. `tests/unit/handedness.test.ts` therefore asserts through the camera the
+renderer builds.
 
 ## Sharp edges
 

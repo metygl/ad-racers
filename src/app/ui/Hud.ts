@@ -11,7 +11,7 @@ import { announce, clear, el } from './dom';
  *
  * The single constraint that shapes all of it: it has to be readable in
  * peripheral vision at 45 m/s. That means large type, high contrast against
- * *any* of the three courses' skies (hence the scrim behind every group), and
+ * *any* of the four courses' skies (hence the scrim behind every group), and
  * information placed where the eye already is — position and lap at the top
  * corners, speed and Surge at the bottom, and nothing in the middle where the
  * road is.

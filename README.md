@@ -10,8 +10,13 @@ anyone running alongside.
 
 **Play it:** <https://metygl.github.io/ad-racers/>
 
+This is an explicitly unfinished public preview of the round-3 snapshot. It is
+live for play and sharing, not a declaration that the larger milestone or its
+independent review is complete.
+
 No backend, no accounts, no analytics, no ads, no asset files. One runtime
-dependency. 192 kB gzipped, and it runs offline once loaded.
+dependency, an enforced download budget, and it runs offline once loaded. See
+[Performance](#performance) for the current measurements.
 
 ---
 
@@ -222,7 +227,7 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). The one idea worth knowing:
 ```
 src/core/     maths, seeded RNG, versioned storage, instrumentation
 src/game/     track geometry, physics, combat, rules, opponent AI
-src/render/   three.js scene, camera, particles, quality tiers
+src/render/   three.js scene, camera, particles, post-processing, quality tiers
 src/audio/    waveform synthesis and the Web Audio graph
 src/app/      screens, HUD, the fixed-step game loop
 ```
@@ -275,8 +280,9 @@ time and a draw-call ceiling.
 
 ## Roadmap
 
-Genuinely optional depth, not missing core gameplay — everything the game needs
-to be a complete game is present.
+This preview intentionally ships before the larger visual-overhaul milestone is
+complete. [docs/VERTICAL-SLICE.md](./docs/VERTICAL-SLICE.md) owns the current
+review status. Possible later additions beyond that work include:
 
 - Ghost replay of your best lap, which the deterministic simulation already
   supports

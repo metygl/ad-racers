@@ -35,7 +35,7 @@ export interface DifficultyProfile {
    * Well below 1 even at Ace, and that is not timidity. The corner-speed model
    * reads curvature from the centreline, while the car actually drives an
    * offset line with a control lag, so the true limit for the path it takes is
-   * lower than the number the model produces. Measured across all three
+   * lower than the number the model produces. Measured across all four
    * courses, targeting 0.86 of the limit is both dirtier *and slower* than
    * targeting 0.72 — the extra entry speed is paid back with interest in
    * corner exit. Difficulty separation comes from `pace`, `reaction` and

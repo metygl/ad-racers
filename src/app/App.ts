@@ -972,12 +972,13 @@ export class App {
       const maxSteps = resolving ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME;
       const events: SimEvent[] = [];
       while (this.accumulator >= FIXED_STEP && steps < maxSteps) {
+        if (simulation.phase === 'finished') break;
         simulation.step(steps === 0 ? input : { ...input, strike: 0, respawn: false });
         this.accumulator -= FIXED_STEP;
         steps += 1;
         const stepEvents = simulation.drainEvents();
         events.push(...stepEvents);
-        if (simulation.phase === 'finished' || stepEvents.some((event) => event.type === 'raceEnd')) break;
+        if (stepEvents.some((event) => event.type === 'raceEnd')) break;
       }
 
       if (events.length > 0) {

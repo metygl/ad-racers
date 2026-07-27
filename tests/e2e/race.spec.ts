@@ -149,11 +149,17 @@ test.describe('menu to finish', () => {
     await openGame(page);
     await startSeededRace(page);
     await waitForGreenLight(page);
+    await waitForRaceTime(page, 0.5);
 
     const result = await page.evaluate(async () => {
       const sim = window.adRacers?.simulation() as
         | {
             player: { finished: boolean } | null;
+            racers: Array<{
+              isPlayer: boolean;
+              pos: { x: number; z: number };
+              velocity: { x: number; z: number };
+            }>;
             finishedCount: number;
             postRaceTimer: number;
             steps: number;
@@ -161,16 +167,28 @@ test.describe('menu to finish', () => {
           }
         | null;
       if (!sim?.player) throw new Error('Race simulation is unavailable');
+      const rival = sim.racers.find((racer) => !racer.isPlayer);
+      if (!rival) throw new Error('Rival simulation is unavailable');
 
       sim.player.finished = true;
       sim.finishedCount = 1;
       sim.postRaceTimer = 75;
       const before = sim.steps;
       await new Promise(requestAnimationFrame);
-      return { steps: sim.steps - before, phase: sim.phase };
+      const snapshot = () => ({
+        steps: sim.steps,
+        phase: sim.phase,
+        pos: { ...rival.pos },
+        velocity: { ...rival.velocity },
+      });
+      const atRaceEnd = snapshot();
+      for (let frame = 0; frame < 4; frame += 1) await new Promise(requestAnimationFrame);
+      return { stepsToFinish: atRaceEnd.steps - before, atRaceEnd, afterHoldFrames: snapshot() };
     });
 
-    expect(result).toEqual({ steps: 1, phase: 'finished' });
+    expect(result.stepsToFinish).toBe(1);
+    expect(result.atRaceEnd.phase).toBe('finished');
+    expect(result.afterHoldFrames).toEqual(result.atRaceEnd);
   });
 
   test('restarting with the same seed replays the same race', async ({ page }) => {

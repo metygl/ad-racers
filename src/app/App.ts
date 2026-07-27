@@ -975,7 +975,9 @@ export class App {
         simulation.step(steps === 0 ? input : { ...input, strike: 0, respawn: false });
         this.accumulator -= FIXED_STEP;
         steps += 1;
-        events.push(...simulation.drainEvents());
+        const stepEvents = simulation.drainEvents();
+        events.push(...stepEvents);
+        if (simulation.phase === 'finished' || stepEvents.some((event) => event.type === 'raceEnd')) break;
       }
 
       if (events.length > 0) {

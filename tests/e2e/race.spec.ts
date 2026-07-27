@@ -145,6 +145,34 @@ test.describe('menu to finish', () => {
     );
   });
 
+  test('stops accelerated resolve on the race-ending step', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    const result = await page.evaluate(async () => {
+      const sim = window.adRacers?.simulation() as
+        | {
+            player: { finished: boolean } | null;
+            finishedCount: number;
+            postRaceTimer: number;
+            steps: number;
+            phase: string;
+          }
+        | null;
+      if (!sim?.player) throw new Error('Race simulation is unavailable');
+
+      sim.player.finished = true;
+      sim.finishedCount = 1;
+      sim.postRaceTimer = 75;
+      const before = sim.steps;
+      await new Promise(requestAnimationFrame);
+      return { steps: sim.steps - before, phase: sim.phase };
+    });
+
+    expect(result).toEqual({ steps: 1, phase: 'finished' });
+  });
+
   test('restarting with the same seed replays the same race', async ({ page }) => {
     await openGame(page);
 

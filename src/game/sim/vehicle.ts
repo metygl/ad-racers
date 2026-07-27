@@ -493,7 +493,7 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
      * did, cannot work: at 48 m/s a single 8 ms step covers 40 cm, over which
      * even a sharp crest drops well under a millimetre.
      */
-    const { slope, curvature } = surfaceProfile(racer.path, projection.distance, groundY);
+    const { slope, curvature } = surfaceProfile(racer.path, projection.distance, profileY);
     const requiredAccel = curvature * vLong * vLong;
     const launchThreshold = -PHYSICS.gravity * PHYSICS.airborneThreshold;
     const launchExcess = (launchThreshold - requiredAccel) / PHYSICS.gravity;

@@ -529,10 +529,12 @@ function planDefence(racer: RacerState, ctx: AiContext, halfWidth: number, curva
   const forward = fromHeading(racer.heading);
   for (const other of ctx.racers) {
     if (other.index === racer.index || other.finished) continue;
+    if (other.path.id !== racer.path.id) continue;
     const rel: Vec2 = { x: other.pos.x - racer.pos.x, z: other.pos.z - racer.pos.z };
     const behind = -dot(rel, forward);
     // Close enough to be a threat, far enough back that this is not contact.
     if (behind < 2.5 || behind > 16) continue;
+    if (distance(racer.pos, other.pos) > 20) continue;
     if (Math.abs(other.y - racer.y) > 3) continue;
     // Only a challenger who is actually catching. Someone matched on pace is
     // not attacking, and covering them wastes the whole move.

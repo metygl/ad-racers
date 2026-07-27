@@ -77,9 +77,11 @@ These cost real debugging time. Each is documented at its site in the code.
 - **Velocity is re-projected onto the rotated basis each step.** Rebuilding it
   from pre-rotation components welds velocity to heading, so slip is zero and
   drifting does nothing.
-- **Never wait on the wall clock in browser tests.** The loop caps catch-up
-  steps, so on a slow renderer simulated time deliberately runs behind real
-  time. Use `waitForRaceTime` / `waitForSteps` from `tests/e2e/support.ts`.
+- **Never wait on the wall clock for ordinary race progress in browser tests.**
+  The loop caps catch-up steps, so on a slow renderer simulated time
+  deliberately runs behind real time. Use `waitForRaceTime` / `waitForSteps`
+  from `tests/e2e/support.ts`; use a real-time deadline only when wall-clock
+  behavior is itself the contract under test.
 - **Dust particles must not be additively blended.** Six cars kicking up grass
   becomes a white sheet across the screen.
 - **Run-off pushes the car back positionally, not with a force.** A force

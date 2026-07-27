@@ -13,9 +13,8 @@ $ gh api -X POST repos/metygl/ad-racers/pages -f build_type=workflow
 **Site URL:** <https://metygl.github.io/ad-racers/>
 
 The site publishes when `.github/workflows/deploy.yml` runs, which happens on
-every push to `main`. Until the first such push lands the URL will 404 — Pages
-is configured but has no artefact yet. Nothing further is needed to make it
-work.
+every push to `main`. The current public preview is available at the site URL
+above.
 
 ### Why it was blocked before
 

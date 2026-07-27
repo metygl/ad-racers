@@ -100,9 +100,10 @@ pool and starving the effects that matter.
 `CanvasTexture`s. Nothing is fetched, decoded or streamed at runtime, so there
 is no asset pop-in: the world is complete on the first frame it is shown.
 
-**The simulation is decoupled from the frame rate.** Fixed 120 Hz steps with a
-capped accumulator (8 steps per frame maximum). A slow frame cannot be "paid
-back" as a burst of simulation, and a stalled tab cannot spiral.
+**The simulation is decoupled from the frame rate.** During live driving, a slow
+frame cannot be "paid back" as a burst of simulation, and a stalled tab cannot
+spiral. [ARCHITECTURE.md § Application loop](./ARCHITECTURE.md#application-loop)
+owns the exact pacing and post-finish resolve contract.
 
 > A consequence worth understanding: under a very slow renderer the race
 > deliberately runs *behind* wall-clock time rather than skipping ahead. This

@@ -370,18 +370,27 @@ you want to see where you are going.
 ## Application loop
 
 ```ts
-accumulator += elapsed;
-accumulator = min(accumulator, FIXED_STEP * MAX_STEPS_PER_FRAME);
-while (accumulator >= FIXED_STEP && steps < MAX_STEPS_PER_FRAME) {
+const resolving = simulation.resolvingAfterPlayer;
+const stepBudget = resolving ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME;
+const accumulatedBudget = FIXED_STEP * stepBudget;
+accumulator += resolving ? accumulatedBudget : elapsed;
+accumulator = min(accumulator, accumulatedBudget);
+while (accumulator >= FIXED_STEP && steps < stepBudget) {
+  if (simulation.phase === 'finished') break;
   simulation.step(input);
   accumulator -= FIXED_STEP;
 }
 renderer.render(simulation, elapsed);
 ```
 
-Capping the accumulator is what stops a long stall from being "paid back" as a
-burst of simulation the player never sees. A hidden tab pauses the race
-outright, which is both correct and the cheapest possible power saving.
+During live driving, capping the accumulator is what stops a long stall from
+being "paid back" as a burst of simulation the player never sees. After the
+player finishes, the accumulator instead receives a deterministic simulated
+budget of 160 steps per rendered frame. This resolves the remaining field
+quickly without making its result depend on wall-clock elapsed time. The loop
+stops stepping on the race-ending step, including throughout the authored
+finish hold. A hidden tab pauses the race outright, which is both correct and
+the cheapest possible power saving.
 
 ---
 
@@ -410,5 +419,6 @@ outright, which is both correct and the cheapest possible power saving.
 | Hop, landing quality, tow snap and recovery hold at their bounds | `mechanics.test.ts` |
 | Every opponent finishes every course at every speed class | `mechanics.test.ts` |
 | Throttle and steering alone can finish a course | `mechanics.test.ts` |
+| Post-finish resolve is wall-clock independent and stops at race end | `race.spec.ts` |
 | A championship cannot be won by one heroic round | `circuit.test.ts` |
 | A speed class opens only on a podium in the class below | `circuit.test.ts` |

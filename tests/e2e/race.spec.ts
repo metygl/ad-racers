@@ -227,7 +227,11 @@ test.describe('pause and resume', () => {
     expect(await currentScreen(page)).toBe('pause');
 
     const frozen = await page.evaluate(() => (window.adRacers?.simulation() as { raceTime: number }).raceTime);
-    await measureFrames(page, 60);
+    // Multiple rendered frames prove the app loop remains active while the
+    // simulation is paused. Keep this window short: under CI's software WebGL,
+    // waiting for 60 frames can consume most of the test-wide timeout without
+    // adding confidence to the clock-freeze assertion.
+    await measureFrames(page, 10);
     const stillFrozen = await page.evaluate(() => (window.adRacers?.simulation() as { raceTime: number }).raceTime);
     expect(stillFrozen).toBe(frozen);
 

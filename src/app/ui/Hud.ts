@@ -1,4 +1,5 @@
 import { clamp01, formatLapTime, ordinal } from '../../core/math';
+import { DRIFT, TOW } from '../../game/config';
 import type { Simulation } from '../../game/sim/simulation';
 import type { SimEvent } from '../../game/sim/state';
 import { displayLap } from '../../game/sim/race';
@@ -10,7 +11,7 @@ import { announce, clear, el } from './dom';
  *
  * The single constraint that shapes all of it: it has to be readable in
  * peripheral vision at 45 m/s. That means large type, high contrast against
- * *any* of the three courses' skies (hence the scrim behind every group), and
+ * *any* of the four courses' skies (hence the scrim behind every group), and
  * information placed where the eye already is — position and lap at the top
  * corners, speed and Surge at the bottom, and nothing in the middle where the
  * road is.
@@ -34,9 +35,16 @@ export class Hud {
   private readonly speed: HTMLElement;
   private readonly surgeFill: HTMLElement;
   private readonly surgeTier: HTMLElement;
+  private readonly driftPips: HTMLElement[] = [];
+  private readonly driftMeter: HTMLElement;
+  private readonly towFill: HTMLElement;
+  private readonly towPanel: HTMLElement;
+  private readonly gapAhead: HTMLElement;
+  private readonly gapBehind: HTMLElement;
   private readonly strikeState: HTMLElement;
   private readonly notifications: HTMLElement;
   private readonly countdown: HTMLElement;
+  private readonly moment: HTMLElement;
   private readonly warning: HTMLElement;
   private readonly liveRegion: HTMLElement;
   private readonly minimap: HTMLCanvasElement;
@@ -50,6 +58,8 @@ export class Hud {
   private reducedMotion = false;
   /** Label for the recover control, kept in sync with the player's bindings. */
   private recoverKey = 'R';
+  /** True when thumb pads are on screen, so prompts name controls that exist. */
+  private touch = false;
 
   constructor() {
     this.position = el('span', { class: 'hud__big', text: '1' });
@@ -61,9 +71,53 @@ export class Hud {
     this.speed = el('span', { class: 'hud__speed', text: '0' });
     this.surgeFill = el('div', { class: 'surge__fill' });
     this.surgeTier = el('div', { class: 'surge__tier' });
+    /*
+     * The drift ladder, as three discrete pips rather than a continuous bar.
+     *
+     * The payout is tiered, so the readout has to be tiered too: a smooth bar
+     * tells a player how much charge they have, which is not the question they
+     * are asking mid-corner. The question is "have I banked the next tier yet",
+     * and three lights answer it in peripheral vision.
+     */
+    for (let i = 0; i < 3; i++) this.driftPips.push(el('span', { class: 'drift__pip' }));
+    this.driftMeter = el(
+      'div',
+      {
+        class: 'drift',
+        role: 'meter',
+        'aria-label': 'Drift charge',
+        'aria-valuemin': '0',
+        'aria-valuemax': '3',
+        'aria-valuenow': '0',
+        'aria-valuetext': 'No drift',
+      },
+      ...this.driftPips,
+    );
+    this.towFill = el('div', { class: 'tow__fill' });
+    this.towPanel = el(
+      'div',
+      { class: 'tow', role: 'meter', 'aria-label': 'Tow charge', 'aria-valuemin': '0', 'aria-valuemax': '100' },
+      this.towFill,
+    );
+    this.gapAhead = el('span', { class: 'gap gap--ahead' });
+    this.gapBehind = el('span', { class: 'gap gap--behind' });
     this.strikeState = el('div', { class: 'strike' });
     this.notifications = el('div', { class: 'hud__notifications' });
     this.countdown = el('div', { class: 'countdown', 'aria-hidden': 'true' });
+    /*
+     * The authored moment banner.
+     *
+     * Final lap, finish and unlock used to arrive as a HUD number quietly
+     * changing and a static line of text — a motion review found the whole
+     * sequence "cuts abruptly and lacks authored celebration", with zero
+     * running animations at any sample. These are the highest-value seconds in
+     * a race and they deserve a beat of their own.
+     *
+     * Under reduced motion the same hierarchy survives: the banner still
+     * appears, still holds, still leaves — it just does it with opacity and
+     * colour instead of movement. See `.moment` in the stylesheet.
+     */
+    this.moment = el('div', { class: 'moment', 'aria-hidden': 'true' });
     this.warning = el('div', { class: 'hud__warning', hidden: true });
     this.liveRegion = el('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
     this.standings = el('ol', { class: 'standings' });
@@ -99,8 +153,15 @@ export class Hud {
           el('div', { class: 'hud__row' }, this.lap, this.lapTotal),
         ),
       ),
-      el('div', { class: 'hud__side' }, this.standings, this.minimap),
+      el(
+        'div',
+        { class: 'hud__side' },
+        el('div', { class: 'hud__gaps' }, this.gapAhead, this.gapBehind),
+        this.standings,
+        this.minimap,
+      ),
       this.countdown,
+      this.moment,
       this.warning,
       this.notifications,
       el(
@@ -117,6 +178,12 @@ export class Hud {
             this.surgeFill,
             this.surgeTier,
           ),
+          el(
+            'div',
+            { class: 'hud__meters' },
+            this.driftMeter,
+            this.towPanel,
+          ),
         ),
       ),
       this.liveRegion,
@@ -126,6 +193,17 @@ export class Hud {
   /** Keeps the recover hint honest when the player has rebound the key. */
   setRecoverKey(label: string): void {
     this.recoverKey = label;
+  }
+
+  /**
+   * Whether the player is on touch.
+   *
+   * Prompts have to name a control the device actually has. Telling a phone
+   * player to "press R" — with no Recover control anywhere on screen — was how
+   * a stuck touch player learned the game had no way out.
+   */
+  setTouch(value: boolean): void {
+    this.touch = value;
   }
 
   setReducedMotion(value: boolean): void {
@@ -188,9 +266,60 @@ export class Hud {
     this.surgeTier.style.transform = `scaleX(${clamp01(player.drift.charge)})`;
     this.surgeTier.classList.toggle('surge__tier--charging', player.drift.active);
 
-    this.strikeState.className = `strike strike--${player.strike.phase}`;
+    /*
+     * The drift ladder mirrors the machine exactly: three bands in the crew's
+     * own colour, and the *number lit* is the tier. It never changes hue, which
+     * is what makes it original rather than a borrowed colour ramp, and what
+     * makes it readable without colour vision.
+     */
+    const tier = player.drift.active
+      ? DRIFT.tiers.reduce((best, threshold, index) => (player.drift.charge >= threshold ? index : best), -1)
+      : -1;
+    this.driftPips.forEach((pip, index) => {
+      pip.classList.toggle('drift__pip--lit', index <= tier);
+      pip.classList.toggle('drift__pip--charging', player.drift.active && index === tier + 1);
+    });
+    // Equivalent semantics to Surge and Tow, which both already had them.
+    const tierNames = ['No drift', 'Wound', 'Loaded', 'Overpressure'];
+    this.driftMeter.setAttribute('aria-valuenow', String(tier + 1));
+    this.driftMeter.setAttribute('aria-valuetext', tierNames[tier + 1] ?? 'No drift');
+    this.driftMeter.style.setProperty(
+      '--crew',
+      `#${getRacer(player.profileId).colors.trim.toString(16).padStart(6, '0')}`,
+    );
+
+    const tow = clamp01(player.towCharge);
+    this.towFill.style.transform = `scaleX(${tow})`;
+    this.towPanel.setAttribute('aria-valuenow', String(Math.round(tow * 100)));
+    this.towPanel.classList.toggle('tow--ready', player.towCharge >= TOW.minCharge);
+    this.towPanel.classList.toggle('tow--towing', player.slipstreaming);
+
+    this.updateGaps(simulation);
+
+    /*
+     * Say what the pod arm can actually do, not just that it exists.
+     *
+     * A review attempted six strikes across a full race, landed none, and had
+     * no way to tell whether it had picked the wrong side, lacked overlap, was
+     * out of reach or was on cooldown — this line read `POD ARM READY`
+     * throughout. Reach is the one thing that makes the decision legible before
+     * it is made, so it is what the line says when there is something to hit.
+     */
+    const { reachLeft, reachRight, phase, cooldown } = player.strike;
+    const inReach = reachLeft || reachRight;
+    this.strikeState.className = `strike strike--${phase}${inReach && phase === 'idle' && cooldown <= 0 ? ' strike--reach' : ''}`;
     this.strikeState.textContent =
-      player.strike.cooldown > 0 && player.strike.phase === 'idle' ? 'Pod arm resetting' : 'Pod arm ready';
+      phase !== 'idle'
+        ? 'Pod arm swinging'
+        : cooldown > 0
+          ? 'Pod arm resetting'
+          : reachLeft && reachRight
+            ? 'Pod arm — target either side'
+            : reachLeft
+              ? 'Pod arm — target left'
+              : reachRight
+                ? 'Pod arm — target right'
+                : 'Pod arm ready';
 
     const countdown = simulation.countdown;
     if (simulation.phase === 'countdown') {
@@ -208,7 +337,9 @@ export class Hud {
     const stuck = simulation.phase === 'running' && !player.finished && player.wedgeTimer > 1.2;
     if (stuck) {
       this.warning.hidden = false;
-      this.warning.textContent = `Stuck — press ${this.recoverKey} to recover`;
+      this.warning.textContent = this.touch
+        ? 'Stuck — tap Recover'
+        : `Stuck — press ${this.recoverKey} to recover`;
       this.warning.classList.add('hud__warning--hint');
     } else if (wrongWay) {
       this.warning.hidden = false;
@@ -221,7 +352,48 @@ export class Hud {
     this.updateStandings(simulation);
     this.drawMinimap(simulation);
     this.updateSpeedLines(speed, player.boosting);
+    this.tickMoment(elapsed);
     this.tickNotifications(elapsed);
+  }
+
+  /**
+   * Time gaps to the racers immediately ahead and behind.
+   *
+   * This is the single most valuable number a racing HUD can show, and the
+   * original build did not have it: without a gap the player has no way to tell
+   * whether a lead is safe, whether a rival is reeling them in, or whether the
+   * lap they just drove was worth anything. It is what turns a procession into a
+   * race that can be *felt*.
+   *
+   * Estimated from progress distance over closing speed rather than measured at
+   * checkpoints, so it updates continuously instead of once every gate. That
+   * makes it approximate by construction, and it is presented to one decimal
+   * accordingly — a spuriously precise number would be worse than a rounded one.
+   */
+  private updateGaps(simulation: Simulation): void {
+    const player = simulation.player;
+    if (!player) return;
+    const order = [...simulation.racers].sort((a, b) => a.position - b.position);
+    const index = order.findIndex((racer) => racer.index === player.index);
+    const ahead = index > 0 ? order[index - 1] : undefined;
+    const behind = index >= 0 && index < order.length - 1 ? order[index + 1] : undefined;
+
+    const format = (other: typeof ahead, sign: string): string => {
+      if (!other || simulation.phase !== 'running') return '';
+      const distance = Math.abs(other.progress - player.progress);
+      // Divide by the *player's* pace, so the number answers "how long would it
+      // take me to cover this", which is the question being asked.
+      const pace = Math.max(8, Math.hypot(player.velocity.x, player.velocity.z));
+      const seconds = distance / pace;
+      if (seconds > 25) return `${sign} —`;
+      return `${sign} ${seconds.toFixed(1)}s`;
+    };
+
+    this.gapAhead.textContent = format(ahead, '▲');
+    this.gapBehind.textContent = format(behind, '▼');
+    // Under a second either way is a fight; the styling says so.
+    this.gapAhead.classList.toggle('gap--close', !!ahead && Math.abs(ahead.progress - player.progress) < 30);
+    this.gapBehind.classList.toggle('gap--close', !!behind && Math.abs(behind.progress - player.progress) < 30);
   }
 
   private updateStandings(simulation: Simulation): void {
@@ -273,11 +445,35 @@ export class Hud {
       this.speedLines.style.opacity = '0';
       return;
     }
-    // Only above two thirds of top speed, so the effect means "fast" rather
-    // than being permanent visual noise.
-    const intensity = clamp01((speed - 34) / 22) * (boosting ? 1 : 0.65);
+    /*
+     * Only near the top of the range, and quiet even there.
+     *
+     * The renderer now carries the speed cue properly — field of view, follow
+     * distance and a radial warp — so this DOM layer is punctuation rather than
+     * the effect itself. At the strength it used to run it read as scratches on
+     * the screen at night, which is the opposite of a speed cue.
+     */
+    const intensity = clamp01((speed - 38) / 20) * (boosting ? 0.55 : 0.28);
     this.speedLines.style.opacity = intensity.toFixed(3);
   }
+
+  /**
+   * Announces one of the race's authored moments.
+   *
+   * Deliberately a separate channel from `notify`: a notification is
+   * information, this is punctuation, and the two must never queue behind each
+   * other. A lap message can wait; "FINAL LAP" cannot.
+   */
+  announceMoment(text: string, kind: 'lap' | 'finish' | 'reward'): void {
+    this.moment.textContent = text;
+    this.moment.className = `moment moment--${kind}`;
+    // Restarting the animation needs the class off and a reflow between.
+    void this.moment.offsetWidth;
+    this.moment.classList.add('moment--play');
+    this.momentTimer = kind === 'finish' ? 3.2 : 2.2;
+  }
+
+  private momentTimer = 0;
 
   /** Shows a transient message, e.g. "Struck by Emberworks". */
   notify(message: string, kind: 'info' | 'good' | 'bad' = 'info'): void {
@@ -299,8 +495,13 @@ export class Hud {
       switch (event.type) {
         case 'lap':
           if (event.racer === player.index && event.lap < simulation.track.laps) {
-            this.notify(`Lap ${event.lap + 1} — ${formatLapTime(event.time)}`, 'info');
-            announce(this.liveRegion, `Lap ${event.lap + 1} of ${simulation.track.laps}. Position ${ordinal(player.position)}.`);
+            const entering = event.lap + 1;
+            if (entering === simulation.track.laps) {
+              // The one lap that is different from the others.
+              this.announceMoment('FINAL LAP', 'lap');
+            }
+            this.notify(`Lap ${entering} — ${formatLapTime(event.time)}`, 'info');
+            announce(this.liveRegion, `Lap ${entering} of ${simulation.track.laps}. Position ${ordinal(player.position)}.`);
           }
           break;
         case 'strikeHit':
@@ -313,10 +514,35 @@ export class Hud {
         case 'strikeCounter':
           if (event.a === player.index || event.b === player.index) this.notify('Countered', 'info');
           break;
+        case 'strikeMiss':
+          // A miss and a refusal look identical from the driver's seat unless
+          // the game distinguishes them, and then combat reads as arbitrary.
+          if (event.racer === player.index) this.notify('Swung wide', 'info');
+          break;
+        case 'strikeRejected':
+          if (event.racer === player.index) {
+            this.notify(
+              {
+                cooldown: 'Pod arm still resetting',
+                airborne: 'No swing in the air',
+                staggered: 'Staggered — no swing',
+                tooEarly: 'Pod arm stows until the green',
+                busy: 'Already swinging',
+              }[event.reason],
+              'bad',
+            );
+          }
+          break;
         case 'driftRelease':
           if (event.racer === player.index) {
             this.notify(['Drift', 'Strong drift', 'Perfect drift'][event.tier - 1] ?? 'Drift', 'good');
           }
+          break;
+        case 'towSnap':
+          if (event.racer === player.index) this.notify('Tow snap', 'good');
+          break;
+        case 'jumpLand':
+          if (event.racer === player.index && event.quality > 0.6) this.notify('Clean landing', 'good');
           break;
         case 'respawn':
           if (event.racer === player.index) this.notify('Recovered to the racing line', 'info');
@@ -326,6 +552,7 @@ export class Hud {
           break;
         case 'finish':
           if (event.racer === player.index) {
+            this.announceMoment(event.position === 1 ? 'WON' : `${ordinal(event.position)}`, 'finish');
             announce(this.liveRegion, `Finished ${ordinal(event.position)} in ${formatLapTime(event.time)}.`);
           }
           break;
@@ -333,6 +560,12 @@ export class Hud {
           break;
       }
     }
+  }
+
+  private tickMoment(elapsed: number): void {
+    if (this.momentTimer <= 0) return;
+    this.momentTimer -= elapsed;
+    if (this.momentTimer <= 0) this.moment.classList.remove('moment--play');
   }
 
   private tickNotifications(elapsed: number): void {
@@ -352,6 +585,8 @@ export class Hud {
   reset(): void {
     for (const item of this.active) item.node.remove();
     this.active = [];
+    this.momentTimer = 0;
+    this.moment.classList.remove('moment--play');
     this.warning.hidden = true;
     this.countdown.classList.remove('countdown--visible');
   }

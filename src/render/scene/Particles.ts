@@ -122,6 +122,18 @@ export class ParticleSystem {
     return particle;
   }
 
+  /**
+   * Multiplier on every emitted particle's size and count.
+   *
+   * Reduced motion previously scaled bloom and removed the speed fringe, and
+   * left the emitters untouched — so a review found the normal and reduced
+   * boost captures "broadly washed out" in both, and the primary readability
+   * failure effectively unchanged. Motion sensitivity and luminance
+   * sensitivity are not the same axis, but a peak effect that covers the road
+   * is a problem on both.
+   */
+  intensityScale = 1;
+
   emit(
     kind: ParticleKind,
     x: number,
@@ -133,6 +145,10 @@ export class ParticleSystem {
   ): void {
     this.color.set(color);
     const additive = ADDITIVE_KINDS.has(kind);
+    if (additive && this.intensityScale < 1) {
+      intensity *= this.intensityScale;
+      count = Math.max(1, Math.round(count * this.intensityScale));
+    }
     for (let i = 0; i < count; i++) {
       const index = this.cursor;
       const p = this.claim();
@@ -173,13 +189,29 @@ export class ParticleSystem {
           p.gravity = -14;
           break;
         case 'impact':
-          p.vx = this.rng.range(-5, 5) * intensity;
-          p.vy = this.rng.range(1.5, 5.5) * intensity;
-          p.vz = this.rng.range(-5, 5) * intensity;
-          p.maxLife = this.rng.range(0.3, 0.6);
-          p.size = this.rng.range(1.2, 2.6);
-          p.growth = 5.5;
-          p.drag = 3.5;
+          /*
+           * A contact flash, not a dome.
+           *
+           * At 1.2-2.6 m growing at 5.5 m/s this reached five or six metres
+           * across and lived for half a second, which on a six-car grid is a
+           * white wash over the road and every nearby skiff. Two reviews
+           * measured it independently: one `strikeHit` hid both vehicles and
+           * most of the local road, and the natural opening pack produced "a
+           * white bloom mass across the lower-left road and ghost-like rivals".
+           * An effect that hides the event it is reporting has failed at the
+           * only job it has.
+           *
+           * Smaller, shorter and with the growth pulled right back, so it
+           * punctuates the contact point instead of covering it. The direction
+           * of a hit is carried by the debris cone, which survives being small.
+           */
+          p.vx = this.rng.range(-4, 4) * intensity;
+          p.vy = this.rng.range(1.2, 4) * intensity;
+          p.vz = this.rng.range(-4, 4) * intensity;
+          p.maxLife = this.rng.range(0.16, 0.3);
+          p.size = this.rng.range(0.5, 1.1);
+          p.growth = 1.6;
+          p.drag = 4.5;
           p.gravity = -2;
           break;
         case 'ember':
@@ -204,16 +236,61 @@ export class ParticleSystem {
           p.fade = 0.85;
           break;
         case 'boost':
-          p.vx = this.rng.range(-1.4, 1.4);
-          p.vy = this.rng.range(-0.4, 1.2);
-          p.vz = this.rng.range(-1.4, 1.4);
-          p.maxLife = this.rng.range(0.22, 0.45);
-          p.size = this.rng.range(0.6, 1.3);
-          p.growth = 3.2;
-          p.drag = 4.5;
+          /*
+           * Boost wrapped the skiff in a soft glowing ball: at 1.3 m growing at
+           * 3.2 m/s it reached two metres of additive light around a two-metre
+           * car. It should read as thrust leaving an emitter, so it is smaller,
+           * shorter-lived, and grows far less.
+           */
+          p.vx = this.rng.range(-1.1, 1.1);
+          p.vy = this.rng.range(-0.3, 0.9);
+          p.vz = this.rng.range(-1.1, 1.1);
+          p.maxLife = this.rng.range(0.16, 0.32);
+          p.size = this.rng.range(0.35, 0.8);
+          p.growth = 1.4;
+          p.drag = 5.5;
           p.gravity = 0.4;
           break;
       }
+    }
+  }
+
+  /**
+   * A burst thrown along a contact normal.
+   *
+   * Motion finding F6's third part: an impact that sprays debris uniformly in
+   * every direction tells the player *that* something happened. Debris thrown
+   * back along the normal of the contact tells them *where they were hit*,
+   * which is the difference between a hit that is confusing and a hit that is
+   * information — and on a six-car grid it is often the only cue that says
+   * which side the rival came from.
+   *
+   * The normal is supplied by the caller, which computes it from the two
+   * positions the simulation reported. Nothing about this feeds back.
+   */
+  emitDirected(
+    kind: ParticleKind,
+    x: number,
+    y: number,
+    z: number,
+    normal: { x: number; z: number },
+    color: THREE.ColorRepresentation,
+    count: number,
+    intensity = 1,
+  ): void {
+    const length = Math.hypot(normal.x, normal.z) || 1;
+    const nx = normal.x / length;
+    const nz = normal.z / length;
+    const before = this.cursor;
+    this.emit(kind, x, y, z, color, count, intensity);
+    // Rewrite the velocities the base emitter randomised: keep its spread, but
+    // bias it hard along the normal so the cone points away from the contact.
+    for (let i = 0; i < count; i++) {
+      const p = this.pool[(before + i) % this.pool.length] as Particle;
+      const speed = Math.hypot(p.vx, p.vz);
+      p.vx = nx * speed * 1.5 + p.vx * 0.35;
+      p.vz = nz * speed * 1.5 + p.vz * 0.35;
+      p.vy = Math.abs(p.vy) * 0.7 + 1.2 * intensity;
     }
   }
 

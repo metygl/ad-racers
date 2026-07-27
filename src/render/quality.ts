@@ -23,6 +23,14 @@ export interface QualitySettings {
   sceneryDensity: number;
   /** Distance beyond which scenery instances are culled, metres. */
   sceneryDistance: number;
+  /**
+   * Multiplier on the ambient-life populations — marshals, motes, flock.
+   *
+   * Separate from `sceneryDensity` because life is not set dressing that scales
+   * with it. A course with a *thin* crowd still reads as attended; a course
+   * with none reads as abandoned, so even the low tier keeps some.
+   */
+  lifeDensity: number;
   /** Maximum simultaneous particles. */
   particleBudget: number;
   /** Terrain grid spacing, metres. Larger is cheaper. */
@@ -33,6 +41,16 @@ export interface QualitySettings {
   vehicleShadows: boolean;
   /** Anti-aliasing on the WebGL context. */
   antialias: boolean;
+  /**
+   * Whether the post-processing chain runs at all.
+   *
+   * Off on the low tier, and not as a token gesture: post costs a full-screen
+   * read plus three reduced-resolution draws, which on the class of device that
+   * lands on the low tier is a meaningful fraction of the frame. The art bible
+   * requires the game to be readable without it, so switching it off costs
+   * atmosphere and nothing else.
+   */
+  postProcessing: boolean;
 }
 
 export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
@@ -45,11 +63,13 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     shadowRadius: 60,
     sceneryDensity: 0.35,
     sceneryDistance: 260,
+    lifeDensity: 0.4,
     particleBudget: 120,
     terrainResolution: 10,
     speedEffects: false,
     vehicleShadows: false,
     antialias: false,
+    postProcessing: false,
   },
   medium: {
     id: 'medium',
@@ -60,11 +80,13 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     shadowRadius: 85,
     sceneryDensity: 0.7,
     sceneryDistance: 420,
+    lifeDensity: 0.75,
     particleBudget: 340,
     terrainResolution: 6,
     speedEffects: true,
     vehicleShadows: true,
     antialias: true,
+    postProcessing: true,
   },
   high: {
     id: 'high',
@@ -75,11 +97,13 @@ export const QUALITY_TIERS: Record<QualityId, QualitySettings> = {
     shadowRadius: 110,
     sceneryDensity: 1,
     sceneryDistance: 650,
+    lifeDensity: 1,
     particleBudget: 800,
     terrainResolution: 4,
     speedEffects: true,
     vehicleShadows: true,
     antialias: true,
+    postProcessing: true,
   },
 };
 

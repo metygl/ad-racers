@@ -1,7 +1,8 @@
 import { Rng, hashSeed } from '../../core/rng';
-import { clamp, clamp01, distance, dot, fromHeading, normalize } from '../../core/math';
+import { clamp, clamp01, distance, dot, fromHeading, lerp, normalize, rightOf } from '../../core/math';
 import type { Vec2 } from '../../core/math';
-import { COLLISION, FIXED_STEP, HAZARDS, PHYSICS, RACE, SURGE } from '../config';
+import { COLLISION, FIXED_STEP, HAZARDS, PHYSICS, RACE, RECOVERY, SPEED_CLASSES, SURGE, TOW } from '../config';
+import type { SpeedClass } from '../config';
 import type { Track } from '../track/buildTrack';
 import { getRacer, toVehicleSpec } from '../racers';
 import type { DifficultyProfile } from '../ai/driver';
@@ -30,6 +31,12 @@ export interface RaceSetup {
   /** Racer profile ids, in grid order; index 0 is the player unless spectating. */
   entries: { profileId: string; isPlayer: boolean }[];
   difficulty: DifficultyProfile;
+  /**
+   * How fast the whole field runs. Applied identically to every racer,
+   * including the player, so it changes the *game* rather than the balance.
+   * Defaults to the base class when omitted.
+   */
+  speedClass?: SpeedClass;
   seed: number;
   /** Whether the bounded catch-up assist is enabled. */
   catchUp: boolean;
@@ -72,7 +79,7 @@ export class Simulation {
   private createRacer(entry: { profileId: string; isPlayer: boolean }, index: number): RacerState {
     const track = this.track;
     const profile = getRacer(entry.profileId);
-    const spec = toVehicleSpec(profile.stats);
+    const spec = toVehicleSpec(profile.stats, this.setup.speedClass ?? SPEED_CLASSES[0]);
 
     // Grid: two columns, staggered back from the line, all behind checkpoint 0.
     const row = Math.floor(index / 2);
@@ -102,8 +109,24 @@ export class Simulation {
       surge: 0,
       boosting: false,
       slipstreaming: false,
+      towCharge: 0,
+      towRelease: 0,
+      recoveryBoost: 0,
+      recoveryCooldown: 0,
+      hopCooldown: 0,
+      sinceLanding: Infinity,
+      airTime: 0,
+      airClearance: 0,
+      hopChain: 0,
+      wallImpactLock: 0,
+      wallContactTime: 0,
+      obstacleContactTime: 0,
+      airGroundStart: 0,
+      airGroundDrop: 0,
+      lastProgressDistance: gridDistance,
+      hasSteered: false,
       drift: { active: false, direction: 0, charge: 0 },
-      strike: { phase: 'idle', timer: 0, side: 1, cooldown: 0, hitThisSwing: [] },
+      strike: { phase: 'idle', timer: 0, side: 1, cooldown: 0, hitThisSwing: [], reachLeft: false, reachRight: false },
       stagger: 0,
       guards: [],
       strikesLanded: 0,
@@ -226,10 +249,29 @@ export class Simulation {
         running,
       });
 
-      const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
-      if (running && !racer.finished && speed < RACE.stuckSpeed) {
+      /*
+       * Trapped is measured by *progress*, not by speed.
+       *
+       * A skiff grinding along a barrier at three to six metres a second is
+       * moving comfortably faster than any stopped-car threshold and is going
+       * nowhere: a review measured exactly that state persisting past twenty
+       * seconds with no Recover prompt, because the affordance was gated on a
+       * speed the car never dropped below. What has actually failed is that the
+       * racer is not getting round the course, so that is what is measured.
+       *
+       * Sustained wall contact counts on its own. Being pressed against a
+       * barrier is definitionally not making progress, and waiting for the
+       * progress rate to confirm it only adds delay to a state the player is
+       * already stuck in.
+       */
+      const advanced = this.track.forwardGap(racer.lastProgressDistance, racer.mainDistance);
+      const progressRate = dt > 1e-6 ? advanced / dt : 0;
+      racer.lastProgressDistance = racer.mainDistance;
+      const trapped = progressRate < RACE.stuckSpeed || racer.wallContactTime > 0.5 || racer.obstacleContactTime > 0.5;
+
+      if (running && !racer.finished && trapped) {
         racer.wedgeTimer += dt;
-      } else if (speed > RACE.stuckSpeed * 2) {
+      } else if (progressRate > RACE.stuckSpeed * 2) {
         racer.wedgeTimer = 0;
       }
 
@@ -237,7 +279,7 @@ export class Simulation {
     }
 
     this.resolveRacerCollisions(dt);
-    this.resolveObstacles();
+    this.resolveObstacles(dt);
     if (running) this.applyHazards(dt);
 
     for (const racer of this.racers) {
@@ -269,23 +311,65 @@ export class Simulation {
        * generous timeout covers the bad-lap case properly, and a race that can
        * hang is worse than one that eventually calls time.
        */
+      /*
+       * The race keeps running after the player crosses the line.
+       *
+       * It used to stop 2.5 s later and classify everyone still on track as
+       * DNF. A player who won by a couple of seconds therefore saw a results
+       * table where all five rivals had DNF beside best laps two seconds off
+       * their own — which misrepresents the field, erases every gap, and
+       * cheapens the win. Rivals now get `rivalGrace` to finish for real, and
+       * DNF means an actual failure to finish.
+       */
+      /*
+       * The race keeps running until the field is genuinely resolved.
+       *
+       * It used to stop 2.5 s after the player crossed and classify everyone
+       * still on track as DNF — so a player who won by two seconds saw five
+       * rivals marked DNF beside best laps two seconds off their own. That
+       * misrepresents the field, erases every gap, and cheapens the win.
+       *
+       * The only early exit now is "everyone who is still moving has stopped
+       * moving", which is a real retirement rather than an impatient clock.
+       * The application fast-forwards the remaining steps after the player
+       * finishes, so waiting for a true result costs the player no real time;
+       * see `App.frame`.
+       */
       this.postRaceTimer += dt;
       const everyoneDone = this.racers.every((r) => r.finished);
-      const player = this.player;
-      const playerSettled = player !== null && player.finished && this.postRaceTimer > 2.5;
-      if (everyoneDone || playerSettled || this.postRaceTimer > RACE.postRaceTimeout) {
+      const allStragglersWedged = this.racers.every(
+        (r) => r.finished || r.wedgeTimer > RACE.retirementTime,
+      );
+      if (everyoneDone || allStragglersWedged || this.postRaceTimer > RACE.postRaceTimeout) {
         this.endRace();
       }
     }
   }
 
+  /** True once the player has crossed and only rivals are still running. */
+  get resolvingAfterPlayer(): boolean {
+    const player = this.player;
+    return this.phase === 'running' && player !== null && player.finished;
+  }
+
   private endRace(): void {
-    // Classify anyone still running by their live position, so the results
-    // screen is complete even if the timeout fired.
+    /*
+     * Anyone still running is *projected* rather than dismissed.
+     *
+     * A racer 80% of the way round when the clock runs out did not fail to
+     * finish; they were slower. Extrapolating their remaining distance at the
+     * pace they have actually been running produces a credible time and keeps
+     * the classification ordered by merit. Only a racer who has barely moved is
+     * a true DNF.
+     */
     const unfinished = this.racers.filter((r) => !r.finished).sort((a, b) => b.progress - a.progress);
+    const totalProgress = this.track.length * this.track.laps;
     for (const racer of unfinished) {
+      const fraction = clamp01(racer.progress / Math.max(1, totalProgress));
       racer.finished = true;
-      racer.finishTime = Infinity;
+      racer.completed = false;
+      racer.finishTime =
+        fraction > 0.25 && this.raceTime > 0 ? this.raceTime / fraction : Number.POSITIVE_INFINITY;
       this.finishedCount += 1;
       racer.finishPosition = this.finishedCount;
     }
@@ -300,6 +384,47 @@ export class Simulation {
         // On the grid the player may pre-load throttle but nothing else moves.
         return { ...playerInput, brake: false, boost: false, strike: 0 };
       }
+      /*
+       * Until the player first steers, the race steers for them.
+       *
+       * A review used a fresh profile, provided no input, and was stationary on
+       * grass in sixth place before it had formed any model of how the car
+       * turns. The obvious fix — hold the car on the grid until someone presses
+       * something — breaks a contract the same review confirmed as fixed: on
+       * touch there *is* no accelerate button, and "you only have to steer" is
+       * the whole onboarding promise. Taking the throttle away to protect the
+       * player would have quietly removed the thing that makes the game
+       * playable with one thumb.
+       *
+       * So the throttle stays, and the *steering* is what waits. A player who
+       * has never touched the wheel is held near the racing line; the instant
+       * they steer, this is gone for the rest of the race. It cannot be leaned
+       * on — any input at all ends it permanently — and it expires on its own
+       * for a player who has walked away.
+       */
+      if (!racer.hasSteered && this.raceTime < RACE.launchWait) {
+        if (Math.abs(playerInput.steer) > 0.05) racer.hasSteered = true;
+        else return { ...playerInput, steer: this.laneKeepSteer(racer) };
+      } else {
+        racer.hasSteered = true;
+      }
+
+      /*
+       * The player is rescued too, after a longer grace than the AI.
+       *
+       * Automatic recovery used to live inside the AI branch, so a human who
+       * ended up stranded stayed stranded: a review left an untouched player
+       * ejected from the Glasshouse grid and found it still there eighty
+       * seconds later, with `STUCK - PRESS R TO RECOVER` on screen and nothing
+       * but dark vegetation in the camera. Requiring a keypress the race has
+       * not taught yet, to escape a state the player did not cause, is not a
+       * mechanic.
+       *
+       * The grace is deliberately longer than the AI's: a player reversing out
+       * of a wall on purpose is making progress the timer cannot see, and
+       * snatching the car away from them would be worse than the pin.
+       */
+      if (racer.wedgeTimer > RACE.playerRespawnTime) return { ...playerInput, respawn: true };
       return playerInput;
     }
     const input = driveAi(racer, {
@@ -331,25 +456,75 @@ export class Simulation {
     return clamp(scale, 1 - CATCHUP_LIMIT, 1 + CATCHUP_LIMIT);
   }
 
-  /** Marks racers sitting in a rival's wake, which relieves drag and builds surge. */
+  /**
+   * The tow: sitting in a rival's wake relieves drag, fills Surge, and charges
+   * a snap.
+   *
+   * The snap is the game's strategic layer and the reason there are no pickups
+   * on the road. Holding the tow banks charge; pulling out of it inside a short
+   * window spends that charge as a burst. So a straight is a decision — commit
+   * to the wake and go late, or break early and lose the charge — and the
+   * resource is a *position*, which has to be earned by racing and which the
+   * car in front can deny by moving.
+   */
   private updateSlipstream(dt: number): void {
     for (const racer of this.racers) {
+      const wasTowing = racer.slipstreaming;
       racer.slipstreaming = false;
       if (racer.finished) continue;
       const forward = fromHeading(racer.heading);
+      const right = rightOf(racer.heading);
       for (const other of this.racers) {
         if (other.index === racer.index) continue;
         const rel: Vec2 = { x: other.pos.x - racer.pos.x, z: other.pos.z - racer.pos.z };
         const ahead = dot(rel, forward);
         if (ahead < 2.5 || ahead > SURGE.slipstreamRange) continue;
-        const lateralOffset = Math.abs(rel.x * -Math.sin(racer.heading) + rel.z * Math.cos(racer.heading));
-        if (lateralOffset > SURGE.slipstreamHalfWidth) continue;
+        if (Math.abs(dot(rel, right)) > SURGE.slipstreamHalfWidth) continue;
         if (Math.abs(other.y - racer.y) > 3) continue;
         racer.slipstreaming = true;
         racer.surge = Math.min(SURGE.max, racer.surge + SURGE.slipstreamGain * dt);
         break;
       }
+
+      if (racer.slipstreaming) {
+        racer.towCharge = clamp01(racer.towCharge + dt / TOW.chargeTime);
+        racer.towRelease = TOW.releaseWindow;
+      } else {
+        // The window is what makes this a *timing*: leave the wake and the
+        // charge is live for a moment, then it bleeds away.
+        racer.towRelease = Math.max(0, racer.towRelease - dt);
+        if (racer.towRelease <= 0) racer.towCharge = Math.max(0, racer.towCharge - TOW.decayRate * dt);
+      }
+
+      // Fire on the frame the racer leaves the wake with enough banked.
+      if (wasTowing && !racer.slipstreaming && racer.towCharge >= TOW.minCharge) {
+        const strength = racer.towCharge;
+        const forwardNow = fromHeading(racer.heading);
+        racer.velocity = {
+          x: racer.velocity.x + forwardNow.x * TOW.impulse * strength,
+          z: racer.velocity.z + forwardNow.z * TOW.impulse * strength,
+        };
+        racer.surge = Math.min(SURGE.max, racer.surge + TOW.surge * strength);
+        racer.towCharge = 0;
+        racer.towRelease = 0;
+        this.events.push({ type: 'towSnap', racer: racer.index, strength });
+      }
     }
+  }
+
+  /**
+   * A short engine assist after a genuine impact.
+   *
+   * Being knocked about is only fair if getting back is possible, and the
+   * alternative — a player who has been hit watching the field disappear for
+   * ten seconds — is the single least fun state an arcade racer has. It is
+   * rate-limited so it cannot be farmed on walls, and it is always worth less
+   * than the impact took, so a crash stays a net loss.
+   */
+  private grantRecovery(racer: RacerState, closingSpeed: number): void {
+    if (closingSpeed < RECOVERY.impactThreshold || racer.recoveryCooldown > 0) return;
+    racer.recoveryBoost = RECOVERY.duration;
+    racer.recoveryCooldown = RECOVERY.cooldown;
   }
 
   /**
@@ -357,6 +532,51 @@ export class Simulation {
    * impulse exchange weighted by mass, then a hard separation term so two
    * skiffs can never end up welded together.
    */
+  /**
+   * Whether a racer is still sitting on its grid slot in the opening seconds.
+   *
+   * Deliberately requires *both* that the launch window is open and that the
+   * racer has genuinely not moved, so it expires the instant anyone drives.
+   */
+  private onGrid(racer: RacerState): boolean {
+    if (this.raceTime > RACE.gridGrace) return false;
+    return Math.hypot(racer.velocity.x, racer.velocity.z) < RACE.stuckSpeed;
+  }
+
+  /**
+   * A gentle steer that holds the racing line, for the opening seconds only.
+   *
+   * Pure pursuit to a point ahead plus a cross-track term, which is the same
+   * shape the AI's line following uses — deliberately, so the assist behaves
+   * like the car is being driven rather than like it is on rails, and hands
+   * over to the player without a discontinuity.
+   */
+  private laneKeepSteer(racer: RacerState): number {
+    const projection = this.track.project(racer.pos, racer.path);
+    /*
+     * Speed-scaled lookahead, not a fixed one. A fixed distance is too short at
+     * racing speed and oscillates — the same lesson the AI's line following
+     * already records.
+     */
+    const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
+    const ahead = this.track.sampleMain(projection.mainDistance + 14 + speed * 0.55);
+    const desired = Math.atan2(ahead.pos.z - racer.pos.z, ahead.pos.x - racer.pos.x);
+    let error = desired - racer.heading;
+    while (error > Math.PI) error -= Math.PI * 2;
+    while (error < -Math.PI) error += Math.PI * 2;
+    const cross = -projection.lateral / Math.max(4, projection.halfWidth);
+    return clamp(error * 2.4 + cross * 0.75, -1, 1);
+  }
+
+  /** The two hull lobes of a skiff, nose first. See `COLLISION.radius`. */
+  private static lobes(racer: RacerState): [Vec2, Vec2] {
+    const forward = fromHeading(racer.heading);
+    return [
+      { x: racer.pos.x + forward.x * COLLISION.lobeOffset, z: racer.pos.z + forward.z * COLLISION.lobeOffset },
+      { x: racer.pos.x - forward.x * COLLISION.lobeOffset, z: racer.pos.z - forward.z * COLLISION.lobeOffset },
+    ];
+  }
+
   private resolveRacerCollisions(dt: number): void {
     const minDist = COLLISION.radius * 2;
     for (let i = 0; i < this.racers.length; i++) {
@@ -364,14 +584,60 @@ export class Simulation {
       for (let j = i + 1; j < this.racers.length; j++) {
         const b = this.racers[j] as RacerState;
         if (Math.abs(a.y - b.y) > 2.6) continue;
-        const dist = distance(a.pos, b.pos);
+
+        /*
+         * Resolve the deepest of the four lobe pairs.
+         *
+         * Taking the deepest rather than all four keeps one contact per pair
+         * per step — resolving several would apply the impulse repeatedly and
+         * turn a graze into a launch — while still putting the contact point
+         * where the hulls actually meet, which is what makes the direction of a
+         * shove readable.
+         */
+        const aLobes = Simulation.lobes(a);
+        const bLobes = Simulation.lobes(b);
+        let dist = Infinity;
+        let contactA = a.pos;
+        let contactB = b.pos;
+        for (const lobeA of aLobes) {
+          for (const lobeB of bLobes) {
+            const d = distance(lobeA, lobeB);
+            if (d < dist) {
+              dist = d;
+              contactA = lobeA;
+              contactB = lobeB;
+            }
+          }
+        }
         if (dist >= minDist || dist < 1e-6) continue;
 
-        const n = normalize({ x: b.pos.x - a.pos.x, z: b.pos.z - a.pos.z });
+        const n = normalize({ x: contactB.x - contactA.x, z: contactB.z - contactA.z });
         const overlap = minDist - dist;
         const totalMass = a.spec.mass + b.spec.mass;
-        const aShare = b.spec.mass / totalMass;
-        const bShare = a.spec.mass / totalMass;
+        let aShare = b.spec.mass / totalMass;
+        let bShare = a.spec.mass / totalMass;
+
+        /*
+         * A car that has not launched yet is not pushed off its grid slot.
+         *
+         * Five skiffs leaving the line at full throttle into a stationary sixth
+         * will shove it wherever the geometry sends them: a review left the
+         * player untouched at the green light and found them twenty-four metres
+         * off a eleven-metre corridor, stopped, in the vegetation, before the
+         * first corner. Nothing the player did caused that and nothing they
+         * could have done avoided it — they had not pressed a key.
+         *
+         * So for the opening seconds a racer who has not yet moved holds its
+         * slot, and whoever runs into it takes the whole separation and goes
+         * round. It ends the moment they move, so it cannot be used to park in
+         * the pack, and it is symmetric — the AI gets it on the grid too.
+         */
+        const aParked = this.onGrid(a);
+        const bParked = this.onGrid(b);
+        if (aParked !== bParked) {
+          aShare = aParked ? 0 : 1;
+          bShare = bParked ? 0 : 1;
+        }
 
         a.pos = { x: a.pos.x - n.x * overlap * aShare, z: a.pos.z - n.z * overlap * aShare };
         b.pos = { x: b.pos.x + n.x * overlap * bShare, z: b.pos.z + n.z * overlap * bShare };
@@ -386,12 +652,16 @@ export class Simulation {
           if (-closing > 4 && a.contactCooldown <= 0 && b.contactCooldown <= 0) {
             a.contactCooldown = 0.2;
             b.contactCooldown = 0.2;
+            this.grantRecovery(a, -closing);
+            this.grantRecovery(b, -closing);
             this.events.push({
               type: 'collision',
               racer: a.index,
               other: b.index,
               speed: -closing,
-              pos: { x: (a.pos.x + b.pos.x) / 2, z: (a.pos.z + b.pos.z) / 2 },
+              // The point where the hulls met, not the midpoint between two
+              // centres: it is what the debris cone is thrown from.
+              pos: { x: (contactA.x + contactB.x) / 2, z: (contactA.z + contactB.z) / 2 },
             });
           }
         } else {
@@ -406,18 +676,47 @@ export class Simulation {
   }
 
   /** Static obstacle collisions, resolved as a swept circle against a circle. */
-  private resolveObstacles(): void {
+  private resolveObstacles(dt: number): void {
     for (const racer of this.racers) {
+      let touching = false;
       for (const obstacle of this.track.obstacles) {
         const minDist = obstacle.radius + COLLISION.radius;
         const dx = racer.pos.x - obstacle.x;
         const dz = racer.pos.z - obstacle.z;
         const dist = Math.hypot(dx, dz);
         if (dist >= minDist || dist < 1e-6) continue;
+        touching = true;
 
         const nx = dx / dist;
         const nz = dz / dist;
-        racer.pos = { x: obstacle.x + nx * minDist, z: obstacle.z + nz * minDist };
+
+        /*
+         * Separate, then *slide around* — a rock is not a wall you can lean on.
+         *
+         * Pushing the racer back to exactly the contact surface and deleting
+         * the velocity into it looks like a resolution and is a trap: the
+         * engine puts the car back on the surface next step, the inward
+         * velocity is deleted again, and nothing ever moves. A trace of an
+         * ordinary Pro field found opponents pinned on the Rootway's silt
+         * heaps at 1.3 m/s, on track, on tarmac, with the distance frozen —
+         * which is what tore the field apart in there.
+         *
+         * The fix is the same one the barrier uses, plus the thing an obstacle
+         * has that a wall does not: a way round. A persisting contact gets a
+         * tangential slide in whichever direction the car is already
+         * travelling, so it is walked off the side of the obstacle rather than
+         * held against its face.
+         */
+        racer.obstacleContactTime += dt;
+        const escape = Math.min(COLLISION.wallEscapeMax, racer.obstacleContactTime * COLLISION.wallEscapeRate);
+        const tangentX = -nz;
+        const tangentZ = nx;
+        const along = racer.velocity.x * tangentX + racer.velocity.z * tangentZ;
+        const slide = (along >= 0 ? 1 : -1) * escape * dt;
+        racer.pos = {
+          x: obstacle.x + nx * (minDist + COLLISION.wallClearance * 0.5) + tangentX * slide,
+          z: obstacle.z + nz * (minDist + COLLISION.wallClearance * 0.5) + tangentZ * slide,
+        };
 
         const into = -(racer.velocity.x * nx + racer.velocity.z * nz);
         if (into <= 0) continue;
@@ -430,6 +729,7 @@ export class Simulation {
         racer.drift.charge = 0;
         if (racer.contactCooldown <= 0) {
           racer.contactCooldown = 0.2;
+          this.grantRecovery(racer, into);
           this.events.push({
             type: 'collision',
             racer: racer.index,
@@ -439,6 +739,7 @@ export class Simulation {
           });
         }
       }
+      if (!touching) racer.obstacleContactTime = 0;
     }
   }
 
@@ -465,8 +766,31 @@ export class Simulation {
             break;
           }
           case 'gust': {
+            /*
+             * The wind has a lee, and finding it is the mechanic.
+             *
+             * A review measured the gust sequence costing a clean line 47% of
+             * its speed with "no legible lane or timing counter" — momentum
+             * survived, but the signature hazard read as a long tax rather than
+             * something to be driven. A hazard with no counterplay is not a
+             * decision, it is a toll.
+             *
+             * So the strength falls away on the *upwind* side of the corridor,
+             * where the standing structures break it. Tucking up the windward
+             * edge is measurably faster, costs you the inside line for whatever
+             * comes next, and is learnable in one lap because the wind always
+             * blows the same way. `tests/unit/mechanics.test.ts` asserts the
+             * lane is actually worth taking.
+             */
             const dir = hazard.direction ?? 0;
-            const strength = (hazard.strength ?? 1) * HAZARDS.gustStrength;
+            const projection = this.track.project(racer.pos, racer.path);
+            // Where the racer sits across the corridor, -1 to 1.
+            const across = clamp(projection.lateral / Math.max(1, projection.halfWidth), -1, 1);
+            // Which way the wind pushes, in the same terms.
+            const push = Math.sign(Math.cos(dir) * projection.normal.x + Math.sin(dir) * projection.normal.z) || 1;
+            // Full strength downwind, a fraction of it hard against the lee.
+            const exposure = lerp(HAZARDS.gustLee, 1, clamp01((across * push + 1) / 2));
+            const strength = (hazard.strength ?? 1) * HAZARDS.gustStrength * exposure;
             racer.velocity = {
               x: racer.velocity.x + Math.cos(dir) * strength * dt,
               z: racer.velocity.z + Math.sin(dir) * strength * dt,

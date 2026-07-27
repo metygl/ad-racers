@@ -4,6 +4,15 @@ import type { VehicleSpec } from '../racers';
 
 /** One frame of driver intent. Identical shape for the player and the AI. */
 export interface ControlInput {
+  /**
+   * True when the throttle is supplied by the platform rather than pressed.
+   *
+   * Touch has no accelerate button by design, so its throttle is always open.
+   * That makes throttle useless on its own as a signal that the player has
+   * *decided* to go, which is exactly what the rolling start needs to know
+   * before it carries an idle car into the first corner.
+   */
+  automaticThrottle: boolean;
   /** -1 (full left) to 1 (full right). */
   steer: number;
   /** 0 to 1. */
@@ -12,6 +21,11 @@ export interface ControlInput {
   brake: boolean;
   drift: boolean;
   boost: boolean;
+  /**
+   * Hop. Deliberately its own input and never folded into `drift`; see the
+   * note on `HOP` in `config.ts`.
+   */
+  hop: boolean;
   /** -1 strikes to the left, 1 to the right, 0 does not strike. */
   strike: -1 | 0 | 1;
   /** Request a respawn back onto the track. */
@@ -19,12 +33,34 @@ export interface ControlInput {
 }
 
 export function emptyInput(): ControlInput {
-  return { steer: 0, throttle: 0, brake: false, drift: false, boost: false, strike: 0, respawn: false };
+  return {
+    steer: 0,
+    throttle: 0,
+    brake: false,
+    drift: false,
+    boost: false,
+    hop: false,
+    strike: 0,
+    respawn: false,
+    automaticThrottle: false,
+  };
 }
 
 export type StrikePhase = 'idle' | 'windup' | 'active' | 'recovery';
 
 export interface StrikeState {
+  /**
+   * Whether a rival is currently inside the strike envelope on each side.
+   *
+   * Exposed as *state* rather than inferred from events because the HUD has to
+   * say it **before** the player commits. A review attempted six strikes over a
+   * full race, landed none, and could not tell whether it had chosen the wrong
+   * side, lacked overlap, was out of reach, was on cooldown or simply mistimed
+   * it — the interface said `POD ARM READY` throughout. Reach is the single
+   * most useful thing it could have said instead.
+   */
+  reachLeft: boolean;
+  reachRight: boolean;
   phase: StrikePhase;
   /** Seconds remaining in the current phase. */
   timer: number;
@@ -113,6 +149,46 @@ export interface RacerState {
   boosting: boolean;
   /** True while sitting in a rival's wake; feeds drag relief and surge gain. */
   slipstreaming: boolean;
+  /** 0-1 charge towards a wake snap, built by holding the tow. */
+  towCharge: number;
+  /** Seconds left in which a banked tow charge can still be snapped. */
+  towRelease: number;
+  /** Seconds of post-impact engine assist remaining. */
+  recoveryBoost: number;
+  /** Seconds until another post-impact assist may be granted. */
+  recoveryCooldown: number;
+  /** Seconds until another hop is allowed. */
+  hopCooldown: number;
+  /** Seconds since the last landing, used for the hop-into-drift handshake. */
+  sinceLanding: number;
+  /** Continuous seconds spent airborne; resets on touchdown. */
+  airTime: number;
+  /** Peak clearance above the ground this flight, which distinguishes a crest. */
+  airClearance: number;
+  /** Hops taken in quick succession; each one pays less than the last. */
+  hopChain: number;
+  /** Seconds of lockout before the same wall may bill another impact. */
+  wallImpactLock: number;
+  /**
+   * Unbroken seconds spent overlapping a barrier.
+   *
+   * Distinct from `wallImpactLock`, which bounds what a contact may *cost*.
+   * This measures how long the hull has failed to get clear, and it is what
+   * drives the escape slide — a review measured a single understandable
+   * mistake becoming a twenty-second pin that neither neutral nor full
+   * opposite steering could break, because at three metres a second the
+   * steering has almost no yaw authority left to point the nose out with.
+   */
+  wallContactTime: number;
+  /** Unbroken seconds spent overlapping a track obstacle. */
+  obstacleContactTime: number;
+  /** Road height at take-off, and the greatest drop below it while airborne. */
+  airGroundStart: number;
+  airGroundDrop: number;
+  /** Main-line distance at the previous step, for measuring progress rate. */
+  lastProgressDistance: number;
+  /** Whether the player has ever steered. Ends the opening assist for good. */
+  hasSteered: boolean;
   drift: DriftState;
   strike: StrikeState;
   /** Seconds of degraded control remaining after being struck. */
@@ -172,13 +248,36 @@ export type SimEvent =
   | { type: 'finish'; racer: number; position: number; time: number }
   | { type: 'raceEnd' }
   | { type: 'strikeSwing'; racer: number; side: -1 | 1 }
+  /** A swing that reached the end of its active window without contact. */
+  | { type: 'strikeMiss'; racer: number; side: -1 | 1 }
+  /**
+   * An input the simulation refused, and why. Silent rejection is what makes a
+   * mechanic feel arbitrary even when it is completely deterministic.
+   */
+  | { type: 'strikeRejected'; racer: number; reason: 'cooldown' | 'airborne' | 'staggered' | 'tooEarly' | 'busy' }
   | { type: 'strikeHit'; attacker: number; target: number; strength: number; pos: Vec2 }
   | { type: 'strikeCounter'; a: number; b: number }
   | { type: 'collision'; racer: number; other: number | null; speed: number; pos: Vec2 }
   | { type: 'wallHit'; racer: number; speed: number; pos: Vec2 }
   | { type: 'driftRelease'; racer: number; tier: number }
   | { type: 'boostStart'; racer: number }
-  | { type: 'jumpLand'; racer: number; clean: boolean; speed: number }
+  | { type: 'hop'; racer: number }
+  | { type: 'towSnap'; racer: number; strength: number }
+  /**
+   * `quality` is 0-1: level and aligned scores 1, a heavy sideways arrival 0.
+   * `airTime` and `clearance` are carried because the renderer scales the
+   * landing dust by them, and because a landing that scores zero is otherwise
+   * impossible to diagnose from the outside.
+   */
+  | {
+      type: 'jumpLand';
+      racer: number;
+      clean: boolean;
+      speed: number;
+      quality: number;
+      airTime: number;
+      clearance: number;
+    }
   | { type: 'respawn'; racer: number }
   | { type: 'surfaceChange'; racer: number; surface: SurfaceId }
   | { type: 'hazard'; racer: number; kind: string; pos: Vec2 };

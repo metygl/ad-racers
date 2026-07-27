@@ -29,6 +29,8 @@
   --radius-lg: 16px;
   --focus: #ffe08a;
 
+  /* Touch button diameter. Named because the HUD has to clear the row. */
+  --touch-icon: 2.9rem;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -337,18 +339,6 @@ body {
   color: var(--amber);
 }
 
-.title__footer {
-  margin-top: 0.4rem;
-  border-top: 1px solid var(--line-soft);
-  padding-top: 0.8rem;
-  color: var(--ink-faint);
-  font-size: 0.78rem;
-}
-
-.title__footer p {
-  margin: 0;
-}
-
 /* --------------------------------------------------------------- setup --- */
 
 .setup__section {
@@ -359,13 +349,16 @@ body {
   gap: 0.85rem;
 }
 
+/*
+ * Crew flavour is never clipped.
+ *
+ * These lines are the only characterisation the six crews get, and a card that
+ * ends in an ellipsis reads as a bug rather than as brevity. The cards are all
+ * the same height because the grid stretches them, so letting the longest blurb
+ * set that height costs a few pixels and nothing else.
+ */
 .screen--setup .card__blurb {
-  /* Two lines of flavour is plenty on a card that also carries five stat bars. */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  min-height: 3.7em;
 }
 
 .card-grid {
@@ -380,7 +373,15 @@ body {
  * pushes the Start button below the fold on a 900 px-tall laptop.
  */
 .card-grid--racers {
-  grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
+  /* Six crews want to land as 3x2 or 2x3, never 5+1: an orphan card at the end
+     of a row reads as a layout that ran out of room. */
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+}
+
+@media (min-width: 60rem) {
+  .card-grid--racers {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 
 .card-grid--difficulty {
@@ -638,6 +639,20 @@ body {
   gap: 0.3rem;
 }
 
+.bindings__status {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--amber);
+  min-height: 1.2em;
+}
+
+.bindings__change {
+  /* Was 85x36: below the 44 px minimum touch target, on the one screen a
+     player is most likely to be using with a thumb. */
+  min-height: 44px;
+  min-width: 44px;
+}
+
 .bindings__row {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -715,9 +730,29 @@ body {
 
 .results__table {
   overflow-x: auto;
+  /* A real <table> laid out on a grid: the element carries the semantics, the
+     CSS carries the composition. */
+  display: block;
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.results__head,
+.results__table thead,
+.results__table tbody {
+  display: block;
+}
+
+.results__head th {
+  text-align: left;
+  font-weight: 600;
+}
+
+.results__crew {
+  text-align: left;
+  font-weight: inherit;
+}
+
+.results__head tr,
 .results__row {
   display: grid;
   grid-template-columns: 2.4rem minmax(8rem, 1fr) 6.5rem 5rem 6.5rem 4rem;
@@ -736,7 +771,6 @@ body {
 }
 
 .results__list {
-  list-style: none;
   margin: 0;
   padding: 0;
 }
@@ -876,6 +910,21 @@ body {
   justify-content: space-between;
   align-items: flex-start;
   gap: 0.5rem;
+  /*
+   * The top row must fit the viewport it is in.
+   *
+   * As a non-wrapping flex row of three fixed-content cards it did not: at
+   * 320 px the Lap panel began at x=319 and ended at x=373, entirely outside
+   * the screen, so a phone player could not see what lap they were on — and a
+   * safe-area inset made it worse. Wrapping, and letting the cards shrink, is
+   * what makes this a layout rather than three things hoping there is room.
+   */
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.hud__top > * {
+  min-width: 0;
 }
 
 .hud__panel {
@@ -1044,6 +1093,240 @@ body {
   opacity: 1;
 }
 
+/*
+ * The drift ladder and the tow meter.
+ *
+ * Both live under the speed panel, where the eye already goes. Both are read in
+ * peripheral vision at speed, so both are shape-first: three discrete pips and
+ * one short bar, never a number.
+ */
+.hud__meters {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.35rem;
+}
+
+.drift {
+  display: flex;
+  gap: 0.22rem;
+}
+
+.drift__pip {
+  width: 1.1rem;
+  height: 0.35rem;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background-color 90ms linear, box-shadow 90ms linear;
+}
+
+/*
+ * One colour — the crew's own — for all three tiers, exactly as on the skiff.
+ *
+ * The previous cyan → amber → magenta ramp was flagged by an independent art
+ * review as uncomfortably close to a recognisable progression from another
+ * game, and it was also carrying the tier entirely in hue. Count and glow carry
+ * it now, which is original, colour-blind safe, and consistent with the bands
+ * on the machine.
+ */
+.drift__pip--lit {
+  background: var(--crew, var(--signal));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--crew, var(--signal)) 70%, transparent);
+}
+
+.drift__pip--lit:nth-child(3) {
+  /* The top tier is wider as well as lit: shape, not just brightness. */
+  width: 1.5rem;
+}
+
+.drift__pip--charging {
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.tow {
+  position: relative;
+  width: 4.5rem;
+  height: 0.35rem;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.tow__fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  background: rgba(191, 233, 255, 0.5);
+}
+
+.tow--towing .tow__fill {
+  background: #bfe9ff;
+}
+
+.tow--ready {
+  border-color: rgba(191, 233, 255, 0.7);
+  box-shadow: 0 0 10px rgba(191, 233, 255, 0.4);
+}
+
+/*
+ * Gaps to the racers ahead and behind.
+ *
+ * Tabular figures are not optional here: a gap whose digits change width jitters
+ * every tenth of a second, in the corner of the eye, for a whole race.
+ */
+.hud__gaps {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+  margin-bottom: 0.35rem;
+  min-height: 2.2rem;
+}
+
+.gap {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+  background: rgba(6, 10, 14, 0.55);
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  min-width: 4.2rem;
+  text-align: right;
+}
+
+.gap:empty {
+  visibility: hidden;
+}
+
+.gap--close {
+  color: var(--amber);
+}
+
+/* The championship table, shared by the results screen and the standings view. */
+.standings-table {
+  margin-top: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  /* A real <table> laid out on a grid: the semantics come from the element,
+     the composition from CSS. */
+  display: block;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.standings-table thead,
+.standings-table tbody {
+  display: block;
+}
+
+.standings-table__head tr,
+.standings-table__row {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr auto 3rem;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.45rem 0.8rem;
+}
+
+.standings-table__head th {
+  text-align: left;
+  font-weight: 600;
+}
+
+.standings-table__head {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.standings-table__list {
+  margin: 0;
+  padding: 0;
+}
+
+.standings-table__row {
+  border-top: 1px solid var(--line);
+  border-left: 3px solid var(--crew, transparent);
+}
+
+.standings-table__row--player {
+  background: rgba(255, 255, 255, 0.07);
+  font-weight: 700;
+}
+
+.standings-table__place {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+.standings-table__points {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-weight: 700;
+}
+
+.standings-table__finishes {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.standings-table__pip {
+  display: grid;
+  place-items: center;
+  min-width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+.standings-table__pip--win {
+  background: rgba(255, 196, 107, 0.22);
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.results__standings {
+  margin-top: 1.4rem;
+}
+
+.results__record--unlock {
+  color: var(--amber);
+}
+
+/* A speed class the player has not opened yet. Shown, never hidden. */
+.card--locked {
+  opacity: 0.55;
+}
+
+.card__lock {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--amber);
+}
+
+.card__input:disabled + .card {
+  cursor: not-allowed;
+}
+
+.title__records {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  align-items: center;
+}
+
 .strike {
   font-size: 0.7rem;
   text-transform: uppercase;
@@ -1052,6 +1335,15 @@ body {
   padding: 0.2rem 0.6rem;
   background: rgba(6, 10, 14, 0.5);
   border-radius: 999px;
+}
+
+/*
+ * A target is in reach. The one moment the pod arm is a decision rather than a
+ * button, so it is the one moment this line changes colour.
+ */
+.strike--reach {
+  color: var(--signal);
+  border-color: color-mix(in srgb, var(--signal) 45%, transparent);
 }
 
 .strike--windup {
@@ -1146,10 +1438,16 @@ body {
 }
 
 .perf {
+  /* Never over the position/time/lap row: this is a player-facing setting, not
+     an external profiler, and it used to cover the top HUD entirely on a
+     phone. */
+  pointer-events: none;
   position: absolute;
   left: calc(0.6rem + var(--safe-left));
-  top: calc(0.6rem + var(--safe-top));
+  /* Below the position panel rather than on top of it. */
+  bottom: calc(0.6rem + var(--safe-bottom));
   z-index: 5;
+  max-width: min(22rem, 60vw);
   padding: 0.4rem 0.6rem;
   background: rgba(0, 0, 0, 0.7);
   border-radius: 6px;
@@ -1224,13 +1522,56 @@ body {
   pointer-events: none;
 }
 
+/*
+ * Touch race composition.
+ *
+ * Three reserved zones that never overlap at 320x568, 390x844 or 844x390:
+ * the steering strip bottom-left, the action cluster bottom-right, and a
+ * utility column top-left. The HUD keeps the top-right corner (lap), the
+ * top-centre (time) and the right edge above the pads (minimap) to itself.
+ *
+ * The previous layout put Pause directly on top of Lap, the action cluster on
+ * top of the minimap, and the Drift pad 15 px into the speed panel.
+ */
 .touch__right {
   position: absolute;
   right: calc(0.6rem + var(--safe-right));
-  bottom: calc(6rem + var(--safe-bottom));
+  /* Clear of the speed panel, which sits centred at the bottom of the HUD. */
+  bottom: calc(7.5rem + var(--safe-bottom));
   display: grid;
-  gap: 0.45rem;
+  gap: 0.4rem;
   justify-items: end;
+}
+
+.touch__utility {
+  position: absolute;
+  /* Top *left*: the top right belongs to the lap counter. */
+  top: calc(0.6rem + var(--safe-top));
+  left: calc(0.6rem + var(--safe-left));
+  display: flex;
+  gap: 0.5rem;
+}
+
+.touch__icon {
+  width: var(--touch-icon);
+  height: var(--touch-icon);
+  border-radius: 50%;
+  background: rgba(6, 10, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: var(--ink);
+  font-weight: 800;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+}
+
+.touch__pad--recover {
+  min-width: 8.4rem;
+  background: rgba(30, 20, 10, 0.72);
+}
+
+.touch__pad--drift,
+.touch__pad--boost {
+  min-height: 3.4rem;
 }
 
 .touch__row {
@@ -1240,8 +1581,10 @@ body {
 
 .touch__pad {
   appearance: none;
-  min-width: 4.2rem;
-  min-height: 3.2rem;
+  /* 44 px is the floor for a touch target; these sit comfortably above it even
+     at the narrowest supported width. */
+  min-width: 4rem;
+  min-height: 3rem;
   padding: 0.4rem 0.7rem;
   font: inherit;
   font-size: 0.78rem;
@@ -1260,18 +1603,222 @@ body {
   border-color: var(--signal);
 }
 
-.touch__pause {
-  position: absolute;
-  top: calc(0.6rem + var(--safe-top));
-  right: calc(0.6rem + var(--safe-right));
-  width: 2.9rem;
-  height: 2.9rem;
-  border-radius: 50%;
-  background: rgba(6, 10, 14, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: var(--ink);
-  font-weight: 800;
-  letter-spacing: 0.08em;
+/*
+ * With touch controls on screen the HUD gives up the left half of its top row
+ * and the bottom-right corner, because those are where thumbs live.
+ */
+.touch-active .hud__panel--position {
+  /*
+   * Clear the whole utility row, not one button of it.
+   *
+   * The row holds two 2.9 rem icons with a 0.5 rem gap, and this was set to
+   * 3.4 rem — enough for the first one. On a 390 px portrait viewport the
+   * result was the pause button sitting on top of the position readout, which
+   * is the one HUD element a player checks mid-corner.
+   */
+  margin-left: calc(2 * var(--touch-icon) + 1.1rem);
+}
+
+.touch-active .hud__side {
+  /* Above the action cluster rather than behind it. */
+  bottom: auto;
+  top: calc(4.5rem + var(--safe-top));
+}
+
+.touch-active .minimap {
+  width: 5.5rem;
+  height: 5.5rem;
+}
+
+.touch-active .hud__meters {
+  display: none;
+}
+
+/*
+ * The narrowest supported screen, where the top row genuinely cannot hold
+ * everything.
+ *
+ * At 320 px with safe-area insets there are 288 usable pixels, the top row
+ * wraps, and Lap lands on the gap readout while the minimap sits over an
+ * action pad. Something has to go, and the minimap is the right thing: the gap
+ * readout already carries the race state a driver needs mid-corner, and a
+ * 4 rem map on a 288 px screen was never legible anyway. This is an authored
+ * decision for one size, not a scaled-down desktop.
+ */
+@media (max-width: 360px) {
+  .touch-active .minimap {
+    display: none;
+  }
+
+  .touch-active .hud__side {
+    /*
+     * On the *left*, opposite the action cluster.
+     *
+     * Below the top row is not enough on its own: the right-hand column belongs
+     * to the pads for most of the frame's height, so anything right-aligned
+     * eventually meets one. Putting the gap readout on the free side removes
+     * the competition rather than negotiating with it, and gaps read just as
+     * well left-aligned.
+     */
+    top: calc(8.6rem + var(--safe-top));
+    left: calc(0.5rem + var(--safe-left));
+    right: auto;
+    bottom: auto;
+    transform: none;
+    justify-items: start;
+  }
+
+  .touch-active .hud__gaps {
+    align-items: flex-start;
+  }
+}
+
+/*
+ * Short landscape, which is its own composition problem.
+ *
+ * At 844x390 there is not enough height for a bottom steering strip *and* a
+ * bottom speed panel *and* an action cluster: a review measured the speed panel
+ * over the steering strip by 266x67 px, the minimap over the action pads, and
+ * Lap over both the right action region and the gap readout.
+ *
+ * So the regions are declared rather than hoped for. The right tenth of the
+ * screen belongs to the action pads and nothing else may enter it; the bottom
+ * strip belongs to steering; the speed readout sits above it on the left; the
+ * minimap is dropped, because in a 390 px-tall frame it is the one piece of
+ * information the gap readout already carries.
+ */
+@media (max-height: 460px) and (orientation: landscape) {
+  .touch-active .hud__top {
+    /* Keep the top row clear of the action cluster on the right. */
+    padding-right: 11rem;
+  }
+
+  .touch-active .hud__side {
+    /* Below the top row, inboard of the action cluster. */
+    top: calc(6.2rem + var(--safe-top));
+    right: calc(11rem + var(--safe-right));
+    bottom: auto;
+    transform: none;
+  }
+
+  .touch-active .minimap {
+    display: none;
+  }
+
+  .touch-active .hud__bottom {
+    /* Above the steering strip, hard left, clear of the pads. */
+    bottom: calc(4.4rem + var(--safe-bottom));
+    left: calc(0.6rem + var(--safe-left));
+    transform: none;
+    justify-items: start;
+  }
+
+  .touch-active .hud__notifications {
+    bottom: calc(0.6rem + var(--safe-bottom));
+    left: calc(12rem + var(--safe-left));
+  }
+
+  .touch-active .perf {
+    bottom: auto;
+    top: calc(0.4rem + var(--safe-top));
+    left: 50%;
+    max-width: min(15rem, 34vw);
+    font-size: 0.6rem;
+  }
+
+  .touch__steer {
+    height: 3.4rem;
+  }
+}
+
+/*
+ * The result's hero card.
+ *
+ * A stack, not a row, so the same markup composes at 320 px and at 1440 without
+ * a second layout. The crew colour is a border and a wash rather than a fill:
+ * the outcome has to read first, and a card flooded with a team colour reads as
+ * decoration before it reads as a result.
+ */
+.results__hero {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.9rem 0 1.1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--crew, var(--ink-faint)) 55%, transparent);
+  border-left-width: 4px;
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--crew, transparent) 18%, rgba(8, 12, 18, 0.72)),
+    rgba(8, 12, 18, 0.72) 62%
+  );
+}
+
+/* A win gets the trim colour as a second, brighter edge. Nothing else does. */
+.results__hero--won {
+  border-color: color-mix(in srgb, var(--crew-trim, var(--signal)) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--crew-trim, var(--signal)) 30%, transparent) inset;
+}
+
+.results__hero-art {
+  flex: 0 0 auto;
+  width: 6.5rem;
+  display: grid;
+  place-items: center;
+}
+
+.results__hero-art svg {
+  width: 100%;
+  height: auto;
+}
+
+.results__hero-body {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.results__hero-place {
+  margin: 0;
+  font-size: 2.1rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.results__hero-crew {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--crew-trim, var(--ink));
+}
+
+.results__hero-pilots {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-faint);
+}
+
+.results__hero-time {
+  margin: 0.25rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+}
+
+@media (max-width: 620px) {
+  .results__hero {
+    gap: 0.7rem;
+    padding: 0.7rem 0.8rem;
+  }
+
+  .results__hero-art {
+    width: 4.4rem;
+  }
+
+  .results__hero-place {
+    font-size: 1.7rem;
+  }
 }
 
 /* ------------------------------------------------------------ animation --- */
@@ -1392,16 +1939,81 @@ body {
 }
 
 .hud__notifications {
-    bottom: calc(11rem + var(--safe-bottom));
+    /*
+     * Above the bottom cluster, which on a phone is the speed panel *and* the
+     * pod-arm label stacked. At 11 rem a notification landed on the label.
+     */
+    bottom: calc(13.5rem + var(--safe-bottom));
   }
 
-  .results__head,
+  /*
+   * The smallest supported screen gets its own composition, not a scaled one.
+   *
+   * At 320 px three top cards cannot coexist at full size however they are
+   * arranged, so they are compacted: the row wraps, every card gives up its
+   * padding, and the minimap shrinks. A review found Lap entirely off-screen,
+   * the minimap intersecting the action pads, and the speed panel overlapping
+   * them by 47x60 px — primary controls over primary race state, not
+   * decorative collisions.
+   */
+  .hud__panel {
+    padding: 0.22rem 0.4rem;
+  }
+
+  .touch-active .minimap {
+    width: 4.2rem;
+    height: 4.2rem;
+  }
+
+  .touch-active .hud__bottom {
+    /* Clear of the leftmost action pad at the narrowest supported width. */
+    left: calc(0.5rem + var(--safe-left));
+    bottom: calc(7.6rem + var(--safe-bottom));
+    /* Always leaves a full action column free, whatever the width. */
+    max-width: calc(100vw - 13.5rem);
+  }
+
+  .touch-active .hud__panel--speed {
+    /*
+     * Clamped in its own right, not just by its parent. A grid child whose
+     * min-content is wider than the container overflows it, and the speed
+     * readout's big numeral plus its bar is exactly that — which is how three
+     * pixels of it ended up under the first action pad.
+     */
+    max-width: calc(100vw - 13.5rem);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* The diagnostic overlay is not allowed to sit on the steering control. */
+  .touch-active .perf {
+    bottom: auto;
+    top: calc(4.6rem + var(--safe-top));
+    max-width: min(14rem, 52vw);
+    font-size: 0.6rem;
+  }
+
+  .results__head tr,
   .results__row {
     grid-template-columns: 2rem minmax(6rem, 1fr) 5.5rem 4.5rem 5.5rem 3.5rem;
     min-width: 28rem;
   }
 
-  .bindings__row {
+  .bindings__status {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--amber);
+  min-height: 1.2em;
+}
+
+.bindings__change {
+  /* Was 85x36: below the 44 px minimum touch target, on the one screen a
+     player is most likely to be using with a thumb. */
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.bindings__row {
     grid-template-columns: 1fr auto;
     row-gap: 0.3rem;
   }
@@ -1431,4 +2043,285 @@ body {
   .screen {
     width: min(80rem, 100%);
   }
+}
+
+/*
+ * Results and standings on a phone.
+ *
+ * A six-column table cannot be made to fit 320 px, and the previous attempt did
+ * not try: it kept the desktop grid and let the container scroll sideways, so
+ * the championship completion screen — the payoff for four races — arrived with
+ * a horizontal scrollbar and its last columns off the edge.
+ *
+ * Below this width each row becomes a card. The element stays a real `table`,
+ * so the semantics the accessibility tree needs are unchanged; only the
+ * presentation reflows. Rank, crew and the outcome stay on the first line,
+ * where they belong, and the detail wraps underneath with its column name
+ * attached via `::before`.
+ */
+@media (max-width: 40rem) {
+  .results__table,
+  .standings-table {
+    overflow-x: visible;
+  }
+
+  /*
+   * Specific enough to actually win.
+   *
+   * `.results__table thead` is a two-part selector and this was a one-part
+   * selector, so on a phone the header stayed `display: block`, kept the
+   * 28 rem minimum width meant for the tablet layout, and pushed the results
+   * surface to 565 px inside a 320 px viewport. A review measured exactly that
+   * and had to pan horizontally to read a race result.
+   */
+  .results__table thead.results__head,
+  .standings-table thead.standings-table__head {
+    display: none;
+  }
+
+  .results__row,
+  .standings-table__row {
+    display: grid;
+    grid-template-columns: 2.2rem 1fr auto;
+    grid-template-areas:
+      'place crew time'
+      'detail detail detail';
+    gap: 0.15rem 0.6rem;
+    min-width: 0;
+    padding: 0.6rem 0.7rem;
+  }
+
+  .results__place,
+  .standings-table__place {
+    grid-area: place;
+  }
+
+  .results__crew,
+  .standings-table__crew {
+    grid-area: crew;
+    min-width: 0;
+  }
+
+  .results__time {
+    grid-area: time;
+    text-align: right;
+  }
+
+  .standings-table__points {
+    grid-area: time;
+  }
+
+  .results__gap,
+  .results__best,
+  .results__strikes,
+  .standings-table__finishes {
+    grid-area: detail;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+  }
+
+  /* Three detail cells share the second line, so they are laid out as a row. */
+  .results__row {
+    grid-template-areas:
+      'place crew time'
+      'detail detail detail'
+      'detail2 detail2 detail2';
+  }
+
+  .results__gap::before {
+    content: 'Gap ';
+  }
+
+  .results__best {
+    grid-area: detail2;
+  }
+
+  .results__best::before {
+    content: 'Best lap ';
+  }
+
+  .results__strikes {
+    grid-area: detail2;
+    justify-self: end;
+  }
+
+  .results__strikes::before {
+    content: 'Hits ';
+  }
+
+  .standings-table__pip {
+    min-width: 1.2rem;
+    height: 1.2rem;
+  }
+}
+
+/*
+ * The authored moment banner.
+ *
+ * Final lap, finish and reward. Three seconds of the race that should not look
+ * like the other ninety, and which previously arrived as a HUD number quietly
+ * incrementing: a motion review sampled the whole finish sequence and found
+ * zero running animations at any point.
+ *
+ * The reduced-motion variant is a *designed alternative*, not a deletion. It
+ * keeps the same timing hierarchy — arrive, hold, leave — and the same colour
+ * language, and drops only the movement and the scale. A player who cannot
+ * tolerate motion still gets the beat.
+ */
+.moment {
+  position: absolute;
+  left: 50%;
+  top: 28%;
+  transform: translate(-50%, -50%);
+  font-size: clamp(2rem, 7vw, 4.5rem);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-shadow: 0 0.15em 0.6em rgba(0, 0, 0, 0.85);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.moment--lap {
+  color: var(--amber);
+}
+
+.moment--finish {
+  color: var(--signal);
+}
+
+.moment--reward {
+  color: #bfe9ff;
+}
+
+.moment--play {
+  animation: moment-beat 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.moment--finish.moment--play {
+  animation-duration: 3.2s;
+}
+
+@keyframes moment-beat {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.35);
+    letter-spacing: 0.3em;
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+    letter-spacing: 0.06em;
+  }
+  72% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -52%) scale(0.98);
+  }
+}
+
+.reduced-motion .moment--play {
+  animation: moment-fade 2.2s ease-out forwards;
+}
+
+.reduced-motion .moment--finish.moment--play {
+  animation-duration: 3.2s;
+}
+
+@keyframes moment-fade {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
+ * Results arrive in order rather than all at once.
+ *
+ * A classification is a story — who won, then who was next — and revealing it
+ * as a single static table throws that away. The stagger is short enough that
+ * a player who already knows the result is not kept waiting, and reduced motion
+ * gets the same order as a plain fade with no movement.
+ */
+.results__row {
+  animation: result-reveal 320ms ease-out backwards;
+  animation-delay: calc(var(--row, 0) * 90ms);
+}
+
+@keyframes result-reveal {
+  from {
+    opacity: 0;
+    transform: translateX(-0.6rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.reduced-motion .results__row {
+  animation-name: result-fade;
+}
+
+@keyframes result-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * Garage art on the setup cards.
+ *
+ * Both drawings are SVG generated from the same data the 3D scene uses, so a
+ * card cannot advertise a machine or a course that does not exist. They sit
+ * above the text because a player choosing a crew is choosing a *shape*, and a
+ * selection screen that never showed one was asking them to choose blind.
+ */
+.card__art {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.28);
+  margin-bottom: 0.5rem;
+}
+
+.card__art svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.card__art--crew {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.07), rgba(0, 0, 0, 0.35));
+}
+
+.diorama {
+  aspect-ratio: 4 / 3;
+  max-height: 8rem;
+  margin-inline: auto;
+}
+
+.silhouette {
+  max-height: 5.5rem;
+  margin-inline: auto;
 }

@@ -2,21 +2,21 @@ import { DEFAULT_AUDIO } from '../audio/AudioEngine';
 import type { AudioSettings } from '../audio/AudioEngine';
 import { DEFAULT_KEY_BINDINGS } from '../game/input/bindings';
 import type { KeyBindings } from '../game/input/bindings';
+import type { CameraMode } from '../render/camera/ChaseCamera';
 import type { QualityId } from '../render/quality';
 
 /**
- * Local settings and best times.
+ * Local settings, best times and Circuit records.
  *
- * Only two kinds of thing are ever stored: preferences the player set, and the
- * best lap and race times they achieved. No identifiers, no analytics, nothing
- * that leaves the machine. Everything lives under one key so clearing it is one
- * action, and the schema is versioned so an old save is migrated rather than
- * discarded — losing someone's records because a field was renamed is not
- * acceptable.
+ * Only preferences and results the player earned are stored. No identifiers,
+ * no analytics, nothing that leaves the machine. Everything lives under one
+ * key so clearing it is one action, and the schema is versioned so an old save
+ * is migrated rather than discarded - losing someone's records because a field
+ * was renamed is not acceptable.
  */
 
 export const STORAGE_KEY = 'ad-racers';
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export interface BestTime {
   /** Best full-race time, seconds. */
@@ -25,6 +25,25 @@ export interface BestTime {
   lap: number;
   /** Difficulty the best race time was set on. */
   difficulty: string;
+  /** Speed class the best race time was set at. */
+  speedClass?: string;
+}
+
+/**
+ * A completed championship, kept per (difficulty, speed class) pair.
+ *
+ * Stored as the best result rather than a history: a player wants to know
+ * whether they have won the Circuit at Ace on the fastest class, not what they
+ * scored on a Tuesday. Keeping one row per pair is also what makes the unlock
+ * rule below expressible in one line.
+ */
+export interface CircuitRecord {
+  /** Best finishing place across the whole championship, 1-based. */
+  place: number;
+  /** Points scored in that championship. */
+  points: number;
+  /** Total time across every round, seconds. */
+  totalTime: number;
 }
 
 export interface GameSettings {
@@ -38,10 +57,12 @@ export interface GameSettings {
   /** Whether the bounded catch-up assist is on. */
   catchUp: boolean;
   showPerformance: boolean;
-  cameraMode: 'chase' | 'close';
+  cameraMode: CameraMode;
   lastTrack: string;
   lastRacer: string;
   lastDifficulty: string;
+  /** Speed class id; see `SPEED_CLASSES` in `src/game/config.ts`. */
+  lastSpeedClass: string;
   /** Set once the player has seen the controls card. */
   seenControls: boolean;
 }
@@ -51,6 +72,8 @@ export interface SaveData {
   settings: GameSettings;
   /** Best times keyed by track id. */
   bests: Record<string, BestTime>;
+  /** Championship records keyed by `${difficultyId}:${speedClassId}`. */
+  circuits: Record<string, CircuitRecord>;
 }
 
 export function defaultSettings(): GameSettings {
@@ -67,8 +90,38 @@ export function defaultSettings(): GameSettings {
     lastTrack: 'overgrown-interchange',
     lastRacer: 'thornline',
     lastDifficulty: 'pro',
+    lastSpeedClass: 'reclaim',
     seenControls: false,
   };
+}
+
+/**
+ * Which speed classes the player has earned.
+ *
+ * The first is always available. Each later one opens once the player has
+ * finished on the podium of a Circuit at the class below — a gate that is
+ * deliberately about *finishing a championship*, not about grinding: three
+ * podiums is one evening, and the reward is a faster game rather than a
+ * cosmetic.
+ *
+ * Nothing is ever hidden. A locked class is shown with what unlocks it, because
+ * a player deciding whether to keep playing deserves to see what is up there.
+ */
+export function unlockedSpeedClasses(save: SaveData, classIds: readonly string[]): Set<string> {
+  const unlocked = new Set<string>();
+  const first = classIds[0];
+  if (first) unlocked.add(first);
+  for (let i = 1; i < classIds.length; i++) {
+    const previous = classIds[i - 1];
+    const current = classIds[i];
+    if (!previous || !current) continue;
+    const earned = Object.entries(save.circuits).some(
+      ([key, record]) => key.endsWith(`:${previous}`) && record.place <= 3,
+    );
+    if (!earned) break;
+    unlocked.add(current);
+  }
+  return unlocked;
 }
 
 function structuredCloneBindings(bindings: KeyBindings): KeyBindings {
@@ -80,7 +133,7 @@ function structuredCloneBindings(bindings: KeyBindings): KeyBindings {
 }
 
 export function defaultSave(): SaveData {
-  return { version: SCHEMA_VERSION, settings: defaultSettings(), bests: {} };
+  return { version: SCHEMA_VERSION, settings: defaultSettings(), bests: {}, circuits: {} };
 }
 
 /**
@@ -120,7 +173,13 @@ function migrate(raw: unknown): SaveData {
   copyIf(incoming, 'lastTrack', save.settings, isString);
   copyIf(incoming, 'lastRacer', save.settings, isString);
   copyIf(incoming, 'lastDifficulty', save.settings, isString);
-  copyIf(incoming, 'cameraMode', save.settings, (v): v is 'chase' | 'close' => v === 'chase' || v === 'close');
+  copyIf(incoming, 'lastSpeedClass', save.settings, isString);
+  copyIf(
+    incoming,
+    'cameraMode',
+    save.settings,
+    (v): v is CameraMode => v === 'chase' || v === 'close' || v === 'far',
+  );
 
   if (version >= 2 && typeof incoming.audio === 'object' && incoming.audio !== null) {
     const audio = incoming.audio as Record<string, unknown>;
@@ -149,6 +208,23 @@ function migrate(raw: unknown): SaveData {
         race: isNumber(best.race) && best.race > 0 ? best.race : Infinity,
         lap: isNumber(best.lap) && best.lap > 0 ? best.lap : Infinity,
         difficulty: isString(best.difficulty) ? best.difficulty : 'pro',
+        // A v2 save predates speed classes, so every time in it was set at the
+        // base class. Recording that is what stops an old record silently
+        // claiming to have been set on a faster one.
+        speedClass: isString(best.speedClass) ? best.speedClass : 'reclaim',
+      };
+    }
+  }
+
+  if (typeof data.circuits === 'object' && data.circuits !== null) {
+    for (const [key, entry] of Object.entries(data.circuits as Record<string, unknown>)) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      const record = entry as Record<string, unknown>;
+      if (!isNumber(record.place)) continue;
+      save.circuits[key] = {
+        place: Math.max(1, Math.round(record.place)),
+        points: isNumber(record.points) ? record.points : 0,
+        totalTime: isNumber(record.totalTime) && record.totalTime > 0 ? record.totalTime : Infinity,
       };
     }
   }
@@ -210,16 +286,37 @@ export function recordResult(
   raceTime: number,
   bestLap: number,
   difficulty: string,
+  speedClass = 'reclaim',
 ): { race: boolean; lap: boolean } {
-  const existing = save.bests[trackId] ?? { race: Infinity, lap: Infinity, difficulty };
+  const existing = save.bests[trackId] ?? { race: Infinity, lap: Infinity, difficulty, speedClass };
   const beatRace = Number.isFinite(raceTime) && raceTime > 0 && raceTime < existing.race;
   const beatLap = Number.isFinite(bestLap) && bestLap > 0 && bestLap < existing.lap;
   save.bests[trackId] = {
     race: beatRace ? raceTime : existing.race,
     lap: beatLap ? bestLap : existing.lap,
     difficulty: beatRace ? difficulty : existing.difficulty,
+    speedClass: beatRace ? speedClass : (existing.speedClass ?? 'reclaim'),
   };
   return { race: beatRace, lap: beatLap };
+}
+
+/** Records a championship result if it beats what is already stored. */
+export function recordCircuit(
+  save: SaveData,
+  difficulty: string,
+  speedClass: string,
+  result: CircuitRecord,
+): boolean {
+  const key = `${difficulty}:${speedClass}`;
+  const existing = save.circuits[key];
+  // Better place wins; on a tie, more points; on a tie again, a quicker total.
+  const better =
+    !existing ||
+    result.place < existing.place ||
+    (result.place === existing.place && result.points > existing.points) ||
+    (result.place === existing.place && result.points === existing.points && result.totalTime < existing.totalTime);
+  if (better) save.circuits[key] = result;
+  return better;
 }
 
 /** Exported for tests, which need to exercise migration without localStorage. */

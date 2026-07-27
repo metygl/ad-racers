@@ -110,7 +110,35 @@ export function normalize(a: Vec2): Vec2 {
   return len > 1e-9 ? { x: a.x / len, z: a.z / len } : { x: 0, z: 0 };
 }
 
-/** Rotates a vector on the XZ plane. Positive angles turn +X towards +Z. */
+/**
+ * Rotates a vector on the XZ plane. Positive angles turn +X towards +Z.
+ *
+ * ## The handedness rule, stated once
+ *
+ * The simulation's `(x, z)` plane *is* three.js's `(x, z)` plane: the renderer
+ * maps them straight across. three.js is right-handed with +Y up, so +Z points
+ * **towards the viewer**, and that single fact decides every left/right
+ * question in this codebase:
+ *
+ * > Rotating a heading by **+90°** (the `+X → +Z` direction above) yields the
+ * > vehicle's **right**, not its left.
+ *
+ * Check it: at heading 0 the nose is +X and up is +Y, so the vehicle's right is
+ * `forward × up = X̂ × Ŷ = Ẑ` — and `rotate((1, 0), +90°) = (0, 1) = +Z`. The
+ * same holds for a camera: three.js's `lookAt` builds its screen-right axis as
+ * `up × (eye − target)`, which for a chase camera behind the car is exactly
+ * this vector. Screen right and vehicle right agree.
+ *
+ * **Therefore an increasing heading is a turn to the right.** This is the
+ * opposite of the intuition you get from sketching `(x, z)` on paper with z
+ * pointing up the page, and getting it backwards is not a cosmetic mistake: it
+ * inverts the steering. An earlier version of this file named the +90° vector
+ * `leftOf`, and every consumer inherited the error — `stepVehicle` negated the
+ * yaw to compensate, the AI negated its own steering output to compensate for
+ * *that*, and the net result was that the AI drove correctly while the player's
+ * "steer right" turned the skiff left. `tests/unit/handedness.test.ts` pins the
+ * rule down in screen space so it cannot drift again.
+ */
 export function rotate(a: Vec2, angle: number): Vec2 {
   const c = Math.cos(angle);
   const s = Math.sin(angle);
@@ -125,6 +153,24 @@ export function heading(a: Vec2): number {
 /** Unit vector for a heading. */
 export function fromHeading(angle: number): Vec2 {
   return { x: Math.cos(angle), z: Math.sin(angle) };
+}
+
+/**
+ * Unit vector pointing to the **right** of a heading — the +90° rotation. See
+ * the handedness rule on `rotate`.
+ */
+export function rightOf(angle: number): Vec2 {
+  return { x: -Math.sin(angle), z: Math.cos(angle) };
+}
+
+/** Unit vector pointing to the **left** of a heading. */
+export function leftOf(angle: number): Vec2 {
+  return { x: Math.sin(angle), z: -Math.cos(angle) };
+}
+
+/** Right-hand normal of a unit tangent, without going via an angle. */
+export function rightNormal(tangent: Vec2): Vec2 {
+  return { x: -tangent.z, z: tangent.x };
 }
 
 /**

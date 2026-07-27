@@ -1,7 +1,7 @@
 import type { Rng } from '../../core/rng';
 import { angleDelta, clamp, clamp01, distance, dot, fromHeading, heading as headingOf, lerp } from '../../core/math';
 import type { Vec2 } from '../../core/math';
-import { COMBAT, DRIFT, PHYSICS, RACE, SURGE } from '../config';
+import { COMBAT, DRIFT, HOP, PHYSICS, RACE, SURGE, TOW } from '../config';
 import type { Track } from '../track/buildTrack';
 import { sampleAt } from '../track/buildTrack';
 import { SURFACES } from '../track/types';
@@ -35,7 +35,7 @@ export interface DifficultyProfile {
    * Well below 1 even at Ace, and that is not timidity. The corner-speed model
    * reads curvature from the centreline, while the car actually drives an
    * offset line with a control lag, so the true limit for the path it takes is
-   * lower than the number the model produces. Measured across all three
+   * lower than the number the model produces. Measured across all four
    * courses, targeting 0.86 of the limit is both dirtier *and slower* than
    * targeting 0.72 — the extra entry speed is paid back with interest in
    * corner exit. Difficulty separation comes from `pace`, `reaction` and
@@ -314,6 +314,37 @@ export function driveAi(racer: RacerState, ctx: AiContext): ControlInput {
   // restarts the audio and the exhaust flare many times a second.
   input.boost = ai.boostHold > 0 && racer.surge > 0.02 && !racer.airborne;
 
+  // --- the tow -------------------------------------------------------------
+  /*
+   * Sitting in the wake charges a snap; pulling out spends it. A bold driver
+   * holds the tow to the end of the straight and goes late, which is exactly
+   * the decision the player faces. A timid one breaks early and wastes it.
+   *
+   * The AI does not get to see the charge value the player cannot: it reads
+   * `towCharge` off its own car, which is the same number the player's HUD
+   * shows.
+   */
+  if (racer.slipstreaming && racer.towCharge >= TOW.minCharge && ai.boldness > 0.3) {
+    // Committing to the pull-out is the same manoeuvre as an overtake, so it
+    // reuses the overtake timer rather than inventing a second lane-change
+    // controller that would fight it.
+    const corneringSoon = !straightAhead;
+    if (corneringSoon || racer.towCharge > 0.92) ai.overtakeTimer = Math.max(ai.overtakeTimer, 1.4);
+  }
+
+  // --- the hop -------------------------------------------------------------
+  /*
+   * Two uses, both defensive rather than clever: hop the last moment before a
+   * crest so the landing is level, and hop out of a patch of spoil. A bolder
+   * driver hops earlier and lands better.
+   *
+   * Deliberately *not* used to shave corners. An AI that hops constantly reads
+   * as a bug, and the mechanic's value to the player is the timing, which an
+   * opponent spamming it would devalue.
+   */
+  const crestAhead = surfaceDrop(ctx.track, racer.path, projection.distance, speed);
+  input.hop = !racer.airborne && speed > HOP.minSpeed * 3 && crestAhead && ai.boldness > 0.4;
+
   // --- companion strike ----------------------------------------------------
   input.strike = planStrike(racer, ctx);
 
@@ -344,10 +375,35 @@ function steerTowardsLine(racer: RacerState, ctx: AiContext, lateral: number, lo
   const crossTrack = clamp((lateral - projection.lateral) / Math.max(4, projection.halfWidth), -1.5, 1.5);
 
   const speed = Math.hypot(racer.velocity.x, racer.velocity.z);
+  // Opposite lock. `slip` is positive when the skiff is sliding towards its own
+  // right, which is the slide you catch by steering right.
   const damping = racer.slip * clamp01(speed / 30) * 0.55;
 
-  // Positive steer turns right; a positive heading error means turn left.
-  return clamp(-(error * AI_TUNING.headingGain + crossTrack * AI_TUNING.crossTrackGain + damping), -1, 1);
+  /*
+   * Positive steer turns right, and a positive heading error means the target
+   * is to the right — so every term carries straight through with no negation.
+   *
+   * This used to be negated as a whole, which cancelled a matching sign error
+   * in `stepVehicle` and left the AI driving correctly while the player steered
+   * backwards. Both negations are gone; the AI's behaviour is unchanged.
+   */
+  return clamp(error * AI_TUNING.headingGain + crossTrack * AI_TUNING.crossTrackGain + damping, -1, 1);
+}
+
+/**
+ * True when the surface is about to fall away sharply — a crest, in other
+ * words, and the one moment a hop is worth spending.
+ *
+ * Measured over roughly a fifth of a second of travel, which is far enough
+ * ahead to act on and near enough that it is still the same crest.
+ */
+function surfaceDrop(track: Track, path: Path, distance: number, speed: number): boolean {
+  const span = Math.max(6, speed * 0.2);
+  const here = sampleAhead(track, path, distance, 0).y;
+  const soon = sampleAhead(track, path, distance, span).y;
+  const later = sampleAhead(track, path, distance, span * 2).y;
+  // Rising then falling is a crest; a steady descent is just a hill.
+  return soon > here + 0.05 && later < soon - 0.35;
 }
 
 /** Mean curvature over a stretch of path, used for line and boost decisions. */
@@ -467,7 +523,40 @@ function chooseBranch(racer: RacerState, ctx: AiContext, normal: Vec2, halfWidth
     // Decide in the window 55-25 m before the split.
     if (gap <= 55 && gap >= 25 && ai.branchDecidedAt !== branch.entryMainDistance) {
       ai.branchDecidedAt = branch.entryMainDistance;
-      ai.branchChoice = ctx.rng.chance(ai.boldness) ? branch.id : null;
+      /*
+       * Choose by predicted route time, then by nerve — in that order.
+       *
+       * Boldness alone made the decision a dice roll on a *distance* saving,
+       * which is not the same thing as a time saving: a shortcut that is 48 m
+       * shorter but narrower, walled and on dirt can be slower for a car
+       * travelling fast enough. Measured across seeds, the boldest difficulty
+       * was finishing the technical course *behind* the middle one for exactly
+       * this reason, which inverts the whole ladder.
+       *
+       * Boldness now decides how thin a predicted margin the driver will accept
+       * — an Ace will take a cut that barely pays, a Rookie wants it obvious —
+       * and a route that is predicted to be slower is never taken by anyone.
+       */
+      /*
+       * Take it when it is worth taking, and let nerve set how thin a margin
+       * counts as worth it.
+       *
+       * This used to be a bare dice roll against boldness, which the comment
+       * above already described as something better than it was. Two
+       * consequences, both measured: a branch that was *strictly slower* was
+       * still taken by every crew in the field — Glasshouse's Rootway tore
+       * whole races apart that way — and the difficulty ordering the suite
+       * asserts was not real, a census over eight seeds reading 10 / 13 / 11
+       * for Rookie / Pro / Ace.
+       *
+       * `branch.idealGain` is the seconds the route actually saves, measured at
+       * build time with each metre's surface speed cap. A route that loses time
+       * is now never chosen by anyone at any difficulty, and a bold driver
+       * accepts a thinner margin than a cautious one — which makes the ordering
+       * a property of the design rather than of the seed.
+       */
+      const margin = lerp(RACE.branchMarginCautious, RACE.branchMarginBold, ai.boldness);
+      ai.branchChoice = branch.idealGain >= margin ? branch.id : null;
     }
   }
 
@@ -483,11 +572,33 @@ function chooseBranch(racer: RacerState, ctx: AiContext, normal: Vec2, halfWidth
   }
   if (gap > 60) return null;
 
-  // Aim a little way inside the branch mouth so the skiff arrives already
-  // pointing down it, rather than clipping the entrance and bouncing off.
-  const mouth = sampleAt(branch, Math.min(18, branch.length * 0.4));
+  /*
+   * Aim past the merge, not at the mouth.
+   *
+   * A branch now eases away from the main line over its first third so it
+   * leaves tangentially, which means the first stretch of it *is* the main
+   * line. Aiming eighteen metres in therefore aimed at the road the AI was
+   * already on, it never steered towards the cut, and it stopped taking
+   * shortcuts entirely. The aim point has to be far enough in to be somewhere
+   * the main line is not.
+   */
+  /*
+   * And be willing to leave the road to do it.
+   *
+   * The aim used to be clamped inside the main corridor, which quietly made
+   * branch entry impossible: a racer is handed to the corridor that *contains*
+   * it, so a driver that never steers past the road edge is never on the
+   * branch, and the AI stopped taking shortcuts entirely. Crossing the edge is
+   * not a mistake here — it is the manoeuvre.
+   *
+   * The bound is the run-off rather than the road, so a committed driver can
+   * reach a mouth that has already diverged, and still cannot aim at something
+   * halfway across the scenery.
+   */
+  const mouth = sampleAt(branch, branch.length * 0.45);
   const toMouth: Vec2 = { x: mouth.pos.x - racer.pos.x, z: mouth.pos.z - racer.pos.z };
-  return clamp(dot(toMouth, normal), -halfWidth * 0.95, halfWidth * 0.95);
+  const reach = halfWidth + PHYSICS.offTrackMargin * 0.6;
+  return clamp(dot(toMouth, normal), -reach, reach);
 }
 
 /**
@@ -543,7 +654,9 @@ function updateRecovery(racer: RacerState, ctx: AiContext, input: ControlInput):
   if (ai.recovery === 'reverse') {
     input.brake = true;
     input.throttle = 0;
-    input.steer = racer.lateral > 0 ? 0.6 : -0.6;
+    // `lateral` is positive to the right of the centreline, and reversing swings
+    // the nose the opposite way — so back out towards the middle of the road.
+    input.steer = racer.lateral > 0 ? -0.6 : 0.6;
     if (ai.recoveryTimer <= 0) {
       ai.recovery = 'realign';
       ai.recoveryTimer = 1.4;
@@ -555,7 +668,7 @@ function updateRecovery(racer: RacerState, ctx: AiContext, input: ControlInput):
   const projection = ctx.track.project(racer.pos, racer.path);
   const desired = headingOf(projection.tangent);
   const error = angleDelta(racer.heading, desired);
-  input.steer = clamp(-error * 2.2, -1, 1);
+  input.steer = clamp(error * 2.2, -1, 1);
   input.throttle = 0.7;
   if (ai.recoveryTimer <= 0 || (Math.abs(error) < 0.35 && speed > RACE.stuckSpeed * 2)) {
     ai.recovery = 'none';

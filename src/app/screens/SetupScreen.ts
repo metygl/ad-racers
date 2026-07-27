@@ -1,11 +1,13 @@
 import { formatLapTime } from '../../core/math';
 import type { BestTime } from '../../core/storage';
 import { DIFFICULTIES } from '../../game/ai/driver';
+import { SPEED_CLASSES } from '../../game/config';
 import { RACERS } from '../../game/racers';
 import type { RacerProfile } from '../../game/racers';
 import { TRACK_DEFINITIONS } from '../../game/track/tracks';
 import type { TrackDefinition } from '../../game/track/types';
 import { button, el } from '../ui/dom';
+import { courseDiorama, crewSilhouette } from '../ui/garage';
 
 /**
  * Race setup: course, skiff, difficulty.
@@ -20,11 +22,16 @@ export interface SetupSelection {
   trackId: string;
   racerId: string;
   difficultyId: string;
+  speedClassId: string;
 }
 
 export interface SetupActions {
+  /** A championship races every course in order, so it hides the course list. */
+  mode: 'single' | 'circuit';
   selection: SetupSelection;
   bests: Record<string, BestTime>;
+  /** Speed class ids the player has earned; the rest are shown locked. */
+  unlockedSpeedClasses: ReadonlySet<string>;
   onChange: (selection: SetupSelection) => void;
   onStart: () => void;
   onBack: () => void;
@@ -50,6 +57,8 @@ function trackCard(track: TrackDefinition, best: BestTime | undefined, selected:
     el(
       'label',
       { class: `card card--track card--${track.id}`, for: id },
+      // The course as its own layout, drawn from the spline the race runs on.
+      el('span', { class: 'card__art' }, courseDiorama(track)),
       el('span', { class: 'card__kicker', text: `Course ${TRACK_DEFINITIONS.indexOf(track) + 1}` }),
       el('span', { class: 'card__title', text: track.name }),
       el('span', { class: 'card__tagline', text: track.tagline }),
@@ -107,6 +116,8 @@ function racerCard(racer: RacerProfile, selected: boolean, onSelect: () => void)
     el(
       'label',
       { class: 'card card--racer', for: id },
+      // The machine, in profile, from the same build table the scene uses.
+      el('span', { class: 'card__art card__art--crew' }, crewSilhouette(racer)),
       swatch,
       el('span', { class: 'card__title', text: racer.crew }),
       el('span', { class: 'card__crew', text: `${racer.pilot} & ${racer.wrench} · ${racer.skiff}` }),
@@ -172,18 +183,64 @@ export function buildSetupScreen(actions: SetupActions): HTMLElement {
     );
   }
 
+  const classList = el('div', {
+    class: 'card-grid card-grid--difficulty',
+    role: 'radiogroup',
+    'aria-label': 'Speed class',
+  });
+  for (const speedClass of SPEED_CLASSES) {
+    const unlocked = actions.unlockedSpeedClasses.has(speedClass.id);
+    const id = `speed-${speedClass.id}`;
+    const input = el('input', { type: 'radio', name: 'speed', id, class: 'card__input' });
+    input.checked = speedClass.id === selection.speedClassId && unlocked;
+    input.disabled = !unlocked;
+    input.addEventListener('change', () => {
+      selection.speedClassId = speedClass.id;
+      emit();
+    });
+    classList.append(
+      el(
+        'div',
+        { class: 'card-wrap' },
+        input,
+        el(
+          'label',
+          { class: `card card--difficulty ${unlocked ? '' : 'card--locked'}`, for: id },
+          el('span', { class: 'card__title', text: speedClass.label }),
+          el('span', { class: 'card__blurb', text: speedClass.description }),
+          // A locked class is shown, with what opens it. Hiding it would leave
+          // a player with no idea there is anything further to reach for.
+          unlocked
+            ? null
+            : el('span', { class: 'card__lock', text: 'Finish a Circuit on the podium in the class below.' }),
+        ),
+      ),
+    );
+  }
+
+  const circuit = actions.mode === 'circuit';
+
   return el(
     'section',
     { class: 'screen screen--setup', 'data-screen': 'setup', 'aria-labelledby': 'setup-heading' },
-    el('h1', { class: 'screen__heading', id: 'setup-heading', text: 'Race setup' }),
-    el('div', { class: 'setup__section' }, el('h2', { class: 'screen__subheading', text: 'Course' }), trackList),
+    el('h1', { class: 'screen__heading', id: 'setup-heading', text: circuit ? 'Circuit setup' : 'Race setup' }),
+    circuit
+      ? el('p', {
+          class: 'screen__lead',
+          text: `A championship over all ${TRACK_DEFINITIONS.length} courses. Points every round; everyone scores.`,
+        })
+      : null,
+    circuit
+      ? null
+      : el('div', { class: 'setup__section' }, el('h2', { class: 'screen__subheading', text: 'Course' }), trackList),
     el('div', { class: 'setup__section' }, el('h2', { class: 'screen__subheading', text: 'Crew' }), racerList),
     el('div', { class: 'setup__section' }, el('h2', { class: 'screen__subheading', text: 'Difficulty' }), difficultyList),
+    el('div', { class: 'setup__section' }, el('h2', { class: 'screen__subheading', text: 'Speed class' }), classList),
     el(
       'div',
       { class: 'screen__actions' },
       button('Back', actions.onBack),
-      button('Start race', actions.onStart, { primary: true, class: 'btn--large' }),
+      button(circuit ? 'Start circuit' : 'Start race', actions.onStart, { primary: true, class: 'btn--large' }),
     ),
   );
 }

@@ -1,8 +1,18 @@
 import * as THREE from 'three';
 import { Rng, hashSeed } from '../../core/rng';
+import { PHYSICS } from '../../game/config';
 import { mergeGeometries } from './mergeGeometry';
+import type { MergePart } from './mergeGeometry';
 import type { Track } from '../../game/track/buildTrack';
 import type { ObstacleDefinition, PathSample, SceneryKind, TrackTheme } from '../../game/track/types';
+import { familyMaterial } from '../materials/families';
+
+/** Multiplies a colour's lightness, keeping its hue and saturation. */
+function shade(color: number, factor: number): THREE.Color {
+  const c = new THREE.Color(color);
+  const hsl = c.getHSL({ h: 0, s: 0, l: 0 });
+  return c.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l * factor));
+}
 
 /**
  * Set dressing and static obstacles.
@@ -16,8 +26,70 @@ import type { ObstacleDefinition, PathSample, SceneryKind, TrackTheme } from '..
  * having *enough* things rather than detailed ones.
  */
 
+/**
+ * Adds a wind sway to an instanced material, in the vertex shader.
+ *
+ * Foliage that does not move is the loudest possible statement that a world is
+ * geometry rather than a place — and animating it on the CPU would mean
+ * rewriting an instance matrix buffer every frame for two thousand trees. The
+ * sway is a function of world position and time, so every instance gets its own
+ * phase for free and the whole species still costs one draw call.
+ *
+ * The displacement scales with height above the instance origin, so trunks stay
+ * planted and only the canopy moves. Anything else looks like the tree is
+ * sliding around on the ground.
+ */
+function applyWind(material: THREE.Material, strength: number, speed: number): { time: { value: number } } {
+  const time = { value: 0 };
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uWindTime = time;
+    shader.uniforms.uWindStrength = { value: strength };
+    shader.uniforms.uWindSpeed = { value: speed };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+         uniform float uWindTime;
+         uniform float uWindStrength;
+         uniform float uWindSpeed;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         {
+           vec3 instanceOrigin = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+           float phase = instanceOrigin.x * 0.13 + instanceOrigin.z * 0.11;
+           float height = max(transformed.y, 0.0);
+           float sway = sin(uWindTime * uWindSpeed + phase) * 0.7
+                      + sin(uWindTime * uWindSpeed * 1.7 + phase * 2.3) * 0.3;
+           transformed.x += sway * uWindStrength * height * height * 0.02;
+           transformed.z += sway * uWindStrength * height * height * 0.012;
+         }`,
+      );
+  };
+  // Changing `onBeforeCompile` after a material has been used needs a new
+  // program; setting the key up front keeps three from caching the unmodified
+  // shader against this material.
+  material.customProgramCacheKey = () => `wind-${strength}-${speed}`;
+  return { time };
+}
+
 /** Prototype geometry for one scenery kind, in local space, y-up from 0. */
-function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.BufferGeometry; material: THREE.Material } {
+interface Prototype {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
+  wind?: number;
+  /**
+   * A second instanced mesh at the same transforms, in a different material
+   * family. One extra draw call for the whole species, and the only way a
+   * single silhouette can be made of two materials.
+   */
+  extra?: { geometry: THREE.BufferGeometry; material: THREE.Material };
+  /** Emissive modulation, for anything that is a working light. */
+  flicker?: { amplitude: number; speed: number };
+}
+
+function prototype(kind: SceneryKind, theme: TrackTheme): Prototype {
   const stone = new THREE.MeshStandardMaterial({ color: theme.shoulderColor, roughness: 0.95, flatShading: true });
 
   switch (kind) {
@@ -31,7 +103,16 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({ color: 0x2f5c3a, roughness: 0.9, flatShading: true }),
+        // Foliage takes its colour from the course's terrain accent rather than
+        // a fixed green. The art bible puts every plant a full value band below
+        // the road, and a hard-coded green cannot honour that on a salt flat or
+        // in a quarry at last light.
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 0.72),
+          roughness: 0.92,
+          flatShading: true,
+        }),
+        wind: 0.5,
       };
     }
     case 'broadleaf': {
@@ -42,7 +123,12 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({ color: 0x4a7c3f, roughness: 0.88, flatShading: true }),
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 1.05),
+          roughness: 0.9,
+          flatShading: true,
+        }),
+        wind: 0.9,
       };
     }
     case 'palm': {
@@ -52,7 +138,12 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({ color: 0x6d8a4a, roughness: 0.9, flatShading: true }),
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 1.2),
+          roughness: 0.9,
+          flatShading: true,
+        }),
+        wind: 1.4,
       };
     }
     case 'boulder':
@@ -85,7 +176,12 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
       ]);
       return {
         geometry,
-        material: new THREE.MeshStandardMaterial({ color: 0xb8ac7e, roughness: 1, flatShading: true }),
+        material: new THREE.MeshStandardMaterial({
+          color: shade(theme.terrainAccent, 1.35),
+          roughness: 1,
+          flatShading: true,
+        }),
+        wind: 2.2,
       };
     }
     case 'crystal': {
@@ -114,6 +210,136 @@ function prototype(kind: SceneryKind, theme: TrackTheme): { geometry: THREE.Buff
         material: new THREE.MeshStandardMaterial({ color: 0x6b4231, roughness: 0.95, flatShading: true }),
       };
     }
+
+    /*
+     * ------------------------------------------------------------------
+     * Glasshouse Vigil's own vocabulary.
+     *
+     * The art review's judgement on this course was "no readable glasshouse":
+     * a good sky over a generic road. A place has to be built out of the
+     * things it *was* — glazing bars, growth racks, lamp masts, the roof on
+     * the floor — not out of the same trees as everywhere else with a
+     * different tint. Every one of these is authored to read as a specific
+     * piece of ruined horticulture at race distance.
+     * ------------------------------------------------------------------
+     */
+    case 'glassFrame': {
+      /*
+       * A standing glazing frame, most of its panes gone.
+       *
+       * The surviving glass is the point. Two translucent panes in a mostly
+       * empty grid say "this was a roof" far more clearly than a full one
+       * would, and the gaps let the sky through — which is where this course's
+       * only real light comes from.
+       */
+      const bar = 0.16;
+      const geometry = mergeGeometries([
+        ...[-1, 1].map((side): MergePart => ({
+          geometry: new THREE.BoxGeometry(bar, 9, bar),
+          position: [0, 4.5, side * 2.6],
+        })),
+        { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 9, 0] },
+        { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 5.6, 0] },
+        { geometry: new THREE.BoxGeometry(bar, bar, 5.4), position: [0, 2.4, 0] },
+      ]);
+      return {
+        geometry,
+        // Two families in one silhouette, which is what a glazing frame *is*:
+        // the bars are painted structure, the surviving pane is glass. Merged
+        // into one mesh, one of the two has to win — and a pane that reflects
+        // like a girder is the exact failure ART-08 named.
+        material: familyMaterial('structure', { color: shade(theme.shoulderColor, 0.9), repeat: 3 }),
+        extra: {
+          geometry: new THREE.BoxGeometry(0.04, 3.1, 2.5).translate(0, 7.4, -1.2),
+          material: familyMaterial('glazing', { color: 0xcfe6f2, repeat: 2 }),
+        },
+      };
+    }
+    case 'growthRack': {
+      // Three tiers of planting trays, with three centuries of growth spilling
+      // over the edges.
+      const geometry = mergeGeometries([
+        ...[0, 1, 2].map((tier): MergePart => ({
+          geometry: new THREE.BoxGeometry(2.4, 0.14, 1.1),
+          position: [0, 0.9 + tier * 1.1, 0],
+        })),
+        ...[-1, 1].flatMap((side) =>
+          [-1, 1].map((end): MergePart => ({
+            geometry: new THREE.BoxGeometry(0.1, 3.3, 0.1),
+            position: [end * 1.1, 1.65, side * 0.5],
+          })),
+        ),
+        ...[0, 1, 2].map((tier): MergePart => ({
+          geometry: new THREE.IcosahedronGeometry(0.62, 0),
+          position: [tier % 2 === 0 ? 0.6 : -0.5, 1.2 + tier * 1.1, 0],
+        })),
+      ]);
+      return {
+        geometry,
+        material: familyMaterial('growth', { color: shade(theme.terrainAccent, 1.15), repeat: 2 }),
+        wind: 0.6,
+      };
+    }
+    case 'lampMast': {
+      /*
+       * A growth lamp still running on whatever is left in it.
+       *
+       * Emissive, and on this course that is load bearing rather than
+       * decorative: the lamps are most of what tells a driver where the road
+       * goes. Fog is disabled on the head so a distant one still reads as a
+       * light rather than dissolving into the haze — which is exactly what you
+       * navigate by at night.
+       */
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.16, 0.26, 11, 6), position: [0, 5.5, 0] },
+        { geometry: new THREE.BoxGeometry(1.8, 0.18, 0.5), position: [0.7, 11, 0] },
+        { geometry: new THREE.BoxGeometry(1.2, 0.42, 0.44), position: [1.3, 10.7, 0] },
+      ]);
+      return {
+        geometry,
+        material: familyMaterial('emitter', {
+          color: 0x2b3540,
+          emissive: 0xbfe9d0,
+          emissiveIntensity: 0.28,
+          repeat: 2,
+        }),
+        // A lamp with three centuries of corrosion in its ballast does not burn
+        // steady. The flicker is slow and shallow — enough that the course
+        // feels *alive* rather than lit, and not enough to make the thing a
+        // driver navigates by unreliable.
+        flicker: { amplitude: 0.12, speed: 1.9 },
+      };
+    }
+    case 'fallenTruss': {
+      // The roof, on the floor. Low, long, and lying at an angle so it reads as
+      // *collapsed* rather than as a wall someone built.
+      const geometry = mergeGeometries([
+        { geometry: new THREE.BoxGeometry(7, 0.18, 0.18), position: [0, 0.8, -0.7], rotation: [0, 0, 0.12] },
+        { geometry: new THREE.BoxGeometry(7, 0.18, 0.18), position: [0, 0.3, 0.7] },
+        ...[-2, 0, 2].map((along): MergePart => ({
+          geometry: new THREE.BoxGeometry(0.14, 0.14, 1.6),
+          position: [along, 0.55, 0],
+          rotation: [0.5, 0, 0],
+        })),
+      ]);
+      return {
+        geometry,
+        material: familyMaterial('corroded', { color: shade(theme.shoulderColor, 0.7), repeat: 3 }),
+      };
+    }
+    case 'volunteer': {
+      // Saplings that got in through the broken roof and never left.
+      const geometry = mergeGeometries([
+        { geometry: new THREE.CylinderGeometry(0.1, 0.16, 2.6, 5), position: [0, 1.3, 0] },
+        { geometry: new THREE.IcosahedronGeometry(1.15, 0), position: [0, 3.1, 0] },
+        { geometry: new THREE.IcosahedronGeometry(0.7, 0), position: [0.7, 2.5, 0.3] },
+      ]);
+      return {
+        geometry,
+        material: familyMaterial('growth', { color: shade(theme.terrainAccent, 1.3), repeat: 2 }),
+        wind: 1.6,
+      };
+    }
   }
 }
 
@@ -124,17 +350,25 @@ export interface SceneryOptions {
   castShadows: boolean;
 }
 
+export interface SceneryResult {
+  group: THREE.Group;
+  /** Advances every wind-swayed material. */
+  update: (elapsed: number) => void;
+}
+
 /**
  * Scatters every scenery spec the course declares. Placement is seeded from the
  * track, so the world is identical on every load and every machine — which
  * matters because the screenshots in the docs and the visual regression checks
  * would otherwise drift.
  */
-export function buildScenery(track: Track, options: SceneryOptions): THREE.Group {
+export function buildScenery(track: Track, options: SceneryOptions): SceneryResult {
   const group = new THREE.Group();
   group.name = 'scenery';
   const samples = track.main.samples;
   const theme = track.definition.theme;
+  const clocks: { value: number }[] = [];
+  const lights: { material: THREE.MeshStandardMaterial; amplitude: number; speed: number; base: number; phase: number }[] = [];
 
   for (const spec of track.definition.scenery) {
     const rng = new Rng(hashSeed(spec.kind, track.definition.seed));
@@ -160,9 +394,19 @@ export function buildScenery(track: Track, options: SceneryOptions): THREE.Group
         const x = sample.pos.x + sample.normal.x * lateral + sample.tangent.x * along;
         const z = sample.pos.z + sample.normal.z * lateral + sample.tangent.z * along;
 
-        // Never place anything on a drivable surface, including shortcuts.
+        /*
+         * Never place anything on a drivable surface — nor anywhere inside the
+         * run-off.
+         *
+         * The obvious clearance is "just off the road", and it is wrong. Only
+         * the course's declared obstacles are collidable, so a tree standing
+         * two metres past the white line is scenery a player drives *through*:
+         * the camera ends up inside a canopy with the road nowhere in frame.
+         * The run-off margin is how far a car can legitimately be flung, so it
+         * is the clearance scenery has to respect.
+         */
         const projection = track.project({ x, z });
-        if (Math.abs(projection.lateral) < projection.halfWidth + 2.5) continue;
+        if (Math.abs(projection.lateral) < projection.halfWidth + PHYSICS.offTrackMargin * 0.8) continue;
 
         placements.push({ x, z, scale: rng.range(spec.scaleMin, spec.scaleMax), rotation: rng.range(0, Math.PI * 2) });
       }
@@ -175,29 +419,118 @@ export function buildScenery(track: Track, options: SceneryOptions): THREE.Group
       { length: budget },
       (_, index) => placements[Math.floor((index * placements.length) / budget)] as (typeof placements)[number],
     );
-    const { geometry, material } = prototype(spec.kind, theme);
-    const mesh = new THREE.InstancedMesh(geometry, material, selected.length);
-    mesh.name = `scenery-${spec.kind}`;
-    mesh.castShadow = options.castShadows;
-    mesh.receiveShadow = false;
-    mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    const { geometry, material, wind, extra, flicker } = prototype(spec.kind, theme);
+    if (wind) clocks.push(applyWind(material, wind, 1.1).time);
+    if (flicker) lights.push({ material: material as THREE.MeshStandardMaterial, ...flicker, base: (material as THREE.MeshStandardMaterial).emissiveIntensity, phase: rng.range(0, 6.28) });
 
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3();
-    selected.forEach((p, index) => {
-      position.set(p.x, options.heightAt(p.x, p.z) - 0.2, p.z);
-      quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rotation);
-      scale.setScalar(p.scale);
-      matrix.compose(position, quaternion, scale);
-      mesh.setMatrixAt(index, matrix);
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    mesh.computeBoundingSphere();
-    group.add(mesh);
+    // Both parts of a two-family species take the same transforms, so the
+    // pane is always in the frame that goes with it.
+    for (const [partGeometry, partMaterial, suffix] of [
+      [geometry, material, ''],
+      ...(extra ? ([[extra.geometry, extra.material, '-glass']] as const) : []),
+    ] as const) {
+      const mesh = new THREE.InstancedMesh(partGeometry, partMaterial, selected.length);
+      mesh.name = `scenery-${spec.kind}${suffix}`;
+      mesh.castShadow = options.castShadows && suffix === '';
+      mesh.receiveShadow = false;
+      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+      selected.forEach((p, index) => {
+        position.set(p.x, options.heightAt(p.x, p.z) - 0.2, p.z);
+        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rotation);
+        scale.setScalar(p.scale);
+        matrix.compose(position, quaternion, scale);
+        mesh.setMatrixAt(index, matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
   }
 
+  let clock = 0;
+  return {
+    group,
+    update: (elapsed: number) => {
+      clock += elapsed;
+      for (const c of clocks) c.value += elapsed;
+      for (const light of lights) {
+        // Two incommensurate sines, so the flicker never settles into a
+        // rhythm the eye can predict and start reading as a strobe.
+        const wobble =
+          Math.sin(clock * light.speed + light.phase) * 0.7 + Math.sin(clock * light.speed * 2.7 + light.phase * 1.9) * 0.3;
+        light.material.emissiveIntensity = light.base * (1 + wobble * light.amplitude);
+      }
+    },
+  };
+}
+
+/**
+ * The far horizon.
+ *
+ * A ring of large, low, silhouette-only landforms placed well outside the
+ * course, at the value band the art bible reserves for vistas. Nothing here is
+ * ever reached or collided with; its whole job is that the frame has a
+ * background as well as a foreground, which is the difference between a course
+ * that sits in a world and a course that sits on a table.
+ *
+ * One instanced draw for the whole ring, and no shadows — a shadow cast from
+ * 900 m away lands nowhere useful and costs a shadow-map slot that the trees
+ * beside the road need.
+ */
+export function buildHorizon(track: Track): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'horizon';
+  const { bounds, definition } = track;
+  const theme = definition.theme;
+
+  const centreX = (bounds.minX + bounds.maxX) / 2;
+  const centreZ = (bounds.minZ + bounds.maxZ) / 2;
+  const reach = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) / 2;
+
+  const rng = new Rng(hashSeed('horizon', definition.seed));
+  const geometry = new THREE.ConeGeometry(1, 1, 5, 1);
+  // Vistas sit a band below the near terrain and carry no high-frequency
+  // detail, so they read as depth rather than as noise.
+  const material = new THREE.MeshStandardMaterial({
+    color: shade(theme.fogColor, 0.42),
+    roughness: 1,
+    flatShading: true,
+    fog: true,
+  });
+
+  const count = 88;
+  const mesh = new THREE.InstancedMesh(geometry, material, count);
+  mesh.name = 'horizon-range';
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  const axis = new THREE.Vector3(0, 1, 0);
+
+  for (let i = 0; i < count; i++) {
+    // Two staggered rings, so the range has depth of its own instead of reading
+    // as a single scalloped wall.
+    const band = i % 2;
+    const angle = (i / count) * Math.PI * 2 + rng.range(-0.05, 0.05);
+    const distance = reach + 340 + band * 260 + rng.range(-70, 70);
+    const height = rng.range(60, 190) * (1 + band * 0.5);
+    const width = rng.range(180, 420);
+    position.set(centreX + Math.cos(angle) * distance, -18, centreZ + Math.sin(angle) * distance);
+    quaternion.setFromAxisAngle(axis, rng.range(0, Math.PI * 2));
+    scale.set(width, height, width * rng.range(0.7, 1.2));
+    matrix.compose(position, quaternion, scale);
+    mesh.setMatrixAt(i, matrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.computeBoundingSphere();
+  group.add(mesh);
   return group;
 }
 

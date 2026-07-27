@@ -4,6 +4,8 @@ import type { ActionId } from '../../game/input/bindings';
 import { QUALITY_ORDER, QUALITY_TIERS } from '../../render/quality';
 import type { QualityId } from '../../render/quality';
 import { button, el, segmented, slider, toggle } from '../ui/dom';
+import { CAMERA_MODES } from '../../render/camera/ChaseCamera';
+import type { CameraMode } from '../../render/camera/ChaseCamera';
 
 /**
  * Settings.
@@ -47,6 +49,42 @@ export function buildSettingsScreen(actions: SettingsActions): HTMLElement {
     },
   );
 
+  const bindingStatus = el('p', { class: 'bindings__status', role: 'status', 'aria-live': 'polite' });
+
+  /**
+   * Commits a rebinding, resolving conflicts by swapping.
+   *
+   * Accepting a duplicate silently was a real defect: binding Accelerate to `S`
+   * left Brake on `S` as well, so one key asked for full throttle and full
+   * brake at once and the car became very hard to control for no visible
+   * reason. Swapping is the least destructive resolution — nothing is ever
+   * unbound behind the player's back — and it is announced, because a change
+   * made to a control the player did not touch has to be visible.
+   */
+  const applyBinding = (action: ActionId, code: string): void => {
+    const clash = (Object.keys(settings.bindings) as ActionId[]).find(
+      (other) => other !== action && (settings.bindings[other] ?? []).includes(code),
+    );
+    const previous = settings.bindings[action] ?? [];
+    settings.bindings[action] = [code];
+
+    if (clash) {
+      const displaced = previous.filter((existing) => existing !== code);
+      settings.bindings[clash] = displaced.length > 0 ? displaced : [];
+      const clashLabel = ACTIONS.find((a) => a.id === clash)?.label ?? clash;
+      const actionLabel = ACTIONS.find((a) => a.id === action)?.label ?? action;
+      bindingStatus.textContent =
+        displaced.length > 0
+          ? `${keyLabel(code)} was ${clashLabel}. Swapped: ${clashLabel} is now ${displaced.map(keyLabel).join(' or ')}.`
+          : `${keyLabel(code)} was ${clashLabel}, which is now unbound. ${actionLabel} is ${keyLabel(code)}.`;
+    } else {
+      bindingStatus.textContent = '';
+    }
+
+    emit();
+    renderBindings();
+  };
+
   const bindingRows = el('div', { class: 'bindings' });
   const renderBindings = (): void => {
     bindingRows.replaceChildren();
@@ -59,13 +97,10 @@ export function buildSettingsScreen(actions: SettingsActions): HTMLElement {
         current.classList.add('bindings__keys--waiting');
         actions.onRebind(action.id, (code) => {
           current.classList.remove('bindings__keys--waiting');
-          if (code) {
-            settings.bindings[action.id] = [code];
-            emit();
-          }
+          if (code) applyBinding(action.id, code);
           current.textContent = bindingLabel(settings.bindings, action.id);
         });
-      }, { class: 'btn--small' });
+      }, { class: 'btn--small bindings__change' });
       rebind.setAttribute('aria-label', `Change the key for ${action.label}`);
       bindingRows.append(el('div', { class: 'bindings__row' }, label, current, rebind));
     }
@@ -126,12 +161,9 @@ export function buildSettingsScreen(actions: SettingsActions): HTMLElement {
         settings.showPerformance = v;
         emit();
       }),
-      segmented<'chase' | 'close'>(
+      segmented<CameraMode>(
         'Camera',
-        [
-          { value: 'chase', label: 'Chase' },
-          { value: 'close', label: 'Close' },
-        ],
+        CAMERA_MODES.map((mode) => ({ value: mode.id, label: mode.label })),
         settings.cameraMode,
         (value) => {
           settings.cameraMode = value;
@@ -166,6 +198,7 @@ export function buildSettingsScreen(actions: SettingsActions): HTMLElement {
           : 'Connect a gamepad and press a button to use it. Left stick or D-pad steers.',
       }),
       bindingRows,
+      bindingStatus,
       button('Reset keys to defaults', () => {
         settings.bindings = JSON.parse(JSON.stringify(DEFAULT_KEY_BINDINGS)) as typeof settings.bindings;
         renderBindings();

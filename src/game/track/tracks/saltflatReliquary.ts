@@ -1,4 +1,5 @@
-import { makeRing, scatterAlong } from '../authoring';
+import { chordAlong, makeRing, scatterAlong } from '../authoring';
+import { previewMainPath } from '../buildTrack';
 import type { RingNode } from '../authoring';
 import type { HazardDefinition, ObstacleDefinition, TrackDefinition } from '../types';
 
@@ -42,23 +43,43 @@ const NODES: RingNode[] = [
 ];
 
 const ring = makeRing(NODES, { scale: 1.02, aspectX: 1.2, aspectZ: 0.86 });
+const mainLine = previewMainPath(ring.points);
 
 /**
- * The Lagoon Line. A straight cut across the shallow water in the middle of
- * the long right-hand sweep. It is shorter, but `water` costs 42% top speed
- * and over half the grip, so it only pays if you carry enough entry speed and
- * do not have to steer once you are in it.
+ * The Lagoon Line. A cut across the shallow water in the middle of the long
+ * right-hand sweep. It is shorter, but `water` costs 42% top speed and over
+ * half the grip, so it only pays if you carry enough entry speed and do not
+ * have to steer once you are in it.
+ *
+ * Authored with `chordAlong` like every other shortcut rather than by hand.
+ * The hand-placed version met the road at 33 degrees on entry and 45 on exit —
+ * survivable here only because this course is open-edged and thirty metres
+ * wide, and the same mistake on Emberfall's walled Conveyor was destroying
+ * cars. One authoring path means one merge guarantee.
  */
-const lagoon = [
-  ring.pointAt(112, 1.0, { halfWidth: 13 }),
-  ring.pointAt(128, 0.84, { halfWidth: 11, surface: 'water' }),
-  ring.pointAt(150, 0.76, { halfWidth: 11, surface: 'water' }),
-  ring.pointAt(172, 0.78, { halfWidth: 11, surface: 'water' }),
-  ring.pointAt(190, 0.88, { halfWidth: 12, surface: 'water' }),
-  // A generous mouth at the exit: leaving a low-grip surface at speed needs
-  // room, and a tight exit turns the shortcut into a guaranteed excursion.
-  ring.pointAt(206, 1.0, { halfWidth: 14 }),
-];
+/*
+ * The water is a *stretch* of the cut, not the whole of it.
+ *
+ * Flooding everything between the mouths made this branch 2.3 seconds slower
+ * than the road it cuts — measured, and now asserted in `track.test.ts`. Water
+ * caps top speed at 62% and takes nearly half the grip, so four hundred metres
+ * of it cannot be bought with any distance saving this course can offer. The
+ * same arithmetic had already turned Glasshouse's Rootway into a line no driver
+ * should ever take and every AI took anyway.
+ *
+ * A shortcut has to be *worth* something before its risk means anything. So the
+ * cut keeps its saved distance, and the lagoon becomes the middle third of it:
+ * long enough that carrying entry speed through without steering is the whole
+ * skill, short enough that doing it well pays.
+ */
+const lagoon = chordAlong(mainLine, 585, 1040, 9, -44, (t) => {
+  const mouth = t < 0.16 || t > 0.84;
+  const wet = t > 0.38 && t < 0.62;
+  return {
+    halfWidth: mouth ? 14 : 11.8,
+    ...(wet ? { surface: 'water' as const } : {}),
+  };
+});
 
 /** Rusted spires. Big, obvious, and placed to reward a tidy line, not to trap. */
 const spires: ObstacleDefinition[] = [
@@ -125,23 +146,38 @@ export const SALTFLAT_RELIQUARY: TrackDefinition = {
     { kind: 'reed', density: 0.7, bandInner: 1.05, bandOuter: 1.9, scaleMin: 0.6, scaleMax: 1.2 },
   ],
   theme: {
-    skyTop: 0x2b6fc4,
-    skyHorizon: 0xf2f7ff,
-    fogColor: 0xe8f1f7,
-    fogDensity: 0.0016,
-    sunColor: 0xffffff,
-    sunIntensity: 2.6,
-    sunElevation: 1.15,
+    // High, flat, brutal light on white salt. The grade pulls saturation *down*
+    // rather than up: the drama here is glare and scale, and a bleached
+    // landscape that is also colourful reads as a postcard rather than a place
+    // nobody should be racing on.
+    skyTop: 0x2a6fae,
+    skyHorizon: 0xd6e2e8,
+    fogColor: 0xdfe6e4,
+    fogDensity: 0.0009,
+    sunColor: 0xfffaf0,
+    sunIntensity: 2.9,
+    sunElevation: 1.05,
     sunAzimuth: 0.7,
-    ambientSky: 0xcfe6ff,
-    ambientGround: 0xd8d2c0,
-    ambientIntensity: 1.25,
-    roadColor: 0xd9d3c2,
-    shoulderColor: 0xbfb7a2,
-    terrainColor: 0xe6e2d6,
-    terrainAccent: 0xc9bfa8,
-    dustColor: 0xf2ecdd,
+    ambientSky: 0xcfe2f2,
+    ambientGround: 0x8e8f84,
+    ambientIntensity: 1.7,
+    roadColor: 0x7d7f78,
+    shoulderColor: 0x9a9484,
+    kerbColor: 0xf0ede0,
+    terrainColor: 0x5e6055,
+    terrainAccent: 0x7a7a68,
+    dustColor: 0xe8ecec,
     speedLineColor: 0xffffff,
+    cloudiness: 0.22,
+    grade: {
+      lift: [0.02, 0.022, 0.026],
+      gain: [1.0, 1.0, 1.02],
+      saturation: 0.9,
+      contrast: 1.06,
+      bloomThreshold: 1.3,
+      bloomIntensity: 0.44,
+      vignette: 0.2,
+    },
   },
   offTrackSurface: 'sand',
   checkpointCount: 12,

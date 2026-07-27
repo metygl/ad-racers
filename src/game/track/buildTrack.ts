@@ -1,5 +1,5 @@
 import type { Vec2 } from '../../core/math';
-import { clamp, closestPointOnSegment, distanceSq, lerp, normalize } from '../../core/math';
+import { clamp, closestPointOnSegment, distanceSq, lerp, normalize, rightNormal } from '../../core/math';
 import { catmullRom, catmullRomScalar, splineIndex } from './spline';
 import type {
   BranchDefinition,
@@ -13,6 +13,7 @@ import type {
   SurfaceId,
   TrackDefinition,
 } from './types';
+import { SURFACES } from './types';
 
 /** Arc-length spacing of resampled path points, in metres. */
 const SAMPLE_SPACING = 1.5;
@@ -20,6 +21,42 @@ const SAMPLE_SPACING = 1.5;
 const FINE_SUBDIVISIONS = 32;
 /** Cell size of the broadphase grid used by `project`. */
 const GRID_CELL = 12;
+/**
+ * How far either side of a branch mouth the main line's barrier is removed.
+ *
+ * Generous, because the window has to cover the whole span over which the two
+ * corridors overlap and a racer can be handed between them — and because the
+ * cost of being wrong in the safe direction is a few metres of open edge,
+ * while the cost of being wrong the other way is a car delivered into a wall
+ * at racing speed with nothing it could have done differently.
+ */
+const JUNCTION_CLEARANCE = 45;
+/**
+ * Reference speed for comparing routes, in m/s.
+ *
+ * A single number rather than a per-crew one on purpose: the *ordering* of two
+ * routes barely changes with speed, and a route decision that differed by crew
+ * would make the same corner unlearnable from watching a rival take it.
+ */
+const REFERENCE_SPEED = 46;
+/**
+ * How far before an open path's end it stops claiming racers, in metres.
+ *
+ * Long enough that a car always has real road ahead of the line it is
+ * following, short enough that it is still inside the blended merge where the
+ * branch and the main line describe the same tarmac.
+ */
+const MERGE_HANDOFF = 12;
+
+/** Ideal time to drive a path, respecting each metre's surface speed cap. */
+function pathIdealTime(samples: readonly PathSample[]): number {
+  let total = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const step = (samples[i] as PathSample).distance - (samples[i - 1] as PathSample).distance;
+    total += step / (REFERENCE_SPEED * SURFACES[(samples[i] as PathSample).surface].speedCap);
+  }
+  return total;
+}
 
 interface FineSample {
   pos: Vec2;
@@ -170,16 +207,18 @@ function buildPath(
     return {
       ...s,
       tangent,
-      // Left normal: rotating the tangent by +90° on the XZ plane.
-      normal: { x: -tangent.z, z: tangent.x },
+      // Right-hand normal: +90° on the XZ plane is the vehicle's right. See the
+      // handedness rule in `core/math.ts`.
+      normal: rightNormal(tangent),
       curvature: 0,
       mainDistance: entryMainDistance + (length > 1e-6 ? (s.distance / length) * span : 0),
     };
   });
 
   // Signed curvature from the turn angle between consecutive tangents divided
-  // by the arc length between them. Used for AI corner-speed prediction and
-  // for banking the camera, so it needs to be smooth, not just correct.
+  // by the arc length between them; positive is a right-hand corner. Used for
+  // AI corner-speed prediction and for banking the camera, so it needs to be
+  // smooth, not just correct.
   for (let i = 0; i < n; i++) {
     const prev = samples[splineIndex(i - 1, n, closed)] as PathSample;
     const next = samples[splineIndex(i + 1, n, closed)] as PathSample;
@@ -201,7 +240,7 @@ function buildPath(
     (samples[i] as PathSample).curvature = c;
   });
 
-  return { id, closed, samples, length, entryMainDistance, exitMainDistance };
+  return { id, closed, samples, length, entryMainDistance, exitMainDistance, idealGain: 0 };
 }
 
 /**
@@ -318,6 +357,54 @@ export class Track {
       }
       return buildPath(branch.id, branch.points, false, { entry, exit });
     });
+    /*
+     * What each branch is actually worth, in seconds.
+     *
+     * Measured the same way `tests/unit/track.test.ts` measures it: length
+     * against the main span it replaces, with every metre divided by the speed
+     * its surface allows. A branch that is shorter and wetter can be worth less
+     * than nothing, and the AI has to be able to see that.
+     */
+    for (const branch of this.branches) {
+      const span = this.forwardGap(branch.entryMainDistance, branch.exitMainDistance);
+      const branchTime = pathIdealTime(branch.samples);
+      let mainTime = 0;
+      for (let d = SAMPLE_SPACING; d <= span; d += SAMPLE_SPACING) {
+        mainTime += SAMPLE_SPACING / (REFERENCE_SPEED * SURFACES[this.sampleMain((branch.entryMainDistance + d) % this.length).surface].speedCap);
+      }
+      branch.idealGain = mainTime - branchTime;
+    }
+
+    /*
+     * A junction cannot be walled.
+     *
+     * Where a branch leaves or rejoins, two corridors occupy the same ground
+     * and a racer's projection may legitimately be on either. If the main line
+     * happens to carry a barrier through that window, a car completing the
+     * branch is delivered into it: a review measured a centred, correctly
+     * driven Conveyor exit arriving at the wall at 48 m/s, dropping to 1.7 m/s,
+     * and then reversing back down the road. It was not a driver error and no
+     * line could avoid it, because the trapping face was on the path the car
+     * was being handed *to*.
+     *
+     * So the barrier is removed from both sides of every mouth, at build time,
+     * from the one place that knows where the mouths are. The corridor is still
+     * bounded — leaving it is still off-track — but there is nothing solid to
+     * be delivered into. This is the same "one route source" rule the rest of
+     * the junction follows.
+     */
+    for (const branch of this.branches) {
+      const first = branch.samples[0] as PathSample;
+      const last = branch.samples[branch.samples.length - 1] as PathSample;
+      for (const mouth of [first.mainDistance, last.mainDistance]) {
+        for (const sample of this.main.samples) {
+          if (Math.abs(this.forwardGap(mouth, sample.mainDistance)) <= JUNCTION_CLEARANCE) {
+            sample.edge = 'open';
+          }
+        }
+      }
+    }
+
     this.allPaths = [this.main, ...this.branches];
     this.grid = new SampleGrid(this.allPaths);
 
@@ -381,6 +468,8 @@ export class Track {
     const candidates = this.grid.query(point.x, point.z, 2);
     let best: Projection | null = null;
     let bestScore = Infinity;
+    /** Containment rank of the incumbent: 2 preferred, 1 containing, 0 neither. */
+    let bestRank = -1;
 
     const consider = (path: Path, index: number): void => {
       const n = path.samples.length;
@@ -390,7 +479,7 @@ export class Track {
       const t = closestPointOnSegment(point, a.pos, b.pos);
       const center: Vec2 = { x: lerp(a.pos.x, b.pos.x, t), z: lerp(a.pos.z, b.pos.z, t) };
       const tangent = normalize({ x: lerp(a.tangent.x, b.tangent.x, t), z: lerp(a.tangent.z, b.tangent.z, t) });
-      const normal: Vec2 = { x: -tangent.z, z: tangent.x };
+      const normal = rightNormal(tangent);
       const lateral = (point.x - center.x) * normal.x + (point.z - center.z) * normal.z;
       const halfWidth = lerp(a.halfWidth, b.halfWidth, t);
 
@@ -401,17 +490,92 @@ export class Track {
       // as if it were underneath the car. That made progress jump backwards and
       // forwards by tens of metres every frame and was the root cause of the AI
       // sawing at the wheel.
+      /*
+       * The preference bonus is withdrawn where an open path has run out.
+       *
+       * `closestPointOnSegment` clamps, so a point beyond the end of a branch
+       * projects onto its final segment and the returned `lateral` stops
+       * meaning anything: a racer three metres past the Conveyor's exit
+       * reported a lateral of -32 m against a 9.9 m corridor, which the physics
+       * read as being far outside a wall and answered with an impact. That is
+       * the 44 m/s the review measured for *successfully completing* the
+       * shortcut.
+       *
+       * The same clamping hazard is already handled for the score itself by
+       * measuring true distance; this is the other half of it. A branch that
+       * has ended must not keep hold of the racer by seniority.
+       */
+      /*
+       * A branch stops claiming a racer *before* it physically runs out.
+       *
+       * Holding on until the last centimetre means the last thing a car steers
+       * by is the few metres of corridor with the least road left in it: a
+       * field trace found an opponent pinned on the Conveyor's edge for four
+       * seconds at the exit, on track, on tarmac, with nothing touching it —
+       * it was following a line that was about to stop existing. Through the
+       * merge the two corridors coincide anyway, so handing over a few metres
+       * early costs nothing and gives the car somewhere to aim.
+       */
+      const endingSoon =
+        !path.closed &&
+        lerp(a.distance, b.distance, t) > path.length - MERGE_HANDOFF;
+      const clampedAtEnd =
+        !path.closed && (((index === 0 && t <= 0) || (nextIndex === n - 1 && t >= 1)) || endingSoon);
+      const preferred = preferredPath === path && !clampedAtEnd;
+
+      /*
+       * Containment beats proximity. This is the route-truth rule.
+       *
+       * Scoring purely by distance to a centreline picks whichever line happens
+       * to run nearest, and near a branch that is *narrower than the road it
+       * runs beside* that is the wrong answer: a skiff in the middle of
+       * Overgrown's main corridor projected onto the slip road at a lateral of
+       * -11.85 m against a 9.99 m half-width, so the simulation reported
+       * off-track, sand grip and stuck logic while the picture showed painted
+       * kerbs and tarmac underneath the car. No line discipline can solve a
+       * surface boundary that contradicts what the player can see.
+       *
+       * A path that actually contains the point therefore always wins over one
+       * that does not, and distance only breaks ties inside each class. A path
+       * that has run out cannot claim containment at all, because past the end
+       * of an open path `closestPointOnSegment` clamps and `lateral` stops
+       * meaning anything — which is the other half of the same bug, and what
+       * made a finished branch keep hold of a racer through a merge.
+       *
+       * `tests/unit/route-truth.test.ts` audits every corridor of every course
+       * against this rule in both directions.
+       */
+      const contains = !clampedAtEnd && Math.abs(lateral) <= halfWidth;
+      /*
+       * Three ranks, and the top one is what makes a merge stable.
+       *
+       * Where two corridors overlap — which is the whole of a branch mouth —
+       * both contain the racer and whichever centreline happens to be nearer
+       * wins. That flips from step to step: a trace through the Conveyor exit
+       * switched main, main, main, conveyor, main across five frames, and every
+       * switch moved the reported main-line distance by up to fourteen metres.
+       * The AI steers off that number, the HUD's gaps are computed from it, and
+       * the run-off logic reads the lateral that comes with it.
+       *
+       * So while the corridor a racer is *already on* still contains them, they
+       * stay on it. The handoff then happens exactly once, at the point where
+       * the old corridor genuinely runs out, which is what a merge means.
+       */
+      const rank = contains ? (preferred ? 2 : 1) : 0;
       const score =
-        Math.hypot(point.x - center.x, point.z - center.z) -
-        (preferredPath && path === preferredPath ? halfWidth * 0.25 : 0);
-      if (score >= bestScore) return;
+        Math.hypot(point.x - center.x, point.z - center.z) - (preferred ? halfWidth * 0.25 : 0);
+      if (rank < bestRank) return;
+      if (rank === bestRank && score >= bestScore) return;
 
       let segmentLength = b.distance - a.distance;
       if (segmentLength < 0) segmentLength += path.length;
       const distance = (a.distance + segmentLength * t) % (path.closed ? path.length : Infinity);
       const mainDistance = lerp(a.mainDistance, b.mainDistance + (b.mainDistance < a.mainDistance ? this.length : 0), t);
 
+      const bank = lerp(a.bank, b.bank, t);
+
       bestScore = score;
+      bestRank = rank;
       best = {
         path,
         sampleIndex: index,
@@ -422,8 +586,23 @@ export class Track {
         center,
         tangent,
         normal,
-        y: lerp(a.y, b.y, t),
-        bank: lerp(a.bank, b.bank, t),
+        /*
+         * Elevation of the road *at this lateral offset*, not of the
+         * centreline.
+         *
+         * Banking rotates the ribbon about its centreline, so on a 16 m
+         * half-width at 9 degrees the low edge sits 2.5 m below the centre and
+         * the high edge 2.5 m above it. Reporting the centreline height put a
+         * car two metres in the air on the low side and buried in the mesh on
+         * the high side, and — because the terrain was pinned to the centreline
+         * too — the low half of every banked road was hidden *underground*.
+         * That is what made a skiff on the inside of Saltflat's long bend look
+         * like it was on sand while the physics correctly reported road.
+         *
+         * There is one road surface. This is its height.
+         */
+        y: lerp(a.y, b.y, t) + Math.sin(bank) * lateral,
+        bank,
         curvature: lerp(a.curvature, b.curvature, t),
         surface: t < 0.5 ? a.surface : b.surface,
         edge: t < 0.5 ? a.edge : b.edge,
@@ -480,7 +659,7 @@ export function sampleAt(path: Path, distance: number): PathSample {
     pos: { x: lerp(a.pos.x, b.pos.x, t), z: lerp(a.pos.z, b.pos.z, t) },
     y: lerp(a.y, b.y, t),
     tangent,
-    normal: { x: -tangent.z, z: tangent.x },
+    normal: rightNormal(tangent),
     halfWidth: lerp(a.halfWidth, b.halfWidth, t),
     bank: lerp(a.bank, b.bank, t),
     curvature: lerp(a.curvature, b.curvature, t),

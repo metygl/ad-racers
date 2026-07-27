@@ -1,9 +1,20 @@
 import { AudioEngine } from '../audio/AudioEngine';
-import { clamp01, formatLapTime } from '../core/math';
+import { clamp01, formatLapTime, ordinal } from '../core/math';
 import { PerformanceMonitor } from '../core/perf';
-import { clearSave, defaultSave, loadSave, recordResult, saveSave } from '../core/storage';
+import {
+  clearSave,
+  defaultSave,
+  loadSave,
+  recordCircuit,
+  recordResult,
+  saveSave,
+  unlockedSpeedClasses,
+} from '../core/storage';
 import type { GameSettings, SaveData } from '../core/storage';
-import { FIXED_STEP, MAX_STEPS_PER_FRAME } from '../game/config';
+import { FIXED_STEP, MAX_STEPS_PER_FRAME, SPEED_CLASSES, getSpeedClass } from '../game/config';
+import type { SpeedClass } from '../game/config';
+import { applyRoundResult, createCircuit, isComplete, playerPlace, playerStanding } from '../game/circuit';
+import type { CircuitState } from '../game/circuit';
 import { getDifficulty } from '../game/ai/driver';
 import { InputManager } from '../game/input/InputManager';
 import { bindingLabel } from '../game/input/bindings';
@@ -14,6 +25,7 @@ import { emptyInput } from '../game/sim/state';
 import type { ControlInput, SimEvent } from '../game/sim/state';
 import { getTrack, TRACK_DEFINITIONS } from '../game/track/tracks';
 import { GameRenderer } from '../render/Renderer';
+import { CAMERA_MODES } from '../render/camera/ChaseCamera';
 import { AdaptiveQuality, detectInitialQuality } from '../render/quality';
 import type { QualityId } from '../render/quality';
 import { buildSettingsScreen } from './screens/SettingsScreen';
@@ -22,6 +34,7 @@ import { buildTitleScreen } from './screens/TitleScreen';
 import { buildControlsCard, buildMessagePanel, buildPauseOverlay, buildResultsScreen } from './screens/panels';
 import { Hud } from './ui/Hud';
 import { TouchControls, shouldUseTouch } from './ui/TouchControls';
+import { GamepadNavigator } from './ui/gamepadNav';
 import { clear, el, trapFocus } from './ui/dom';
 
 /**
@@ -34,7 +47,47 @@ import { clear, el, trapFocus } from './ui/dom';
  * breakpoint can never make the race play out differently.
  */
 
-type ScreenName = 'loading' | 'title' | 'setup' | 'settings' | 'controls' | 'race' | 'results' | 'error' | 'unsupported';
+type ScreenName =
+  | 'loading'
+  | 'title'
+  | 'setup'
+  | 'settings'
+  | 'controls'
+  | 'race'
+  | 'results'
+  | 'error'
+  | 'unsupported';
+
+/**
+ * How the current race came to exist.
+ *
+ * A championship round and a one-off race are the same `Simulation` with the
+ * same rules; the only difference is what happens at the results screen. Making
+ * that an explicit mode rather than a nullable circuit field is what keeps
+ * "restart" honest: restarting a championship round has to replay *that round's*
+ * seed, not roll a new race.
+ */
+type RaceMode = 'single' | 'circuit';
+
+/**
+ * Steps per frame allowed while the field finishes behind the player.
+ *
+ * Twenty seconds of race time resolves in about a second of wall clock, which
+ * is exactly as long as a finish camera should linger anyway.
+ */
+const RESOLVE_STEPS_PER_FRAME = 160;
+
+/**
+ * How long the finish camera runs before the results screen.
+ *
+ * Measured against the resolve, which takes about a second of real time to
+ * finish the field behind the player — so the beat costs the player almost
+ * nothing they were not already waiting for, and buys the one shot in the game
+ * that shows the machine they have been driving from outside.
+ */
+const FINISH_HOLD = 2.1;
+/** The same beat without the orbit, for reduced motion. */
+const FINISH_HOLD_REDUCED = 0.9;
 
 export interface AppOptions {
   root: HTMLElement;
@@ -69,6 +122,8 @@ export class App {
   private screen: ScreenName = 'loading';
   private previousScreen: ScreenName = 'title';
   private paused = false;
+  /** Seconds of finish camera left before the results screen. */
+  private finishHold = 0;
   private accumulator = 0;
   private lastFrame = 0;
   private frameHandle = 0;
@@ -76,8 +131,12 @@ export class App {
   private systemReducedMotion = false;
   private contextLost = false;
   private raceSeed = 1;
+  private raceMode: RaceMode = 'single';
+  private circuit: CircuitState | null = null;
   private lastResultRecords = { race: false, lap: false };
+  private lastUnlock: string | null = null;
   private detachInput: (() => void) | null = null;
+  private readonly gamepadNav: GamepadNavigator;
   private lastPlayerInput: ControlInput = emptyInput();
 
   constructor(options: AppOptions) {
@@ -90,9 +149,18 @@ export class App {
     this.hud = new Hud();
     this.hud.root.hidden = true;
     this.perfOverlay = el('div', { class: 'perf', hidden: true, 'aria-hidden': 'true' });
-    this.touch = new TouchControls({ input: this.input, onPause: () => this.togglePause(true) });
+    this.touch = new TouchControls({
+      input: this.input,
+      onPause: () => this.togglePause(true),
+      onCamera: () => this.cycleCamera(),
+    });
 
     this.root.append(this.hud.root, this.ui, this.touch.root, this.perfOverlay);
+
+    this.gamepadNav = new GamepadNavigator({
+      root: this.ui,
+      onBack: () => this.handleMenuBack(),
+    });
 
     this.adaptive = new AdaptiveQuality(this.save.settings.autoQuality ? detectInitialQuality() : this.save.settings.quality);
   }
@@ -124,7 +192,12 @@ export class App {
     this.input.setEnabled(false);
 
     window.addEventListener('resize', this.handleResize);
+    window.addEventListener('popstate', this.handleBack);
     document.addEventListener('visibilitychange', this.handleVisibility);
+    // A race must not keep running behind a notification, another window, or a
+    // focused address bar. `visibilitychange` alone misses every case where the
+    // tab stays visible but stops being the thing the player is looking at.
+    window.addEventListener('blur', this.handleVisibility);
 
     try {
       this.renderer = new GameRenderer({
@@ -141,6 +214,12 @@ export class App {
       this.showUnsupported(error);
       return;
     }
+
+    // The renderer detects near misses because it is what holds the field and
+    // the camera; it has no business making a sound, so it calls back here.
+    this.renderer.onNearMiss = (intensity) => {
+      this.audio.play('nearMiss', { volume: 0.3 + intensity * 0.45 });
+    };
 
     this.handleResize();
     // Warm the first track so the first race does not stall on spline building.
@@ -160,7 +239,9 @@ export class App {
   dispose(): void {
     cancelAnimationFrame(this.frameHandle);
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('popstate', this.handleBack);
     document.removeEventListener('visibilitychange', this.handleVisibility);
+    window.removeEventListener('blur', this.handleVisibility);
     this.detachInput?.();
     this.audio.dispose();
     this.renderer?.dispose();
@@ -214,6 +295,42 @@ export class App {
   /** True until the player has interacted; suppresses the initial auto-focus. */
   private firstPaint = true;
 
+  /**
+   * The single place race visibility is decided.
+   *
+   * Every route that reaches or leaves a race goes through here, and it is
+   * idempotent: calling it twice is calling it once. That is not tidiness, it
+   * is the fix for a critical defect. `showPause` used to set `screen = 'race'`
+   * directly without touching HUD or touch visibility, so Pause → Settings →
+   * Back → Resume returned to a *running* race with the HUD hidden and every
+   * touch control gone — a total loss of control on a phone, and a total loss
+   * of information everywhere else. WebGL context restoration took the same
+   * route and produced the same result.
+   */
+  private applyRaceSurface(): void {
+    const inRace = this.screen === 'race' && this.simulation !== null;
+    const driving = inRace && !this.paused && !this.contextLost;
+    this.hud.root.hidden = !inRace;
+    this.ui.hidden = driving;
+    this.input.setEnabled(driving);
+    const touchDriving = driving && shouldUseTouch();
+    if (touchDriving) this.touch.show();
+    else this.touch.hide();
+    // The HUD gives ground to the thumbs only while they are actually there.
+    document.documentElement.classList.toggle('touch-active', touchDriving);
+    this.hud.setTouch(shouldUseTouch());
+    /*
+     * Tell the camera how much of the frame the thumbs are standing in.
+     *
+     * Read after the class toggle, on the next frame, because the controls'
+     * layout depends on it — measuring first would report the previous
+     * viewport's band. Desktop passes 0 and nothing changes.
+     */
+    requestAnimationFrame(() => {
+      this.renderer?.chase.setOccludedBand(touchDriving ? this.touch.occludedFraction() : 0);
+    });
+  }
+
   private showScreen(name: ScreenName, content?: HTMLElement): void {
     this.input.cancelCapture();
     this.releaseTrap?.();
@@ -221,13 +338,7 @@ export class App {
     this.screen = name;
     clear(this.ui);
     this.ui.dataset.screen = name;
-
-    const inRace = name === 'race';
-    this.hud.root.hidden = !inRace;
-    this.ui.hidden = inRace && !this.paused;
-    this.input.setEnabled(inRace && !this.paused);
-    if (inRace && shouldUseTouch()) this.touch.show();
-    else this.touch.hide();
+    this.applyRaceSurface();
 
     if (content) {
       this.ui.append(content);
@@ -254,19 +365,44 @@ export class App {
   }
 
   private showTitle(): void {
+    this.raceMode = 'single';
+    this.circuit = null;
     this.stopRace();
     this.showScreen(
       'title',
       buildTitleScreen({
         onRace: () => {
           void this.audio.start();
+          this.pendingMode = 'single';
+          if (!this.save.settings.seenControls) this.showControls(true);
+          else this.showSetup();
+        },
+        onCircuit: () => {
+          void this.audio.start();
+          this.pendingMode = 'circuit';
           if (!this.save.settings.seenControls) this.showControls(true);
           else this.showSetup();
         },
         onSettings: () => this.showSettings(),
         onControls: () => this.showControls(false),
         bestSummary: this.bestSummary(),
+        circuitSummary: this.circuitSummary(),
       }),
+    );
+  }
+
+  /** Which mode the setup screen will launch into. */
+  private pendingMode: RaceMode = 'single';
+
+  private circuitSummary(): string | null {
+    const entries = Object.entries(this.save.circuits);
+    if (entries.length === 0) return null;
+    const best = entries.reduce((a, b) => (a[1].place <= b[1].place ? a : b));
+    const [key, record] = best;
+    const [difficultyId, speedClassId] = key.split(':');
+    return (
+      `Circuit best — ${ordinal(record.place)} on ${getDifficulty(difficultyId ?? 'pro').label} ` +
+      `${getSpeedClass(speedClassId ?? 'reclaim').label}`
     );
   }
 
@@ -293,19 +429,30 @@ export class App {
     this.showScreen(
       'setup',
       buildSetupScreen({
+        mode: this.pendingMode,
         selection: {
           trackId: this.save.settings.lastTrack,
           racerId: this.save.settings.lastRacer,
           difficultyId: this.save.settings.lastDifficulty,
+          speedClassId: this.save.settings.lastSpeedClass,
         },
         bests: this.save.bests,
+        unlockedSpeedClasses: unlockedSpeedClasses(this.save, SPEED_CLASSES.map((c) => c.id)),
         onChange: (selection) => {
           this.save.settings.lastTrack = selection.trackId;
           this.save.settings.lastRacer = selection.racerId;
           this.save.settings.lastDifficulty = selection.difficultyId;
+          this.save.settings.lastSpeedClass = selection.speedClassId;
           this.persist();
         },
-        onStart: () => this.startRace(),
+        onStart: () => {
+          if (this.pendingMode === 'circuit') this.startCircuit();
+          else {
+            this.raceMode = 'single';
+            this.circuit = null;
+            this.startRace();
+          }
+        },
         onBack: () => this.showTitle(),
       }),
     );
@@ -363,14 +510,14 @@ export class App {
 
   // --- race lifecycle -----------------------------------------------------
 
-  private startRace(seed = Math.floor(performance.now()) >>> 0): void {
+  private startRace(seed = Math.floor(performance.now()) >>> 0, trackId = this.save.settings.lastTrack): void {
     if (!this.renderer) return;
     this.stopAttract();
     this.raceSeed = seed;
 
     let track;
     try {
-      track = getTrack(this.save.settings.lastTrack);
+      track = getTrack(trackId);
     } catch (error) {
       this.showScreen(
         'error',
@@ -396,6 +543,7 @@ export class App {
       track,
       entries,
       difficulty: getDifficulty(this.save.settings.lastDifficulty),
+      speedClass: this.activeSpeedClass(),
       seed,
       catchUp: this.save.settings.catchUp,
     });
@@ -414,6 +562,8 @@ export class App {
       this.audio.startAmbience(track.definition.id === 'emberfall-quarry' ? 55 : 62);
     });
 
+    // One history entry to absorb the first Back. See `handleBack`.
+    history.pushState({ race: true }, '');
     this.showScreen('race');
   }
 
@@ -466,20 +616,60 @@ export class App {
   }
 
   private restartRace(): void {
-    // Same seed replays exactly the same race, which is what makes "restart"
-    // a real retry rather than a reroll.
-    this.startRace(this.raceSeed);
+    // Same seed *and* same course replays exactly the same race, which is what
+    // makes "restart" a real retry rather than a reroll — and what stops a
+    // restarted championship round quietly becoming a different round.
+    this.startRace(this.raceSeed, this.simulation?.track.definition.id);
+  }
+
+  /**
+   * The speed class the player has actually earned.
+   *
+   * Read through the unlock check rather than straight off the settings,
+   * because a save edited by hand — or one carried over from a session where a
+   * class was unlocked and then the data was cleared — must not be able to
+   * start a race in a class the player has not opened.
+   */
+  private activeSpeedClass(): SpeedClass {
+    const unlocked = unlockedSpeedClasses(this.save, SPEED_CLASSES.map((c) => c.id));
+    const wanted = this.save.settings.lastSpeedClass;
+    return getSpeedClass(unlocked.has(wanted) ? wanted : (SPEED_CLASSES[0]?.id ?? 'reclaim'));
+  }
+
+  /** Starts a fresh championship over every course. */
+  private startCircuit(): void {
+    const playerId = this.save.settings.lastRacer;
+    this.raceMode = 'circuit';
+    this.circuit = createCircuit({
+      seed: Math.floor(performance.now()) >>> 0,
+      difficultyId: this.save.settings.lastDifficulty,
+      speedClassId: this.activeSpeedClass().id,
+      playerProfileId: playerId,
+      entries: [playerId, ...RACERS.filter((r) => r.id !== playerId).map((r) => r.id)],
+    });
+    this.startCircuitRound();
+  }
+
+  private startCircuitRound(): void {
+    const circuit = this.circuit;
+    const round = circuit?.rounds[circuit.currentRound];
+    if (!circuit || !round) {
+      this.showTitle();
+      return;
+    }
+    this.startRace(round.seed, round.trackId);
   }
 
   private showPause(): void {
     this.input.cancelCapture();
     this.paused = true;
-    this.input.setEnabled(false);
     this.audio.suspend();
-    this.ui.hidden = false;
     clear(this.ui);
     this.ui.dataset.screen = 'pause';
     this.screen = 'race';
+    // Restores the HUD and hides the thumb pads in one call, whichever route
+    // arrived here — including Pause → Settings → Back and a restored context.
+    this.applyRaceSurface();
     this.ui.append(
       buildPauseOverlay({
         onResume: () => this.togglePause(false),
@@ -504,8 +694,7 @@ export class App {
       this.releaseTrap = null;
       this.paused = false;
       clear(this.ui);
-      this.ui.hidden = true;
-      this.input.setEnabled(true);
+      this.applyRaceSurface();
       void this.audio.resume();
       // Drop any accumulated time so the race does not lurch on resume.
       this.accumulator = 0;
@@ -518,6 +707,7 @@ export class App {
     if (!simulation) return;
     const player = simulation.player;
     this.audio.stopEngines();
+    const speedClass = this.activeSpeedClass();
 
     this.lastResultRecords = { race: false, lap: false };
     if (player?.completed) {
@@ -527,20 +717,71 @@ export class App {
         player.finishTime,
         player.bestLap,
         this.save.settings.lastDifficulty,
+        speedClass.id,
       );
       this.persist();
     }
 
+    const results = simulation.results();
+    let circuitView: Parameters<typeof buildResultsScreen>[0]['circuit'] = null;
+    this.lastUnlock = null;
+
+    if (this.raceMode === 'circuit' && this.circuit) {
+      const before = new Set(unlockedSpeedClasses(this.save, SPEED_CLASSES.map((c) => c.id)));
+      this.circuit = applyRoundResult(
+        this.circuit,
+        results.map((racer) => ({
+          profileId: racer.profileId,
+          position: racer.finishPosition,
+          time: racer.finishTime,
+        })),
+      );
+      const complete = isComplete(this.circuit);
+      if (complete) {
+        const standing = playerStanding(this.circuit);
+        recordCircuit(this.save, this.circuit.difficultyId, this.circuit.speedClassId, {
+          place: playerPlace(this.circuit),
+          points: standing?.points ?? 0,
+          totalTime: standing?.totalTime ?? Infinity,
+        });
+        this.persist();
+        const after = unlockedSpeedClasses(this.save, SPEED_CLASSES.map((c) => c.id));
+        const opened = [...after].find((id) => !before.has(id));
+        this.lastUnlock = opened ? getSpeedClass(opened).label : null;
+      }
+      if (this.lastUnlock) this.hud.announceMoment(`${this.lastUnlock} unlocked`, 'reward');
+      circuitView = {
+        round: this.circuit.currentRound,
+        rounds: this.circuit.rounds.length,
+        standings: this.circuit.standings,
+        playerProfileId: this.circuit.playerProfileId,
+        complete,
+        ...(this.lastUnlock ? { unlocked: this.lastUnlock } : {}),
+      };
+    }
+
+    const inCircuit = this.raceMode === 'circuit' && this.circuit !== null;
+    const moreRounds = inCircuit && this.circuit !== null && !isComplete(this.circuit);
+
     this.showScreen(
       'results',
       buildResultsScreen({
-        results: simulation.results(),
+        results,
         playerIndex: player?.index ?? 0,
         track: simulation.track,
         difficultyId: this.save.settings.lastDifficulty,
+        speedClassId: speedClass.id,
         records: this.lastResultRecords,
-        onRematch: () => this.startRace(),
+        circuit: circuitView,
+        primaryLabel: moreRounds ? 'Next round' : inCircuit ? 'New circuit' : 'Rematch',
+        onPrimary: () => {
+          if (moreRounds) this.startCircuitRound();
+          else if (inCircuit) this.startCircuit();
+          else this.startRace();
+        },
         onSetup: () => {
+          this.raceMode = 'single';
+          this.circuit = null;
           this.stopRace();
           this.showSetup();
         },
@@ -555,29 +796,86 @@ export class App {
     if (this.input.isCapturing) return;
     switch (action) {
       case 'pause':
+        // Escape means "pause" in a race and "back" everywhere else. Having it
+        // do nothing on a menu is the sort of inconsistency that makes a
+        // keyboard player stop trusting the whole interface.
         if (this.screen === 'race') this.togglePause();
+        else this.handleMenuBack();
         break;
       case 'camera':
-        if (this.renderer && this.screen === 'race' && !this.paused) {
-          const next = this.renderer.chase.mode === 'chase' ? 'close' : 'chase';
-          this.renderer.chase.mode = next;
-          this.save.settings.cameraMode = next;
-          this.persist();
-        }
+        this.cycleCamera();
         break;
       default:
         break;
     }
   };
 
+  /**
+   * The back/cancel action, shared by the pad's B button and by Escape outside
+   * a race. Always goes somewhere sensible rather than nowhere.
+   */
+  private handleMenuBack(): void {
+    switch (this.screen) {
+      case 'race':
+        if (this.paused) this.togglePause(false);
+        break;
+      case 'settings':
+        if (this.previousScreen === 'race' && this.simulation) this.showPause();
+        else this.showTitle();
+        break;
+      case 'setup':
+      case 'controls':
+      case 'results':
+        this.showTitle();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Steps through the chase camera modes, from any input device. */
+  private cycleCamera(): void {
+    if (!this.renderer || this.screen !== 'race' || this.paused) return;
+    const ids = CAMERA_MODES.map((mode) => mode.id);
+    const index = ids.indexOf(this.renderer.chase.mode);
+    const next = ids[(index + 1) % ids.length] ?? 'chase';
+    this.renderer.chase.mode = next;
+    this.save.settings.cameraMode = next;
+    this.persist();
+    this.hud.notify(`Camera: ${CAMERA_MODES.find((m) => m.id === next)?.label ?? next}`, 'info');
+  }
+
   private handleResize = (): void => {
     const width = Math.max(1, this.root.clientWidth || window.innerWidth);
     const height = Math.max(1, this.root.clientHeight || window.innerHeight);
     this.renderer?.setSize(width, height);
+    // A rotation changes both the viewport and the controls' footprint, so the
+    // composition correction has to be re-measured with the new layout.
+    this.renderer?.chase.setOccludedBand(this.touch.occludedFraction());
+  };
+
+  /*
+   * Browser Back must not silently destroy a race.
+   *
+   * The app already protects a run from losing focus, from the tab being
+   * hidden, and from the graphics context being lost — and then a single Back
+   * gesture threw all of it away with no pause, no confirmation and no way
+   * back. A review measured the page going straight to `about:blank` mid-race.
+   * Back is the most common accidental action on a phone there is.
+   *
+   * Starting a race pushes one history entry, so the first Back lands here
+   * instead of leaving. It pauses and re-arms, which makes the gesture mean
+   * "stop and let me decide" — and a second, deliberate Back from the pause
+   * dialog leaves as normal. Menus keep ordinary Back behaviour.
+   */
+  private handleBack = (): void => {
+    if (this.screen !== 'race' || !this.simulation) return;
+    if (!this.paused) this.togglePause(true);
+    history.pushState({ race: true }, '');
   };
 
   private handleVisibility = (): void => {
-    if (document.hidden) {
+    if (document.hidden || !document.hasFocus()) {
       // Pausing a race when the tab is hidden is both correct and the cheapest
       // possible power saving: nothing simulates, nothing renders.
       if (this.screen === 'race' && !this.paused && this.simulation) this.togglePause(true);
@@ -611,6 +909,9 @@ export class App {
     // path is rare enough that the extra second does not matter.
     if (this.simulation && this.renderer) {
       this.renderer.buildWorld(this.simulation);
+      this.hud.prepare(this.simulation);
+      // Through the same atomic path as any other resume, so a restored context
+      // returns a complete race surface rather than a bare world.
       this.showPause();
     } else {
       this.showTitle();
@@ -629,6 +930,12 @@ export class App {
     const simulation = this.simulation;
     const renderer = this.renderer;
 
+    // Menus and the pause dialog are navigable with a pad, which is what makes
+    // the game operable on a controller-only device from first launch.
+    if (this.screen !== 'race' || this.paused) {
+      this.gamepadNav.update(this.input.activeGamepad(), elapsed);
+    }
+
     if (!simulation || !renderer || this.screen !== 'race') {
       this.runAttract(renderer, elapsed);
       this.perf.record(elapsed, 0);
@@ -639,33 +946,98 @@ export class App {
     if (!this.paused) {
       const input: ControlInput = this.input.poll(elapsed);
       this.lastPlayerInput = input;
-      this.accumulator += elapsed;
-      // Capping the accumulator is what stops a long stall from being "paid
-      // back" as a burst of simulation the player never sees.
-      const maxAccumulated = FIXED_STEP * MAX_STEPS_PER_FRAME;
+      const resolving = simulation.resolvingAfterPlayer;
+      const maxAccumulated = FIXED_STEP * (resolving ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME);
+      // Once the player has finished, the field resolves on a deterministic
+      // simulated-step budget rather than one paced by wall-clock elapsed
+      // time: raising the per-frame step ceiling alone does nothing, because
+      // an ordinary frame's real elapsed time is still only enough for a
+      // couple of fixed steps. Outside resolve, capping the accumulator to
+      // real elapsed time is what stops a long stall from being "paid back"
+      // as a burst of simulation the player never sees.
+      this.accumulator += resolving ? maxAccumulated : elapsed;
       if (this.accumulator > maxAccumulated) this.accumulator = maxAccumulated;
 
+      /*
+       * Once the player has crossed the line the remaining field is resolved at
+       * speed rather than in real time.
+       *
+       * The simulation now waits for rivals to actually finish instead of
+       * marking them DNF the moment the player arrives, and a deterministic
+       * step costs microseconds — so a few hundred extra steps a frame turns
+       * "wait twenty seconds for a real result" into "about a second of finish
+       * camera". Nothing about the outcome changes; only how long the player
+       * watches it happen.
+       */
+      const maxSteps = resolving ? RESOLVE_STEPS_PER_FRAME : MAX_STEPS_PER_FRAME;
       const events: SimEvent[] = [];
-      while (this.accumulator >= FIXED_STEP && steps < MAX_STEPS_PER_FRAME) {
+      while (this.accumulator >= FIXED_STEP && steps < maxSteps) {
+        if (simulation.phase === 'finished') break;
         simulation.step(steps === 0 ? input : { ...input, strike: 0, respawn: false });
         this.accumulator -= FIXED_STEP;
         steps += 1;
-        events.push(...simulation.drainEvents());
+        const stepEvents = simulation.drainEvents();
+        events.push(...stepEvents);
+        if (stepEvents.some((event) => event.type === 'raceEnd')) break;
       }
 
       if (events.length > 0) {
         renderer.consumeEvents(events, simulation);
         this.hud.handleEvents(events, simulation);
-        const heading = renderer.chase.camera.rotation.y;
-        this.audio.handleEvents(events, simulation, heading);
+        this.audio.handleEvents(events, simulation, renderer.chase.listenerYaw);
+        /*
+         * The finish moment.
+         *
+         * Starts the instant the *player* crosses the line, not when the field
+         * finishes — the reward belongs to the player's own flag. The camera
+         * swings out to a low three-quarter orbit and the rider comes off the
+         * bars, scaled by the result: a win gets an arm in the air, a sixth
+         * gets a rider slumped over the tank. ART-10's finding was that
+         * finishing had no spectacle at all; the race simply stopped and a
+         * table appeared.
+         */
+        for (const event of events) {
+          if (event.type !== 'finish') continue;
+          const finisher = simulation.racers[event.racer];
+          if (!finisher?.isPlayer) continue;
+          const field = Math.max(1, simulation.racers.length - 1);
+          const celebration = clamp01(1 - (event.position - 1) / field);
+          renderer.setCelebration(event.racer, celebration);
+          // Reduced motion keeps the beat and drops the orbit: the camera holds
+          // a steady three-quarter view rather than travelling around the car.
+          if (!this.save.settings.reducedMotion) renderer.chase.startFinish();
+          // Reduced motion drops the orbit, not the lighting: the hero still
+          // has to be visible, it just does not travel.
+          renderer.setHeroLight(true);
+        }
+
         if (events.some((event) => event.type === 'raceEnd')) {
+          /*
+           * The results screen waits out an authored beat rather than cutting.
+           *
+           * Long enough for the orbit to read and for the crowd reaction and
+           * the rider's pose to land, short enough that a player replaying a
+           * course for the tenth time is not held. Reduced motion keeps a
+           * shorter beat rather than none, so the transition is still a
+           * transition.
+           */
+          this.finishHold = this.save.settings.reducedMotion ? FINISH_HOLD_REDUCED : FINISH_HOLD;
+        }
+      }
+
+      this.audio.updateEngines(simulation, renderer.chase.listenerYaw);
+      this.hud.update(simulation, elapsed);
+
+      if (this.finishHold > 0) {
+        this.finishHold -= elapsed;
+        if (this.finishHold <= 0) {
+          renderer.chase.endFinish();
+          renderer.setHeroLight(false);
+          renderer.render(simulation, 0);
           this.finishRace();
           return;
         }
       }
-
-      this.audio.updateEngines(simulation, renderer.chase.camera.rotation.y);
-      this.hud.update(simulation, elapsed);
     } else {
       this.input.poll(elapsed);
     }
@@ -725,7 +1097,8 @@ export class App {
       `${snapshot.fps.toFixed(0)} fps · median ${snapshot.medianMs.toFixed(1)} ms · p95 ${snapshot.p95Ms.toFixed(1)} ms\n` +
       `steps/s ${snapshot.stepsPerSecond.toFixed(0)} · quality ${this.renderer?.qualityId ?? '-'}\n` +
       (stats
-        ? `draws ${stats.drawCalls} · tris ${(stats.triangles / 1000).toFixed(0)}k · particles ${stats.particles}\n`
+        ? `draws ${stats.drawCalls} +${stats.postPasses} post · tris ${(stats.triangles / 1000).toFixed(0)}k · ` +
+          `particles ${stats.particles}\n`
         : '') +
       (snapshot.heapMb !== null ? `heap ${snapshot.heapMb.toFixed(0)} MB` : '');
   }

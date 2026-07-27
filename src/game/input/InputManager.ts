@@ -22,9 +22,22 @@ export interface TouchState {
   accelerate: boolean;
   brake: boolean;
   drift: boolean;
+  hop: boolean;
   boost: boolean;
+  respawn: boolean;
   strike: -1 | 0 | 1;
 }
+
+const EMPTY_TOUCH: TouchState = {
+  steer: 0,
+  accelerate: false,
+  brake: false,
+  drift: false,
+  hop: false,
+  boost: false,
+  respawn: false,
+  strike: 0,
+};
 
 export class InputManager {
   private readonly held = new Set<string>();
@@ -32,7 +45,7 @@ export class InputManager {
   private bindings: KeyBindings;
   private gamepadIndex: number | null = null;
   private previousButtons: boolean[] = [];
-  private touch: TouchState = { steer: 0, accelerate: false, brake: false, drift: false, boost: false, strike: 0 };
+  private touch: TouchState = { ...EMPTY_TOUCH };
   /** Smoothed analogue steering, so keyboard input is not a square wave. */
   private steerAxis = 0;
   private lastSource: InputSource = 'keyboard';
@@ -76,7 +89,7 @@ export class InputManager {
     if (!enabled) {
       this.held.clear();
       this.steerAxis = 0;
-      this.touch = { steer: 0, accelerate: false, brake: false, drift: false, boost: false, strike: 0 };
+      this.touch = { ...EMPTY_TOUCH };
     }
   }
 
@@ -129,11 +142,28 @@ export class InputManager {
     this.pressedThisFrame.add(event.code);
 
     const action = this.actionFor(event.code);
-    if (action) {
-      // Space and the arrows scroll the page; the game owns them while bound.
-      if (event.code === 'Space' || event.code.startsWith('Arrow')) event.preventDefault();
-      this.onAction?.(action);
+    if (!action) return;
+
+    /*
+     * Outside a race the game owns nothing except Pause.
+     *
+     * This listener is on `window`, so it saw every key press on every menu —
+     * and because Space and the arrows are bound to driving actions it called
+     * `preventDefault` on them there too. That cancelled the *native* arrow-key
+     * behaviour of a radio group, so a keyboard player could move through the
+     * course, crew and difficulty cards, watch the selection appear to change,
+     * and then start a race with none of their choices applied. Silently
+     * starting a different race than the one someone selected is the sort of
+     * defect that makes every accessibility claim nominal.
+     */
+    if (!this.enabled) {
+      if (action === 'pause') this.onAction?.(action);
+      return;
     }
+
+    // Space and the arrows scroll the page; the game owns them while driving.
+    if (event.code === 'Space' || event.code.startsWith('Arrow')) event.preventDefault();
+    this.onAction?.(action);
   };
 
   private handleKeyUp = (event: KeyboardEvent): void => {
@@ -195,6 +225,7 @@ export class InputManager {
     let throttle = 0;
     let brake = false;
     let drift = false;
+    let hop = false;
     let boost = false;
     let strike: -1 | 0 | 1 = 0;
     let respawn = false;
@@ -206,6 +237,7 @@ export class InputManager {
     if (this.isHeld('accelerate')) throttle = 1;
     if (this.isHeld('brake')) brake = true;
     if (this.isHeld('drift')) drift = true;
+    if (this.isHeld('hop')) hop = true;
     if (this.isHeld('boost')) boost = true;
     if (this.isHeld('strikeLeft')) strike = -1;
     if (this.isHeld('strikeRight')) strike = 1;
@@ -236,13 +268,16 @@ export class InputManager {
         switch (action) {
           case 'accelerate':
             // Analogue triggers give proportional throttle.
-            throttle = Math.max(throttle, buttons[7]?.value ?? 1);
+            throttle = Math.max(throttle, buttons[7]?.value || 1);
             break;
           case 'brake':
             brake = true;
             break;
           case 'drift':
             drift = true;
+            break;
+          case 'hop':
+            hop = true;
             break;
           case 'boost':
             boost = true;
@@ -267,10 +302,16 @@ export class InputManager {
     }
 
     // --- touch --------------------------------------------------------------
-    if (this.touch.accelerate) throttle = 1;
+    let automaticThrottle = false;
+    if (this.touch.accelerate) {
+      throttle = 1;
+      automaticThrottle = true;
+    }
     if (this.touch.brake) brake = true;
     if (this.touch.drift) drift = true;
+    if (this.touch.hop) hop = true;
     if (this.touch.boost) boost = true;
+    if (this.touch.respawn) respawn = true;
     if (this.touch.strike !== 0) strike = this.touch.strike;
     if (this.touch.steer !== 0) analogueSteer = this.touch.steer;
 
@@ -288,9 +329,11 @@ export class InputManager {
     input.throttle = throttle;
     input.brake = brake;
     input.drift = drift;
+    input.hop = hop;
     input.boost = boost;
     input.strike = strike;
     input.respawn = respawn;
+    input.automaticThrottle = automaticThrottle;
 
     this.pressedThisFrame.clear();
     return input;
@@ -299,5 +342,16 @@ export class InputManager {
   /** True if any gamepad is currently connected. */
   hasGamepad(): boolean {
     return this.readGamepad() !== null;
+  }
+
+  /**
+   * The active pad, for the menu navigation layer.
+   *
+   * Exposed rather than duplicated: the navigator must read the same device the
+   * driving path reads, or "the pad works in a race but not in a menu" becomes
+   * two separate bugs instead of one behaviour.
+   */
+  activeGamepad(): Gamepad | null {
+    return this.readGamepad();
   }
 }

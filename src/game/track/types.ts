@@ -40,7 +40,7 @@ export interface ControlPoint {
   y?: number;
   /** Half-width of the drivable corridor at this point. */
   halfWidth: number;
-  /** Banking in radians; positive banks the left edge up. */
+  /** Banking in radians; positive banks the right edge up. */
   bank?: number;
   surface?: SurfaceId;
   edge?: EdgeKind;
@@ -96,7 +96,44 @@ export type SceneryKind =
   | 'pylon'
   | 'reed'
   | 'crystal'
-  | 'chimney';
+  | 'chimney'
+  /* --- Glasshouse Vigil: the hero course's own vocabulary --- */
+  /** A standing glazing frame, most of its panes long gone. */
+  | 'glassFrame'
+  /** A growth rack: three tiers of planting trays gone wild. */
+  | 'growthRack'
+  /** A lamp mast, still lit, that actually casts colour into the scene. */
+  | 'lampMast'
+  /** A collapsed roof truss, half buried. */
+  | 'fallenTruss'
+  /** Volunteer saplings that got in through the broken roof. */
+  | 'volunteer';
+
+/**
+ * Set-piece structures placed by hand rather than scattered.
+ *
+ * A landmark is not scenery: it is a thing a player navigates by, so it has to
+ * be in a specific place, at a specific scale, and visible from more than one
+ * point on the lap. The art bible asks for at least three per course.
+ */
+/**
+ * A hand-placed structure at a named point on the lap.
+ *
+ * Placed by *fraction of the centreline* rather than by world coordinate, and
+ * that is the whole design of this type. A landmark's job is to mark a specific
+ * corner — "the arch at the mouth of the Nave" — and a hard-coded x/z stops
+ * meaning that the moment the corner moves by a metre during tuning. A fraction
+ * cannot drift away from the course it describes.
+ */
+export interface LandmarkDefinition {
+  /** An arch over the road, a standing wall alongside, or a lit mast. */
+  kind: 'arch' | 'wall' | 'beacon';
+  /** Position along the lap, 0-1. */
+  at: number;
+  /** Offset from the centreline, in multiples of the local half-width. */
+  lateral: number;
+  scale?: number;
+}
 
 export interface ScenerySpec {
   kind: SceneryKind;
@@ -125,12 +162,49 @@ export interface TrackTheme {
   ambientIntensity: number;
   roadColor: number;
   shoulderColor: number;
+  /**
+   * Kerb stripe accent. One of only three places a course may use full
+   * saturation; see `docs/ART-BIBLE.md`.
+   */
+  kerbColor?: number;
   terrainColor: number;
   terrainAccent: number;
   /** Tint applied to dust and drift particles. */
   dustColor: number;
   /** Additive haze colour used for the speed streaks. */
   speedLineColor: number;
+  /**
+   * Per-course colour grade, applied in the post-processing composite.
+   *
+   * Grading is where a course gets its *feeling* rather than its palette: lift
+   * moves the shadows without touching the highlights, which is how a course
+   * reads as hazy or as crisp, and gain moves the highlights, which is how it
+   * reads as hot or as cold. Optional; the default grade is neutral.
+   */
+  grade?: {
+    /**
+     * Linear exposure applied before the tone map.
+     *
+     * Separate from `gain`, and the separation matters: exposure moves the
+     * whole image through the filmic curve, so raising it recovers detail in
+     * the shadows without flattening the highlights, whereas gain applied after
+     * the curve just washes everything out. A night course needs the first and
+     * is ruined by the second.
+     */
+    exposure?: number;
+    lift?: [number, number, number];
+    gamma?: [number, number, number];
+    gain?: [number, number, number];
+    saturation?: number;
+    contrast?: number;
+    bloomThreshold?: number;
+    bloomIntensity?: number;
+    vignette?: number;
+  };
+  /** 0-1 cloud cover in the sky shader. */
+  cloudiness?: number;
+  /** Renders a star field and dims the horizon glow. */
+  night?: boolean;
 }
 
 export interface TrackDefinition {
@@ -147,6 +221,8 @@ export interface TrackDefinition {
   obstacles: ObstacleDefinition[];
   hazards: HazardDefinition[];
   scenery: ScenerySpec[];
+  /** Hand-placed structures a player can navigate by. */
+  landmarks?: LandmarkDefinition[];
   theme: TrackTheme;
   /** Surface outside the corridor. */
   offTrackSurface: SurfaceId;
@@ -163,11 +239,11 @@ export interface PathSample {
   y: number;
   /** Unit tangent, pointing forwards along the path. */
   tangent: Vec2;
-  /** Unit normal, pointing to the left of the tangent. */
+  /** Unit normal, pointing to the **right** of the tangent (see `core/math.ts`). */
   normal: Vec2;
   halfWidth: number;
   bank: number;
-  /** Signed curvature (1/m); positive turns left. */
+  /** Signed curvature (1/m); positive is a turn to the **right**. */
   curvature: number;
   /** Arc length from the start of this path. */
   distance: number;
@@ -185,6 +261,18 @@ export interface Path {
   /** Main-centreline span this path covers (identical to [0, length] for main). */
   entryMainDistance: number;
   exitMainDistance: number;
+  /**
+   * Seconds this branch saves against the main line, driven ideally.
+   *
+   * Derived at build time from length and per-metre surface speed caps, so it
+   * accounts for a shortcut that is shorter *and slower* — which is what
+   * Glasshouse's Rootway and Saltflat's lagoon both were. Zero on the main line.
+   *
+   * The AI's route choice reads this rather than rolling dice, which is what
+   * makes "bolder drivers take thinner margins" a real property instead of a
+   * claim in a comment.
+   */
+  idealGain: number;
 }
 
 export interface Checkpoint {
@@ -204,7 +292,7 @@ export interface Projection {
   distance: number;
   /** Equivalent arc length along the main centreline. */
   mainDistance: number;
-  /** Signed lateral offset from the centreline; positive is left. */
+  /** Signed lateral offset from the centreline; positive is to the **right**. */
   lateral: number;
   halfWidth: number;
   /** Interpolated centre position at `distance`. */

@@ -158,7 +158,17 @@ export function trapFocus(container: HTMLElement, autoFocus = true): () => void 
   // but only for a screen the player *asked* for. Doing it on first load drops
   // focus into the middle of the page, which puts the skip link behind a
   // Shift+Tab and breaks the reading order before anyone has pressed a key.
-  if (autoFocus) queueMicrotask(() => focusable()[0]?.focus());
+  /*
+   * Focus without scrolling.
+   *
+   * On a phone the results screen is taller than the viewport and its first
+   * control — Rematch — sits below the fold, so focusing it scrolled the page
+   * 259 px and opened the screen with the *outcome* off the top. A review found
+   * the result it had just earned was not visible until it scrolled back up.
+   * The focus is still correct for a keyboard user; it just no longer decides
+   * what the player sees first.
+   */
+  if (autoFocus) queueMicrotask(() => focusable()[0]?.focus({ preventScroll: true }));
 
   return () => {
     container.removeEventListener('keydown', onKeyDown);

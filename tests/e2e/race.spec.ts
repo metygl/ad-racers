@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import {
   currentScreen,
   goToSetup,
@@ -118,6 +119,78 @@ test.describe('menu to finish', () => {
     expect(simulatedSeconds).toBeCloseTo(stepsTaken / 120, 3);
   });
 
+  test('resolves the field on a fast step budget once the player finishes', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    const before = await page.evaluate(() => (window.adRacers?.simulation() as { steps: number }).steps);
+
+    // Force the player across the line while the field is still mid-race, the
+    // same state a real finish leaves behind, without waiting out a real lap.
+    await page.evaluate(() => {
+      const sim = window.adRacers?.simulation() as { player: { finished: boolean } | null } | null;
+      if (sim?.player) sim.player.finished = true;
+    });
+
+    // Once resolvingAfterPlayer is true, the loop is meant to run hundreds of
+    // steps a frame on a deterministic budget rather than one paced by real
+    // elapsed time (RESOLVE_STEPS_PER_FRAME in App.ts) — a regression here
+    // means the field finishes behind the player in real time again, which
+    // used to cost up to the 75s post-race timeout.
+    await page.waitForFunction(
+      (target) => ((window.adRacers?.simulation() as { steps: number } | null)?.steps ?? 0) >= target,
+      before + 1000,
+      { timeout: 5_000 },
+    );
+  });
+
+  test('stops accelerated resolve on the race-ending step', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+    await waitForRaceTime(page, 0.5);
+
+    const result = await page.evaluate(async () => {
+      const sim = window.adRacers?.simulation() as
+        | {
+            player: { finished: boolean } | null;
+            racers: Array<{
+              isPlayer: boolean;
+              pos: { x: number; z: number };
+              velocity: { x: number; z: number };
+            }>;
+            finishedCount: number;
+            postRaceTimer: number;
+            steps: number;
+            phase: string;
+          }
+        | null;
+      if (!sim?.player) throw new Error('Race simulation is unavailable');
+      const rival = sim.racers.find((racer) => !racer.isPlayer);
+      if (!rival) throw new Error('Rival simulation is unavailable');
+
+      sim.player.finished = true;
+      sim.finishedCount = 1;
+      sim.postRaceTimer = 75;
+      const before = sim.steps;
+      await new Promise(requestAnimationFrame);
+      const snapshot = () => ({
+        steps: sim.steps,
+        phase: sim.phase,
+        pos: { ...rival.pos },
+        velocity: { ...rival.velocity },
+      });
+      const atRaceEnd = snapshot();
+      for (let frame = 0; frame < 4; frame += 1) await new Promise(requestAnimationFrame);
+      return { stepsToFinish: atRaceEnd.steps - before, atRaceEnd, afterHoldFrames: snapshot() };
+    });
+
+    expect(result.stepsToFinish).toBe(1);
+    expect(result.atRaceEnd.phase).toBe('finished');
+    expect(result.afterHoldFrames).toEqual(result.atRaceEnd);
+  });
+
   test('restarting with the same seed replays the same race', async ({ page }) => {
     await openGame(page);
 
@@ -154,7 +227,11 @@ test.describe('pause and resume', () => {
     expect(await currentScreen(page)).toBe('pause');
 
     const frozen = await page.evaluate(() => (window.adRacers?.simulation() as { raceTime: number }).raceTime);
-    await measureFrames(page, 60);
+    // Multiple rendered frames prove the app loop remains active while the
+    // simulation is paused. Keep this window short: under CI's software WebGL,
+    // waiting for 60 frames can consume most of the test-wide timeout without
+    // adding confidence to the clock-freeze assertion.
+    await measureFrames(page, 10);
     const stillFrozen = await page.evaluate(() => (window.adRacers?.simulation() as { raceTime: number }).raceTime);
     expect(stillFrozen).toBe(frozen);
 
@@ -219,10 +296,118 @@ test.describe('performance', () => {
 
     const text = (await page.locator('.perf').textContent()) ?? '';
     const draws = Number(/draws (\d+)/.exec(text)?.[1] ?? '9999');
-    expect(draws).toBeGreaterThan(0);
+    const postPasses = Number(/\+(\d+) post/.exec(text)?.[1] ?? '-1');
+
+    /*
+     * The floor matters as much as the ceiling.
+     *
+     * The overlay used to read `renderer.info` at the end of the frame, which —
+     * once a post chain was added — described the final full-screen triangle
+     * and nothing else. It reported one draw call for the whole game, and this
+     * assertion quietly became "1 < 100". A world drawn in fewer than ten calls
+     * is not a world; it is a broken measurement.
+     */
+    expect(draws).toBeGreaterThan(10);
     // Measured at 58 on hardware with the full scene in view. The headroom
     // covers a shadow pass and a less favourable camera angle; anything near
     // this number means something has stopped being merged or instanced.
     expect(draws).toBeLessThan(100);
+    // The post chain is a fixed, small number of full-screen passes. If this
+    // grows, it grew by someone adding a pass rather than by the scene changing.
+    expect(postPasses).toBeGreaterThanOrEqual(0);
+    expect(postPasses).toBeLessThanOrEqual(4);
+  });
+});
+
+/*
+ * Race-surface transitions.
+ *
+ * Every one of these reproduces a defect found in live production play, where
+ * an ordinary menu action left the player in a running race with no HUD and, on
+ * a phone, no controls at all. They assert the *surface*, not the screen name:
+ * the screen said "race" the whole time it was broken.
+ */
+test.describe('race surface transitions', () => {
+  const surface = async (page: Page) =>
+    page.evaluate(() => ({
+      screen: window.adRacers?.screen(),
+      hudHidden: document.querySelector<HTMLElement>('.hud')?.hidden ?? true,
+      uiHidden: document.querySelector<HTMLElement>('.ui')?.hidden ?? true,
+      uiChildren: document.querySelector('.ui')?.children.length ?? -1,
+    }));
+
+  test('Pause → Settings → Back → Resume returns a complete race surface', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Back' }).click();
+    await page.getByRole('button', { name: 'Resume' }).click();
+
+    const state = await surface(page);
+    expect(state.screen).toBe('race');
+    // The HUD must come back. It used to stay hidden for the rest of the race.
+    expect(state.hudHidden).toBe(false);
+    expect(state.uiHidden).toBe(true);
+    expect(state.uiChildren).toBe(0);
+  });
+
+  test('Pause → Settings → Back → Escape also returns a complete race surface', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Back' }).click();
+    await page.keyboard.press('Escape');
+
+    const state = await surface(page);
+    expect(state.screen).toBe('race');
+    expect(state.hudHidden).toBe(false);
+  });
+
+  test('a restored graphics context returns a complete race surface', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await waitForGreenLight(page);
+
+    await page.evaluate(() => {
+      const canvas = document.querySelector('canvas');
+      const gl = canvas?.getContext('webgl2') ?? canvas?.getContext('webgl');
+      const ext = (gl as WebGLRenderingContext | null)?.getExtension('WEBGL_lose_context');
+      ext?.loseContext();
+      setTimeout(() => ext?.restoreContext(), 60);
+    });
+    await page.getByRole('button', { name: 'Resume' }).click({ timeout: 20_000 });
+
+    const state = await surface(page);
+    expect(state.screen).toBe('race');
+    expect(state.hudHidden).toBe(false);
+  });
+
+  test('keyboard radio selection is the race that actually starts', async ({ page }) => {
+    await openGame(page);
+    await goToSetup(page);
+
+    // Native arrow-key navigation inside the crew radiogroup. The input manager
+    // used to preventDefault these on every screen, so the selection appeared
+    // to change and the started race ignored it.
+    await page.getByRole('radio', { name: /Thornline/i }).first().focus();
+    await page.keyboard.press('ArrowRight');
+    const chosen = await page.evaluate(
+      () => document.querySelector<HTMLInputElement>('input[name="racer"]:checked')?.id ?? '',
+    );
+    expect(chosen).not.toBe('racer-thornline');
+
+    await page.getByRole('button', { name: /Start (race|circuit)/ }).click();
+    await expect(page.getByTestId('hud')).toBeVisible();
+    const playerId = await page.evaluate(() => {
+      const sim = window.adRacers?.simulation() as { player?: { profileId: string } } | null;
+      return sim?.player?.profileId ?? '';
+    });
+    expect(`racer-${playerId}`).toBe(chosen);
   });
 });

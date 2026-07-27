@@ -39,7 +39,7 @@ download budget — for a low-poly stylised look that primitives already produce
 | Property | Result |
 | --- | --- |
 | Binary assets | 0 |
-| Total download | **178 kB gzipped** (45 kB game + 133 kB three.js) |
+| Total download | Within the enforced budget; see [PERFORMANCE.md](./PERFORMANCE.md) |
 | Provenance | Every pixel and sample traceable to a `.ts` file |
 | Offline | A race starts with the network unplugged |
 | Reproducible | Seeded; byte-identical on every machine and run |
@@ -63,6 +63,9 @@ Drawn into a `<canvas>` at load, uploaded once as a `CanvasTexture`.
   and two thirds of the width, and a dashed centre line baked into the same
   image — so the whole road stays a single draw call. The line is faded and
   broken up by a seeded RNG so it reads as three centuries old.
+- **Kerbs and crew markings** (`kerbTexture`, `liveryTexture`, `plateTexture`,
+  `helmetTexture`): course accents, race numbers and crew identity drawn into
+  canvases rather than shipped as image files.
 - **Surfaces** (`surfaceTexture`): base colour modulated by fBm brightness,
   with optional flecks. Used for the shoulders, terrain and rock.
 - **Particles** (`particleTexture`): one soft radial falloff serves dust,
@@ -83,19 +86,21 @@ Built from `three` primitives and merged where it helps.
   merged buffer geometries per path.
 - **Scenery** (`scene/Scenery.ts`): each species is a handful of primitives
   merged into one prototype geometry, then drawn as a single `InstancedMesh`
-  however many instances exist. Scatter is seeded and rejects any placement
-  within 2.5 m of a drivable corridor, including shortcuts.
+  per material however many instances exist. Scatter is seeded and rejects any
+  placement inside the road's run-off, including shortcuts.
 - **Terrain** (`scene/Terrain.ts`): a heightfield with vertex colours. The
   interesting part is the blend — inside the corridor the terrain is pinned to
   the road's own elevation, then eases out into free noise over 26 m. Without
   it the road either floats or is buried wherever the course climbs.
-- **Skiffs** (`scene/VehicleModel.ts`): about twenty primitives. Silhouette is
-  the whole design goal — at 45 m/s with six on screen the player has to tell
-  them apart in a glance, so each is a long low hull in the crew colour, a swept
-  fin, and an offset pod on a visible spar.
-- **Sky** (`scene/SkyDome.ts`): an inverted sphere with a small custom shader —
-  vertical gradient, sun disc with bloom, and a drifting procedural cloud band.
-  A shader rather than a gradient texture, so the horizon never bands.
+- **Skiffs** (`scene/VehicleModel.ts`): code-built primitives merged or
+  instanced by how they move. Silhouette is the whole design goal — at 45 m/s
+  with six on screen the player has to tell them apart in a glance, so each is
+  a long low hull in the crew colour, a swept fin, and an offset pod on a
+  visible spar.
+- **Sky** (`scene/SkyDome.ts`): an inverted sphere with a custom shader for the
+  course-defined gradient, celestial light, stars and procedural cloud layers.
+  A shader rather than texture files keeps the horizon smooth and the sky
+  reproducible.
 
 ## Audio — `src/audio/synth.ts`
 
@@ -106,8 +111,10 @@ Rendered into `AudioBuffer`s at startup, after the first user gesture.
 | Engine | One cycle of an asymmetric saw plus growl and grit, looped; playback rate follows RPM |
 | Impacts, scrapes | Noise through a state-variable lowpass with a resonance term |
 | Countdown, laps, UI | Additive sine harmonics with an exponential envelope |
-| Surge, drift release | Frequency sweeps with a noise component |
-| Ambience | Five detuned partials over a root, each completing a whole number of cycles so the loop is click-free |
+| Surge, drift, hop and tow cues | Frequency sweeps and shaped noise |
+| Wind and surface beds | Filtered value-noise loops |
+| Music | Additive synthesis over a fixed degree series |
+| Ambience | Detuned partials over a root, each completing a whole number of cycles so the loop is click-free |
 
 Noise comes from a hash function, not `Math.random`, so buffers are identical
 every run. Every generator ends with `normalise()`.

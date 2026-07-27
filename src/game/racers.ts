@@ -11,6 +11,9 @@
  * project. See docs/PROVENANCE.md.
  */
 
+import { SPEED_CLASSES } from './config';
+import type { SpeedClass } from './config';
+
 export interface RacerStats {
   /** 0-1; maps to top speed. */
   topSpeed: number;
@@ -119,15 +122,44 @@ export interface VehicleSpec {
 }
 
 /**
- * Maps the 0-1 designer-facing stats onto physics numbers. Kept narrow on
- * purpose: the spread between the fastest and slowest skiff is about 12% of
- * top speed, so character choice flavours a race without deciding it.
+ * Maps the 0-1 designer-facing stats onto physics numbers, at a speed class.
+ *
+ * Kept narrow on purpose: the spread between the fastest and slowest skiff is
+ * about 12% of top speed, so character choice flavours a race without deciding
+ * it. What a crew never changes is *how a drift charges* — those thresholds are
+ * global. Making the skill mechanic a stat means the player picks their skill
+ * ceiling in a menu, which is the thing the current Mario Kart generation
+ * deliberately reverted; see `docs/DESIGN-DIRECTION.md`.
+ *
+ * The speed class scales the whole field identically, so it moves the game
+ * rather than the balance.
  */
-export function toVehicleSpec(stats: RacerStats): VehicleSpec {
+export function toVehicleSpec(stats: RacerStats, speedClass: SpeedClass = SPEED_CLASSES[0] as SpeedClass): VehicleSpec {
+  /*
+   * The speed/grip trade is deliberately weighted towards speed.
+   *
+   * Cornering is grip limited everywhere on a lap while top speed only pays on
+   * the straights, so a naive stat mapping makes grip strictly dominant and the
+   * low-grip archetype — the one whose whole character is "fastest thing in the
+   * Reclaim, right up until the first proper corner" — can never podium. It was
+   * measurably shut out at a 14% speed spread against a 39% grip spread.
+   * Widening speed and narrowing grip puts the fast crew back on the podium on
+   * the open courses without letting it near the top of the technical one,
+   * which is exactly the shape the character asks for.
+   *
+   * It needs re-checking after any physics change, and has needed it twice.
+   * Giving the hull a real two-lobe shape moved contact from "centres within
+   * 2.7 m" to "noses within 4.4 m", which is a different pack, and a census of
+   * twenty races put Emberworks back down to a single podium against
+   * Greenline's eighteen. The spreads here are the dial for that.
+   *
+   * `tests/unit/fairness.test.ts` asserts every crew reaches a podium
+   * somewhere, which is what pins this down.
+   */
   return {
-    topSpeed: 46 + stats.topSpeed * 6.5,
-    enginePower: 20 + stats.acceleration * 9,
-    grip: 9.2 + stats.grip * 3.6,
+    topSpeed: (43.4 + stats.topSpeed * 12.2) * speedClass.scale,
+    enginePower: (20 + stats.acceleration * 9) * speedClass.scale,
+    grip: (9.95 + stats.grip * 2.45) * speedClass.gripScale,
     mass: 0.78 + stats.weight * 0.5,
     reach: 3.2 + stats.reach * 1.0,
     shove: 0.82 + stats.reach * 0.4,

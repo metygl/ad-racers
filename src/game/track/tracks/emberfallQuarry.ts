@@ -1,4 +1,4 @@
-import { chordAlong, makeRing, scatterAlong } from '../authoring';
+import { atFractions, chordAlong, makeRing, scatterAlong } from '../authoring';
 import { previewMainPath } from '../buildTrack';
 import type { RingNode } from '../authoring';
 import type { ObstacleDefinition, TrackDefinition } from '../types';
@@ -52,12 +52,41 @@ const mainLine = previewMainPath(ring.points);
  * spoil heaps on it — but it holds more speed than the proper line if you get
  * it right.
  */
-const conveyor = chordAlong(mainLine, 360, 660, 7, 34, (t) => {
+/*
+ * Widened from 5.4 m to 7.2 m half-width and the bulge eased.
+ *
+ * At two skiffs wide and walled on both sides, a car arriving at 45 m/s
+ * ricocheted from one barrier to the other the whole way down — the review
+ * found it "fails premium risk and reward", and a shortcut whose *best* outcome
+ * is a series of impacts is a trap rather than a decision. It is still the
+ * narrowest road on the Circuit and still walled; it is now a line a good
+ * driver can actually hold.
+ *
+ * The bulge came down with it. Once a branch eases into the road tangentially
+ * at both ends, a bulge that used to read as a graceful curve is pure added
+ * length — and a shortcut that is *longer* turns the boldest difficulty into
+ * the slowest one, which `tests/unit/ai.test.ts` caught immediately.
+ */
+const conveyor = chordAlong(mainLine, 360, 660, 9, 15, (t) => {
   const mouth = t < 0.12 || t > 0.88;
-  return { halfWidth: mouth ? 7.5 : 5.4, surface: 'dirt' as const, edge: 'wall' as const };
+  /*
+   * Poured concrete, not spoil-covered dirt.
+   *
+   * On dirt the Conveyor was measurably *slower* than the road it cuts, so the
+   * boldest difficulty — which takes it most — finished the technical course
+   * behind the middle one, inverting the whole ladder. A shortcut nobody should
+   * take is not a decision, it is a trap.
+   *
+   * The surface was also the wrong risk to be charging for. This is a raised
+   * maintenance ledge; its danger is that it is the narrowest road on the
+   * Circuit, walled on both sides, with spoil heaps on it and no room to
+   * correct. That is plenty. Making the tarmac bad as well meant the reward
+   * never arrived.
+   */
+  return { halfWidth: mouth ? 8.4 : 7.2, surface: 'road' as const, edge: 'wall' as const };
 });
 
-const spoil: ObstacleDefinition[] = conveyor.slice(2, 5).map((p, i) => ({
+const spoil: ObstacleDefinition[] = atFractions(conveyor, [0.4, 0.5, 0.62]).map((p, i) => ({
   x: p.x + Math.cos(i * 2.4) * 1.7,
   z: p.z + Math.sin(i * 2.4) * 1.7,
   radius: 1.1,
@@ -112,23 +141,40 @@ export const EMBERFALL_QUARRY: TrackDefinition = {
     { kind: 'pine', density: 0.2, bandInner: 2.6, bandOuter: 6, scaleMin: 0.6, scaleMax: 1.1 },
   ],
   theme: {
-    skyTop: 0x1a1430,
-    skyHorizon: 0xd8622a,
-    fogColor: 0x4a2a26,
-    fogDensity: 0.0038,
+    // Last light in a basalt quarry: a low sun raking across black rock, with
+    // the only warmth in the sky and in the ember glow. The one course where
+    // full-saturation accents are load bearing, because in this light the
+    // corridor is otherwise nearly monochrome.
+    skyTop: 0x1c2544,
+    skyHorizon: 0xb4593a,
+    fogColor: 0x60404a,
+    fogDensity: 0.0022,
     sunColor: 0xffb066,
-    sunIntensity: 1.9,
-    sunElevation: 0.13,
-    sunAzimuth: 4.0,
-    ambientSky: 0x53406e,
-    ambientGround: 0x5a2418,
-    ambientIntensity: 0.95,
-    roadColor: 0x3a3330,
-    shoulderColor: 0x54423a,
-    terrainColor: 0x35291f,
-    terrainAccent: 0x7a3b21,
-    dustColor: 0xd08a52,
-    speedLineColor: 0xffb98a,
+    sunIntensity: 2.2,
+    sunElevation: 0.16,
+    sunAzimuth: 3.5,
+    ambientSky: 0x5a6a9a,
+    ambientGround: 0x3a2620,
+    ambientIntensity: 1.55,
+    roadColor: 0x4e4a4e,
+    shoulderColor: 0x5c4a44,
+    kerbColor: 0xff9b52,
+    terrainColor: 0x241d24,
+    terrainAccent: 0x3d2c2a,
+    dustColor: 0xc2a08c,
+    speedLineColor: 0xffd0a0,
+    cloudiness: 0.68,
+    grade: {
+      // Cool shadows against a hot key is what makes a sunset read as a sunset
+      // rather than as an orange filter over a daytime scene.
+      lift: [0.014, 0.016, 0.03],
+      gain: [1.08, 0.99, 0.93],
+      saturation: 1.1,
+      contrast: 1.05,
+      bloomThreshold: 1.0,
+      bloomIntensity: 0.62,
+      vignette: 0.22,
+    },
   },
   offTrackSurface: 'dirt',
   checkpointCount: 12,

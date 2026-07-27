@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Track } from '../../game/track/buildTrack';
 import type { Path, PathSample, TrackTheme } from '../../game/track/types';
-import { roadTexture, surfaceTexture } from '../textures/procedural';
+import { kerbTexture, roadTexture, surfaceTexture } from '../textures/procedural';
 
 /**
  * The drivable surface.
@@ -16,6 +16,8 @@ import { roadTexture, surfaceTexture } from '../textures/procedural';
 const SHOULDER_WIDTH = 1.6;
 const BARRIER_HEIGHT = 1.35;
 const BARRIER_WIDTH = 0.55;
+/** Width of the striped kerb that edges the road, in metres. */
+const KERB_WIDTH = 0.9;
 
 interface RibbonBuffers {
   positions: number[];
@@ -28,8 +30,8 @@ interface RibbonBuffers {
  * Emits a quad as two triangles.
  *
  * The winding is reversed relative to the obvious order because of how the
- * ribbon is laid out: samples are pushed left-edge-then-right-edge, and the
- * left normal is +Z for a path running along +X, which makes the naive order
+ * ribbon is laid out: samples are pushed right-edge-then-left-edge, and the
+ * right normal is +Z for a path running along +X, which makes the naive order
  * produce downward-facing triangles. Those get back-face culled and the road
  * simply is not there.
  */
@@ -37,17 +39,24 @@ function pushQuad(buffers: RibbonBuffers, a: number, b: number, c: number, d: nu
   buffers.indices.push(a, d, c, a, c, b);
 }
 
-/** Left and right edge points of a sample, including banking. */
-function edges(sample: PathSample, halfWidth: number): { left: THREE.Vector3; right: THREE.Vector3 } {
+/**
+ * The two edge points of a sample, including banking.
+ *
+ * `sample.normal` is the *right*-hand normal (see the handedness rule in
+ * `src/core/math.ts`), so `outer` is the right edge and `inner` the left. They
+ * are named for their winding role rather than for a side, because the ribbon
+ * code only cares that they are consistent.
+ */
+function edges(sample: PathSample, halfWidth: number): { outer: THREE.Vector3; inner: THREE.Vector3 } {
   const bank = sample.bank;
   const lift = Math.sin(bank) * halfWidth;
   return {
-    left: new THREE.Vector3(
+    outer: new THREE.Vector3(
       sample.pos.x + sample.normal.x * halfWidth,
       sample.y + lift,
       sample.pos.z + sample.normal.z * halfWidth,
     ),
-    right: new THREE.Vector3(
+    inner: new THREE.Vector3(
       sample.pos.x - sample.normal.x * halfWidth,
       sample.y - lift,
       sample.pos.z - sample.normal.z * halfWidth,
@@ -62,6 +71,7 @@ function buildRibbon(path: Path, theme: TrackTheme): THREE.Group {
   const road: RibbonBuffers = { positions: [], normals: [], uvs: [], indices: [] };
   const shoulder: RibbonBuffers = { positions: [], normals: [], uvs: [], indices: [] };
   const barrier: RibbonBuffers = { positions: [], normals: [], uvs: [], indices: [] };
+  const kerb: RibbonBuffers = { positions: [], normals: [], uvs: [], indices: [] };
 
   const count = path.samples.length;
   const steps = path.closed ? count : count - 1;
@@ -71,28 +81,50 @@ function buildRibbon(path: Path, theme: TrackTheme): THREE.Group {
     const index = path.closed ? i % count : Math.min(i, count - 1);
     const sample = path.samples[index] as PathSample;
     const hw = sample.halfWidth;
-    const { left, right } = edges(sample, hw);
+    const { outer: rightEdge, inner: leftEdge } = edges(sample, hw);
     const outer = edges(sample, hw + SHOULDER_WIDTH);
+    const kerbEdge = edges(sample, hw + KERB_WIDTH);
     // V repeats every 9 m so the tarmac grain has a believable scale at speed.
     const v = sample.distance / 9;
 
-    road.positions.push(left.x, left.y, left.z, right.x, right.y, right.z);
+    road.positions.push(rightEdge.x, rightEdge.y, rightEdge.z, leftEdge.x, leftEdge.y, leftEdge.z);
     road.normals.push(up.x, up.y, up.z, up.x, up.y, up.z);
     road.uvs.push(0, v, 1, v);
 
+    /*
+     * The kerb: a narrow striped strip either side of the road, raised a
+     * centimetre above it.
+     *
+     * This is the highest-value piece of geometry on the whole course for a
+     * driver. The art bible puts edges in a brighter value band than the road
+     * for exactly this reason — the stripes give the eye an unambiguous read on
+     * where the corridor ends, at any speed and in any light, and the rhythm of
+     * them passing is itself a speed cue. Its U runs along the track so the
+     * stripe repeat is set by distance, not by the road's width.
+     */
+    const kerbV = sample.distance / 2.4;
+    kerb.positions.push(
+      kerbEdge.outer.x, kerbEdge.outer.y + 0.02, kerbEdge.outer.z,
+      rightEdge.x, rightEdge.y + 0.02, rightEdge.z,
+      leftEdge.x, leftEdge.y + 0.02, leftEdge.z,
+      kerbEdge.inner.x, kerbEdge.inner.y + 0.02, kerbEdge.inner.z,
+    );
+    for (let k = 0; k < 4; k++) kerb.normals.push(up.x, up.y, up.z);
+    kerb.uvs.push(0, kerbV, 1, kerbV, 0, kerbV, 1, kerbV);
+
     shoulder.positions.push(
-      outer.left.x, outer.left.y - 0.06, outer.left.z,
-      left.x, left.y, left.z,
-      right.x, right.y, right.z,
-      outer.right.x, outer.right.y - 0.06, outer.right.z,
+      outer.outer.x, outer.outer.y - 0.06, outer.outer.z,
+      rightEdge.x, rightEdge.y, rightEdge.z,
+      leftEdge.x, leftEdge.y, leftEdge.z,
+      outer.inner.x, outer.inner.y - 0.06, outer.inner.z,
     );
     for (let k = 0; k < 4; k++) shoulder.normals.push(up.x, up.y, up.z);
     shoulder.uvs.push(0, v, 1, v, 0, v, 1, v);
 
     if (sample.edge === 'wall') {
       for (const [edge, dir] of [
-        [outer.left, 1],
-        [outer.right, -1],
+        [outer.outer, 1],
+        [outer.inner, -1],
       ] as const) {
         const nx = sample.normal.x * dir;
         const nz = sample.normal.z * dir;
@@ -115,6 +147,8 @@ function buildRibbon(path: Path, theme: TrackTheme): THREE.Group {
     const s = i * 4;
     pushQuad(shoulder, s, s + 1, s + 5, s + 4);
     pushQuad(shoulder, s + 2, s + 3, s + 7, s + 6);
+    pushQuad(kerb, s, s + 1, s + 5, s + 4);
+    pushQuad(kerb, s + 2, s + 3, s + 7, s + 6);
   }
 
   // The barrier strip only has vertices where the edge is walled, so it is
@@ -164,10 +198,16 @@ function buildRibbon(path: Path, theme: TrackTheme): THREE.Group {
     roughness: 0.85,
     side: THREE.DoubleSide,
   });
+  const kerbMaterial = new THREE.MeshStandardMaterial({
+    map: kerbTexture(theme.kerbColor ?? 0xd8dee2),
+    roughness: 0.72,
+    metalness: 0.05,
+  });
 
   for (const [buffers, material, name] of [
     [shoulder, shoulderMaterial, 'shoulder'],
     [road, roadMaterial, 'road'],
+    [kerb, kerbMaterial, 'kerb'],
     [barrier, barrierMaterial, 'barrier'],
   ] as const) {
     if (buffers.indices.length === 0) continue;
@@ -182,7 +222,7 @@ function buildRibbon(path: Path, theme: TrackTheme): THREE.Group {
     mesh.receiveShadow = true;
     // The road is drawn slightly after the terrain to avoid z-fighting where
     // the terrain blends up to meet it.
-    mesh.renderOrder = name === 'road' ? 1 : 0;
+    mesh.renderOrder = name === 'road' ? 1 : name === 'kerb' ? 2 : 0;
     group.add(mesh);
   }
 
@@ -192,6 +232,7 @@ function buildRibbon(path: Path, theme: TrackTheme): THREE.Group {
 /** The start/finish gantry, so the line is unmistakable at speed. */
 function buildStartLine(track: Track, theme: TrackTheme): THREE.Group {
   const group = new THREE.Group();
+  group.name = 'start-gantry';
   const sample = track.sampleMain(0);
   const hw = sample.halfWidth;
 

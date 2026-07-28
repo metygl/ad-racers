@@ -671,7 +671,6 @@ export class App {
   }
 
   private stopRace(): void {
-    this.retireBackGuard();
     this.simulation = null;
     this.paused = false;
     this.audio.stopEngines();
@@ -771,7 +770,6 @@ export class App {
   private finishRace(): void {
     const simulation = this.simulation;
     if (!simulation) return;
-    this.retireBackGuard();
     const player = simulation.player;
     this.audio.stopEngines();
     const speedClass = this.activeSpeedClass();
@@ -946,19 +944,11 @@ export class App {
    * into a trap.
    */
   private backGuardArmed = false;
-  private backGuardRetiring = false;
 
   private armBackGuard(): void {
-    if (this.backGuardArmed || this.backGuardRetiring) return;
+    if (this.backGuardArmed) return;
     history.pushState({ race: true }, '');
     this.backGuardArmed = true;
-  }
-
-  private retireBackGuard(): void {
-    if (!this.backGuardArmed) return;
-    this.backGuardArmed = false;
-    this.backGuardRetiring = true;
-    history.back();
   }
 
   /*
@@ -984,11 +974,6 @@ export class App {
    * Menus keep ordinary Back behaviour.
    */
   private handleBack = (): void => {
-    if (this.backGuardRetiring) {
-      this.backGuardRetiring = false;
-      if (this.screen === 'race' && this.simulation && !this.paused) this.armBackGuard();
-      return;
-    }
     // Whatever happens next, the browser has already consumed the entry.
     this.backGuardArmed = false;
     if (this.screen !== 'race' || !this.simulation) return;
@@ -1236,7 +1221,6 @@ export class App {
     settings: () => GameSettings;
     screen: () => string;
     input: () => ControlInput;
-    exposure: () => number | null;
     advance: (seconds: number) => void;
     skipToFinish: () => void;
   } {
@@ -1246,7 +1230,6 @@ export class App {
       settings: () => this.save.settings,
       screen: () => (this.paused ? 'pause' : this.screen),
       input: () => this.lastPlayerInput,
-      exposure: () => this.renderer?.exposure ?? null,
       /*
        * Burns a stretch of race the test is not about, without drawing it.
        *

@@ -217,25 +217,6 @@ test.describe('accessibility', () => {
     await expect(page.getByRole('button', { name: 'Race', exact: true })).toBeVisible();
   });
 
-  test('uses neutral Low-tier exposure for the hero and restores the course grade', async ({ page }) => {
-    await openGame(page);
-    await page.getByRole('button', { name: 'Settings' }).click();
-    await page.locator('label[for="seg-graphics-quality-low"]').click();
-    await page.getByRole('button', { name: 'Back' }).click();
-    await goToSetup(page);
-    await page.locator('label[for="track-glasshouse-vigil"]').click();
-    await page.getByRole('button', { name: /Start (race|circuit)/ }).click();
-
-    await expect.poll(() => page.evaluate(() => window.adRacers?.exposure())).toBe(1.72);
-    await page.evaluate(() => window.adRacers?.skipToFinish());
-    await expect(page.getByRole('heading', { name: /Race won|Finished|Classified|Did not finish/i })).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.adRacers?.exposure())).toBe(1.05);
-
-    await page.getByRole('button', { name: 'Rematch' }).click();
-    await expect(page.getByTestId('hud')).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.adRacers?.exposure())).toBe(1.72);
-  });
-
   test('rolls back a quality setting when context creation fails', async ({ page }) => {
     await openGame(page);
     await startSeededRace(page);

@@ -11,13 +11,13 @@
 | Particles | ≤ 800 (High) | Hard cap, pre-allocated | `ParticleSystem` budget |
 | JS heap | < 150 MB | **42–48 MB** | Performance overlay |
 | Download, total | ≤ 260 kB gzip | **213.8 kB** | `npm run check:budget` |
-| Download, our code | ≤ 84 kB gzip | **77.6 kB** | `npm run check:budget` |
+| Download, our code | ≤ 84 kB gzip | **77.7 kB** | `npm run check:budget` |
 | Simulation rate | exactly 120 Hz | **119–121 steps/s** | `tests/e2e/race.spec.ts` |
 | Network during a race | none | none | No `fetch` in `src/` |
 
 ### The download budget moved once, on purpose
 
-Our own code was 73.7 kB gzipped before the garage landed and is 77.6 kB after,
+Our own code was 73.7 kB gzipped before the garage landed and is 77.7 kB after,
 so the 80 kB ceiling was raised to 84 kB - the same 8% margin the old number
 carried, rather than a rounder one. What bought it: the selected crew's
 machine is now built by the production race model and lit on a turntable behind

@@ -27,7 +27,7 @@ const BUDGETS = {
    * crew's machine is now built and lit on a real turntable behind the setup
    * and results screens, and that plus the crew-tactics layer, the scenery
    * dissolve and the night route markers took the measured figure from 73.7 kB
-   * to 77.6 kB. The allowance is the same 8% margin the old number carried, not
+   * to 77.7 kB. The allowance is the same 8% margin the old number carried, not
    * a rounder one - this is meant to be argued with rather than nudged, because
    * raising it is a decision about what the player waits for.
    */

@@ -458,6 +458,27 @@ test.describe('preview corrections', () => {
     expect(afterThreeRaces - beforeRestart, 'each race pushed its own history entry').toBeLessThanOrEqual(1);
   });
 
+  test('finishing retires the race Back guard', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await page.evaluate(() => window.adRacers?.skipToFinish());
+    await expect(page.getByRole('heading', { name: /Race won|Finished|Classified|Did not finish/i })).toBeVisible();
+
+    await page.goBack();
+    expect(page.url(), 'Back on results was absorbed by the race guard').toBe('about:blank');
+  });
+
+  test('quitting retires the race Back guard', async ({ page }) => {
+    await openGame(page);
+    await startSeededRace(page);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Quit to title' }).click();
+    await expect(page.getByRole('heading', { name: 'AD Racers' })).toBeVisible();
+
+    await page.goBack();
+    expect(page.url(), 'Back on the title was absorbed by the race guard').toBe('about:blank');
+  });
+
   test('resuming with the key that confirmed it does not hop', async ({ page }) => {
     await openGame(page);
     await startSeededRace(page);

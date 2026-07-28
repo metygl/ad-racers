@@ -242,6 +242,7 @@ export class GameRenderer {
    * whatever the player last raced.
    */
   private readonly heroPost: PostSettings = defaultPostSettings();
+  private courseExposure = DEFAULT_GRADE.exposure;
   /** Per-rival near-miss cooldowns, so one pass fires exactly one cue. */
   private readonly nearMissCooldowns = new Map<number, number>();
   /** Audio hook for a near miss; the renderer has no business making sound. */
@@ -473,6 +474,7 @@ export class GameRenderer {
       this.post.bloomIntensity = grade.bloomIntensity;
       this.post.vignette = grade.vignette;
       this.post.exposure = grade.exposure;
+      this.courseExposure = grade.exposure;
       /*
        * The low tier has no composite pass, so it cannot have the grade — but
        * it can still have the *exposure*, for free, through three's own tone
@@ -896,6 +898,7 @@ export class GameRenderer {
       this.composer.render(this.heroPost);
     } else {
       this.renderer.setRenderTarget(null);
+      this.renderer.toneMappingExposure = this.heroPost.exposure;
       this.renderer.render(hero.scene, this.heroCamera);
       this.captureSceneStats();
     }
@@ -914,6 +917,7 @@ export class GameRenderer {
 
   render(simulation: Simulation, elapsed: number, focusIndex?: number): void {
     if (this.disposed) return;
+    if (!this.composer) this.renderer.toneMappingExposure = this.courseExposure;
 
     if (this.presentationHold > 0) {
       this.presentationHold -= elapsed;
@@ -1230,6 +1234,10 @@ export class GameRenderer {
       geometries: info.memory.geometries,
       textures: info.memory.textures,
     };
+  }
+
+  get exposure(): number {
+    return this.renderer.toneMappingExposure;
   }
 
   dispose(): void {

@@ -63,7 +63,13 @@ jobs:
   browser:
     name: Browser tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The suite is ~12.5 min on a developer machine and the runner's software
+    # renderer is slow enough to have been sitting right on the old 30 min
+    # ceiling: it passed, then began timing out on a branch that added two
+    # tests and 1.9% of local runtime. A timed-out job is reported `cancelled`,
+    # not `failure`, so it reads as an infrastructure hiccup rather than the
+    # lost browser signal it actually is. Headroom, not a tighter suite.
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v5

@@ -26,6 +26,7 @@ declare global {
       settings: () => Record<string, unknown>;
       screen: () => string;
       input: () => Record<string, unknown>;
+      exposure: () => number | null;
       advance: (seconds: number) => void;
       skipToFinish: () => void;
     };

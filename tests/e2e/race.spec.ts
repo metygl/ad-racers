@@ -132,25 +132,32 @@ test.describe('menu to finish', () => {
     await startSeededRace(page);
     await waitForGreenLight(page);
 
-    const before = await page.evaluate(() => (window.adRacers?.simulation() as { steps: number }).steps);
-
     // Force the player across the line while the field is still mid-race, the
     // same state a real finish leaves behind, without waiting out a real lap.
-    await page.evaluate(() => {
-      const sim = window.adRacers?.simulation() as { player: { finished: boolean } | null } | null;
-      if (sim?.player) sim.player.finished = true;
+    const steps = await page.evaluate(async () => {
+      const sim = window.adRacers?.simulation() as
+        | { player: { finished: boolean } | null; steps: number }
+        | null;
+      if (!sim?.player) throw new Error('Race simulation is unavailable');
+
+      const before = sim.steps;
+      sim.player.finished = true;
+
+      /*
+       * Once resolvingAfterPlayer is true, the loop is meant to run hundreds
+       * of steps per frame on a deterministic budget rather than one paced by
+       * real elapsed time (RESOLVE_STEPS_PER_FRAME in App.ts). Count frames,
+       * not wall time: a software-WebGL frame can exceed the old five-second
+       * deadline on a loaded CI host without changing this contract.
+       */
+      for (let frame = 0; frame < 8; frame += 1) {
+        await new Promise(requestAnimationFrame);
+      }
+      return sim.steps - before;
     });
 
-    // Once resolvingAfterPlayer is true, the loop is meant to run hundreds of
-    // steps a frame on a deterministic budget rather than one paced by real
-    // elapsed time (RESOLVE_STEPS_PER_FRAME in App.ts) — a regression here
-    // means the field finishes behind the player in real time again, which
-    // used to cost up to the 75s post-race timeout.
-    await page.waitForFunction(
-      (target) => ((window.adRacers?.simulation() as { steps: number } | null)?.steps ?? 0) >= target,
-      before + 1000,
-      { timeout: 5_000 },
-    );
+    // The ordinary real-time loop could advance at most 64 steps in 8 frames.
+    expect(steps).toBeGreaterThanOrEqual(1000);
   });
 
   test('stops accelerated resolve on the race-ending step', async ({ page }) => {

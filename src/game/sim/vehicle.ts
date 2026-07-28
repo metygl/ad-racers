@@ -39,13 +39,20 @@ function steeringCurve(speed: number, topSpeed: number): number {
 const PROFILE_SPAN = 6;
 
 /**
- * Local vertical profile of the surface: its slope (dy/ds) and how sharply
- * that slope is changing (d²y/ds²). The second term is what decides whether a
- * crest launches the skiff.
+ * Local vertical profile of the surface at a fixed lateral offset: its slope
+ * (dy/ds) and how sharply that slope is changing (d²y/ds²). Sampling all three
+ * points in the same lane prevents banking from becoming a false crest.
  */
-function surfaceProfile(path: Path, distance: number, groundY: number): { slope: number; curvature: number } {
-  const ahead = sampleAt(path, distance + PROFILE_SPAN).y;
-  const behind = sampleAt(path, distance - PROFILE_SPAN).y;
+function surfaceProfile(
+  path: Path,
+  distance: number,
+  lateral: number,
+  groundY: number,
+): { slope: number; curvature: number } {
+  const aheadSample = sampleAt(path, distance + PROFILE_SPAN);
+  const behindSample = sampleAt(path, distance - PROFILE_SPAN);
+  const ahead = aheadSample.y + Math.sin(aheadSample.bank) * lateral;
+  const behind = behindSample.y + Math.sin(behindSample.bank) * lateral;
   return {
     slope: (ahead - behind) / (2 * PROFILE_SPAN),
     curvature: (ahead - 2 * groundY + behind) / (PROFILE_SPAN * PROFILE_SPAN),
@@ -493,7 +500,7 @@ export function stepVehicle(racer: RacerState, input: ControlInput, ctx: Vehicle
      * did, cannot work: at 48 m/s a single 8 ms step covers 40 cm, over which
      * even a sharp crest drops well under a millimetre.
      */
-    const { slope, curvature } = surfaceProfile(racer.path, projection.distance, profileY);
+    const { slope, curvature } = surfaceProfile(racer.path, projection.distance, projection.lateral, groundY);
     const requiredAccel = curvature * vLong * vLong;
     const launchThreshold = -PHYSICS.gravity * PHYSICS.airborneThreshold;
     const launchExcess = (launchThreshold - requiredAccel) / PHYSICS.gravity;
@@ -586,7 +593,8 @@ function resolveTrackEdges(racer: RacerState, ctx: VehicleStepContext): void {
      * cannot stall: the driver keeps full control the whole way in, and simply
      * finds themselves back on the road.
      */
-    const rate = Math.min(over * PHYSICS.runOffReturn, PHYSICS.runOffMaxReturnSpeed);
+    const runOffDepth = Math.abs(projection.lateral) - projection.halfWidth;
+    const rate = Math.min(runOffDepth * PHYSICS.runOffReturn, PHYSICS.runOffMaxReturnSpeed);
     racer.pos = { x: racer.pos.x + inwardX * rate * ctx.dt, z: racer.pos.z + inwardZ * rate * ctx.dt };
 
     // Extra drag out here, so wandering off is always slower than staying on.

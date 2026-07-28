@@ -730,7 +730,7 @@ function updateRecovery(racer: RacerState, ctx: AiContext, input: ControlInput):
     const alignment = dot(fromHeading(racer.heading), projection.tangent);
     if (alignment < -0.25) {
       racer.wrongWayTimer += ctx.dt;
-      if (racer.wrongWayTimer > 0.8) {
+      if (racer.wrongWayTimer > RACE.wrongWayTime) {
         ai.recovery = 'realign';
         ai.recoveryTimer = 1.6;
         racer.wrongWayTimer = 0;

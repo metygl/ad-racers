@@ -23,6 +23,7 @@ describe('AI navigation', () => {
     const sim = new Simulation(buildSetup({ trackId: 'saltflat-reliquary', difficultyId: 'ace', playerIndex: null, entries: 2 }));
     const [defender, challenger] = sim.racers;
     if (!defender?.ai || !challenger) throw new Error('need two AI racers');
+    const defenderAi = defender.ai;
     const speed = 24;
     const sample = sim.track.main.samples.find(
       (candidate) => Math.abs(sim.track.sampleMain(candidate.distance + speed * 0.9).curvature) < 0.002,
@@ -34,8 +35,8 @@ describe('AI navigation', () => {
     defender.velocity = { x: sample.tangent.x * speed, z: sample.tangent.z * speed };
     defender.path = sim.track.main;
     defender.lateral = 0;
-    defender.ai.defence = 1;
-    defender.ai.mistakeRate = 0;
+    defenderAi.defence = 1;
+    defenderAi.mistakeRate = 0;
 
     const placeChallenger = (lateral: number): void => {
       challenger.pos = {
@@ -48,7 +49,7 @@ describe('AI navigation', () => {
       challenger.lateral = lateral;
     };
     const driveDefender = (): void => {
-      defender.ai.defendTimer = 0;
+      defenderAi.defendTimer = 0;
       driveAi(defender, {
         track: sim.track,
         racers: sim.racers,
@@ -62,16 +63,16 @@ describe('AI navigation', () => {
     placeChallenger(22);
     challenger.path = sim.track.main;
     driveDefender();
-    expect(defender.ai.defendTimer).toBe(0);
+    expect(defenderAi.defendTimer).toBe(0);
 
     placeChallenger(3);
     challenger.path = sim.track.branches[0] ?? sim.track.main;
     driveDefender();
-    expect(defender.ai.defendTimer).toBe(0);
+    expect(defenderAi.defendTimer).toBe(0);
 
     challenger.path = sim.track.main;
     driveDefender();
-    expect(defender.ai.defendTimer).toBeGreaterThan(0);
+    expect(defenderAi.defendTimer).toBeGreaterThan(0);
   });
 
   it.each(TRACKS)('%s: every opponent finishes at every difficulty', (_name, trackId) => {

@@ -805,7 +805,8 @@ export class GameRenderer {
   /**
    * Draws one frame. `elapsed` is wall-clock seconds since the last frame.
    * `focusIndex` overrides which racer the camera and audio listener follow,
-   * which is how the attract race can follow the leader instead of a player.
+   * which is how the attract race can follow its back marker instead of a
+   * player.
    */
   /**
    * Freezes everything that is *drawn*, without touching simulation timing.

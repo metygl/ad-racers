@@ -23,7 +23,7 @@ import type { VehicleVisual } from './VehicleModel';
  * It is a scene of its own rather than a dressed-up race scene. A race scene
  * carries a course's fog, sky, grade and key direction, and a hero shot needs
  * none of those - a night course would hand the garage a black room. Its own
- * scene is about a dozen objects and three lights, which is far cheaper than
+ * scene is about a dozen objects and five lights, which is far cheaper than
  * the attract race it replaces on those screens.
  */
 
@@ -181,8 +181,8 @@ export function buildHeroStage(profile: RacerProfile, mood: HeroMood): HeroStage
    * down by that much and puts the rest into a specular term that has nothing
    * to reflect - so the race scene's intensities, which sit under a sun and a
    * whole sky, render a black machine here. These are deliberately much
-   * stronger, and there are four of them because a hero shot is lit from four
-   * directions or it is a snapshot.
+   * stronger, and there are five of them because the machine needs fill plus
+   * authored light from four directions.
    */
   // Fill first, so nothing on the machine is ever pure black; the art bible
   // puts racers in the top value band and a hero shot cannot be the exception.

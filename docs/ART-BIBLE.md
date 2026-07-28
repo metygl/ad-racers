@@ -113,13 +113,16 @@ without the minimap.
 ## Lighting
 
 One directional key with shadows, one hemisphere fill, and a per-course rim
-value. No point lights in the world — they cost draw calls and buy nothing at
-this scale.
+value. Night courses may add one short-range, non-shadow-casting route light to
+model the focused skiff; broader point-light dressing still costs draw calls
+without buying enough at this scale.
 
 - **Key** carries the course's time of day and is the only shadow caster. Its
   shadow camera follows the focused racer.
 - **Fill** is a hemisphere: sky colour above, ground colour below. This is what
   keeps a flat-shaded vehicle from going black on its shadow side.
+- **Route light** is reserved for a night course whose key and fill cannot model
+  the focused skiff clearly enough. It follows that skiff and casts no shadow.
 - **Rim** is baked into the sky gradient and the fog colour rather than a
   light, so it costs nothing.
 

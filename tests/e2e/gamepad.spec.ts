@@ -1,6 +1,16 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { openGame, playerSnapshot, startSeededRace, waitForGreenLight, waitForRaceTime, waitForSteps } from './support';
+import {
+  noticesSeen,
+  openGame,
+  playerSnapshot,
+  skipRaceTime,
+  startSeededRace,
+  strikeState,
+  waitForGreenLight,
+  waitForSteps,
+  watchNotices,
+} from './support';
 
 /**
  * Gamepad seam.
@@ -114,30 +124,89 @@ test.describe('gamepad', () => {
   });
 
   test('swings the pod arm from the shoulder buttons', async ({ page }) => {
-    // Quarantined as preview debt: on CI's single-worker, software-rendered
-    // Chromium, the round-3 scene's rendering cost can push waitForRaceTime's
-    // 60s wait past its budget before 2.5s of simulated race time accrues.
-    // This is CI-runner-speed sensitivity in the shared browser-test
-    // infrastructure, not a defect in the strike input this test exercises -
-    // see the captain's preview-release decision. Tracked for post-preview
-    // follow-up rather than fixed in this release.
-    test.fixme(true, 'CI-runner-speed sensitivity in waitForRaceTime under the round-3 scene; deferred as preview debt.');
+    await installGamepad(page);
+    await openGame(page);
+    await startSeededRace(page);
+    /*
+     * Past the countdown and the strike grace without paying to render them.
+     *
+     * This wait used to be `waitForRaceTime(page, 2.5)`, which is 5.5 s of
+     * simulated time - the 3 s countdown plus the 2 s grace - and the loop can
+     * only advance 67 ms of race per drawn frame. On CI's software WebGL that
+     * came to most of the helper's whole 60 s budget, spent on a stretch of
+     * race this test asserts nothing about, and the test was quarantined for
+     * timing out on it. See `skipRaceTime`.
+     */
+    await skipRaceTime(page, 5.5);
+
+    /*
+     * And the assertion is the *swing*, not the input object.
+     *
+     * Reading `input().strike` only proved the button reached the mapping. What
+     * the player is promised is that the right shoulder swings the pod arm to
+     * their right, so that is what is checked - through the simulation, on the
+     * racer's own strike state.
+     */
+    await setPad(page, { buttons: { 5: 1 } });
+    await waitForSteps(page, 8);
+    const right = await strikeState(page);
+    expect(right.phase, 'the right shoulder did not start a swing').not.toBe('idle');
+    expect(right.side, 'the right shoulder swung the wrong way').toBe(1);
+
+    // Release, let the arm reset, and the other shoulder is an opposite swing.
+    await setPad(page, { buttons: { 5: 0 } });
+    await skipRaceTime(page, 2);
+    await setPad(page, { buttons: { 4: 1 } });
+    await waitForSteps(page, 8);
+    const left = await strikeState(page);
+    expect(left.phase, 'the left shoulder did not start a swing').not.toBe('idle');
+    expect(left.side, 'the left shoulder swung the wrong way').toBe(-1);
+  });
+
+  test('a held shoulder is one swing, not one request per step', async ({ page }) => {
     test.slow();
     await installGamepad(page);
     await openGame(page);
     await startSeededRace(page);
-    // Strikes are locked out for the opening seconds of a race.
-    await waitForRaceTime(page, 2.5);
+    await skipRaceTime(page, 5.5);
 
+    /*
+     * The live review's highest-severity interaction defect, from the pad's
+     * side: one 100 ms press produced twelve `Already swinging` refusals and
+     * twelve refusal sounds, because a held control was handed to the
+     * simulation as a fresh request on every fixed step. A physical press is
+     * one request on every device; see `InputManager.poll`.
+     *
+     * The hold runs through the *real* loop rather than `skipRaceTime`, because
+     * the thing under test is the feedback the player receives and that only
+     * exists on drawn frames.
+     */
+    await watchNotices(page);
     await setPad(page, { buttons: { 5: 1 } });
-    await waitForSteps(page, 15);
-    const right = await page.evaluate(() => window.adRacers?.input() as { strike: number });
-    expect(right.strike).toBe(1);
+    await waitForSteps(page, 8);
+    const swinging = await strikeState(page);
+    expect(swinging.phase, 'the shoulder did not start a swing').not.toBe('idle');
 
-    await setPad(page, { buttons: { 5: 0, 4: 1 } });
-    await waitForSteps(page, 15);
-    const left = await page.evaluate(() => window.adRacers?.input() as { strike: number });
-    expect(left.strike).toBe(-1);
+    // Hold right through windup, active, recovery and the whole cooldown.
+    await waitForSteps(page, 220);
+    const afterHold = await strikeState(page);
+    /*
+     * Idle *and* off cooldown is what proves there was no second swing: a swing
+     * re-arms the 1.5 s cooldown, so a re-trigger anywhere in the last 1.8 s
+     * would still be showing time on the clock here.
+     */
+    expect(afterHold.phase, 'a held shoulder was still swinging after the cooldown').toBe('idle');
+    expect(afterHold.cooldown, 'a held shoulder started a second swing').toBe(0);
+
+    const notices = await noticesSeen(page);
+    expect(notices.filter((text) => /Already swinging|still resetting/.test(text)), 'refusal storm').toHaveLength(0);
+
+    // Releasing and pressing again is a new request, and does swing again.
+    await setPad(page, { buttons: { 5: 0 } });
+    await waitForSteps(page, 4);
+    await setPad(page, { buttons: { 5: 1 } });
+    await waitForSteps(page, 8);
+    expect((await strikeState(page)).phase, 'a fresh press did not swing').not.toBe('idle');
   });
 
   test('tells the player a pad was detected', async ({ page }) => {

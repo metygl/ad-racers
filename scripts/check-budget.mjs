@@ -20,8 +20,18 @@ const DIST = new URL('../dist', import.meta.url).pathname;
 const BUDGETS = {
   /** Everything needed to show the title screen and start a race. */
   total: 260,
-  /** Our own code, excluding three.js. */
-  app: 80,
+  /**
+   * Our own code, excluding three.js.
+   *
+   * Raised from 80 kB when the garage and finish stage landed: the selected
+   * crew's machine is now built and lit on a real turntable behind the setup
+   * and results screens, and that plus the crew-tactics layer, the scenery
+   * dissolve and the night route markers took the measured figure from 73.7 kB
+   * to 77.7 kB. The allowance is the same 8% margin the old number carried, not
+   * a rounder one - this is meant to be argued with rather than nudged, because
+   * raising it is a decision about what the player waits for.
+   */
+  app: 84,
   /** The CSS for the whole interface. */
   css: 12,
   /** The HTML shell. */

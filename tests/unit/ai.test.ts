@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FIXED_STEP, RACE } from '../../src/game/config';
-import { DIFFICULTIES, getDifficulty } from '../../src/game/ai/driver';
+import { DIFFICULTIES, driveAi, getDifficulty } from '../../src/game/ai/driver';
 import { Simulation } from '../../src/game/sim/simulation';
 import { emptyInput } from '../../src/game/sim/state';
 import { TRACK_DEFINITIONS, getTrack } from '../../src/game/track/tracks';
@@ -19,6 +19,62 @@ const TRACKS = TRACK_DEFINITIONS.map((d) => [d.name, d.id] as const);
 const LEVELS = DIFFICULTIES.map((d) => d.id);
 
 describe('AI navigation', () => {
+  it('defends only against nearby challengers on the same route', () => {
+    const sim = new Simulation(buildSetup({ trackId: 'saltflat-reliquary', difficultyId: 'ace', playerIndex: null, entries: 2 }));
+    const [defender, challenger] = sim.racers;
+    if (!defender?.ai || !challenger) throw new Error('need two AI racers');
+    const defenderAi = defender.ai;
+    const speed = 24;
+    const sample = sim.track.main.samples.find(
+      (candidate) => Math.abs(sim.track.sampleMain(candidate.distance + speed * 0.9).curvature) < 0.002,
+    );
+    if (!sample) throw new Error('no straight sample');
+    defender.pos = { ...sample.pos };
+    defender.y = sample.y;
+    defender.heading = Math.atan2(sample.tangent.z, sample.tangent.x);
+    defender.velocity = { x: sample.tangent.x * speed, z: sample.tangent.z * speed };
+    defender.path = sim.track.main;
+    defender.lateral = 0;
+    defenderAi.defence = 1;
+    defenderAi.mistakeRate = 0;
+
+    const placeChallenger = (lateral: number): void => {
+      challenger.pos = {
+        x: defender.pos.x - sample.tangent.x * 8 + sample.normal.x * lateral,
+        z: defender.pos.z - sample.tangent.z * 8 + sample.normal.z * lateral,
+      };
+      challenger.y = defender.y;
+      challenger.heading = defender.heading;
+      challenger.velocity = { x: sample.tangent.x * (speed + 4), z: sample.tangent.z * (speed + 4) };
+      challenger.lateral = lateral;
+    };
+    const driveDefender = (): void => {
+      defenderAi.defendTimer = 0;
+      driveAi(defender, {
+        track: sim.track,
+        racers: sim.racers,
+        dt: FIXED_STEP,
+        raceTime: 20,
+        rng: sim.rng,
+        running: true,
+      });
+    };
+
+    placeChallenger(22);
+    challenger.path = sim.track.main;
+    driveDefender();
+    expect(defenderAi.defendTimer).toBe(0);
+
+    placeChallenger(3);
+    challenger.path = sim.track.branches[0] ?? sim.track.main;
+    driveDefender();
+    expect(defenderAi.defendTimer).toBe(0);
+
+    challenger.path = sim.track.main;
+    driveDefender();
+    expect(defenderAi.defendTimer).toBeGreaterThan(0);
+  });
+
   it.each(TRACKS)('%s: every opponent finishes at every difficulty', (_name, trackId) => {
     for (const difficultyId of LEVELS) {
       const result = runHeadlessRace({ trackId, difficultyId, playerIndex: null, maxSeconds: 400 });

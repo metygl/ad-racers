@@ -126,11 +126,33 @@ test.describe('accessibility', () => {
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: 'Race', exact: true })).toBeFocused();
 
-    // Enter activates it, and focus lands inside the next screen.
+    /*
+     * Enter activates it, and focus lands inside the next screen - *visibly*.
+     *
+     * The tag used to be the assertion, and it was the wrong one: on a
+     * landscape phone the Controls screen is 810 px of content whose only
+     * control starts at y = 713, so focus was on a real button that nothing on
+     * screen showed. A long screen focuses its heading instead. What actually
+     * has to hold is that the player can see where focus went.
+     */
     await page.keyboard.press('Enter');
     await expect(page.getByRole('button', { name: /Continue|Back/ }).first()).toBeVisible();
-    const focusedTag = await page.evaluate(() => document.activeElement?.tagName ?? '');
-    expect(['BUTTON', 'INPUT', 'A']).toContain(focusedTag);
+    const focus = await page.evaluate(() => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return null;
+      const rect = active.getBoundingClientRect();
+      return {
+        insideScreen: active.closest('[data-testid="ui"]') !== null,
+        onScreen: rect.top >= 0 && rect.bottom <= window.innerHeight && rect.height > 0,
+        tag: active.tagName,
+      };
+    });
+    expect(focus?.insideScreen, 'focus left the screen it opened').toBe(true);
+    expect(focus?.onScreen, `focus landed off-screen on a ${focus?.tag ?? '?'}`).toBe(true);
+
+    await expect(page.getByRole('heading', { name: 'Controls' })).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.getByRole('button', { name: 'Continue' })).toBeFocused();
   });
 
   test('traps focus inside the pause dialog', async ({ page }) => {
@@ -193,6 +215,25 @@ test.describe('accessibility', () => {
       .toBe(false);
     await page.getByRole('button', { name: 'Back' }).click();
     await expect(page.getByRole('button', { name: 'Race', exact: true })).toBeVisible();
+  });
+
+  test('uses neutral Low-tier exposure for the hero and restores the course grade', async ({ page }) => {
+    await openGame(page);
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.locator('label[for="seg-graphics-quality-low"]').click();
+    await page.getByRole('button', { name: 'Back' }).click();
+    await goToSetup(page);
+    await page.locator('label[for="track-glasshouse-vigil"]').click();
+    await page.getByRole('button', { name: /Start (race|circuit)/ }).click();
+
+    await expect.poll(() => page.evaluate(() => window.adRacers?.exposure())).toBe(1.72);
+    await page.evaluate(() => window.adRacers?.skipToFinish());
+    await expect(page.getByRole('heading', { name: /Race won|Finished|Classified|Did not finish/i })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.adRacers?.exposure())).toBe(1.05);
+
+    await page.getByRole('button', { name: 'Rematch' }).click();
+    await expect(page.getByTestId('hud')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.adRacers?.exposure())).toBe(1.72);
   });
 
   test('rolls back a quality setting when context creation fails', async ({ page }) => {
@@ -392,6 +433,55 @@ test.describe('audio', () => {
     await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
     expect(await page.evaluate(() => (window as unknown as { __audioContexts: number }).__audioContexts)).toBe(1);
   });
+});
+
+/*
+ * The caption stays with the machine it names.
+ *
+ * The garage and the finish shot draw the selected skiff on the canvas, which
+ * does not scroll, and name it with a caption in the space beside the panel.
+ * The caption is positioned against `.ui`, and on a wide viewport `.ui` is the
+ * scroller - so an absolutely positioned one was laid out against scrolled
+ * content and slid off the top while the skiff stayed lit in place. Both
+ * screens scroll at this viewport (the setup panel by ~1440 px, the results
+ * panel by ~170), so both genuinely exercise it.
+ */
+test.describe('the stage caption holds its place', () => {
+  for (const screen of ['setup', 'results'] as const) {
+    test(`${screen}: the caption does not scroll away from the machine`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 700 });
+      await openGame(page);
+      if (screen === 'setup') {
+        await goToSetup(page);
+      } else {
+        await startSeededRace(page, 77);
+        await page.evaluate(() => window.adRacers?.skipToFinish());
+        await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      }
+
+      const captionTop = async (): Promise<number> =>
+        page.evaluate(() => document.querySelector('.stage-caption')?.getBoundingClientRect().top ?? NaN);
+
+      const before = await captionTop();
+      expect(Number.isNaN(before)).toBe(false);
+
+      // Scroll the panel to its end. If it cannot scroll, this proves nothing.
+      const scrolled = await page.evaluate(() => {
+        const ui = document.querySelector<HTMLElement>('.ui');
+        if (!ui) return 0;
+        ui.scrollTop = ui.scrollHeight;
+        return ui.scrollTop;
+      });
+      expect(scrolled, `${screen} panel did not scroll, so the caption is untested`).toBeGreaterThan(0);
+
+      // The caption has not moved, and is still wholly on screen.
+      expect(Math.abs((await captionTop()) - before)).toBeLessThanOrEqual(1);
+      const box = await page.locator('.stage-caption').boundingBox();
+      expect(box).not.toBeNull();
+      expect(box?.y ?? -1).toBeGreaterThanOrEqual(0);
+      expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(700);
+    });
+  }
 });
 
 /*

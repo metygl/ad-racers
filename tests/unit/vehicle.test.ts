@@ -348,6 +348,29 @@ describe('collisions', () => {
 });
 
 describe('jumps', () => {
+  it('does not mistake a banked flat road for a crest', () => {
+    const { sim, racer } = solo();
+    const sample = sim.track.main.samples.find((candidate) => Math.abs(candidate.bank) > 0.14 && candidate.y === 0);
+    if (!sample) throw new Error('no flat banked sample');
+
+    const lateral = Math.sign(sample.bank) * sample.halfWidth * 0.7;
+    racer.pos = {
+      x: sample.pos.x + sample.normal.x * lateral,
+      z: sample.pos.z + sample.normal.z * lateral,
+    };
+    racer.heading = Math.atan2(sample.tangent.z, sample.tangent.x);
+    racer.velocity = { x: sample.tangent.x * 35, z: sample.tangent.z * 35 };
+    const projection = sim.track.project(racer.pos, racer.path);
+    racer.y = projection.y;
+    racer.verticalVelocity = 0;
+    racer.airborne = false;
+
+    sim.step(emptyInput());
+    sim.drainEvents();
+
+    expect(racer.airborne).toBe(false);
+  });
+
   it('leaves the ground over a crest and lands again', () => {
     // Overgrown Interchange has a deliberate flyover crest.
     const sim = new Simulation(buildSetup({ trackId: 'overgrown-interchange', playerIndex: null }));

@@ -108,3 +108,26 @@ export function updatePositions(racers: RacerState[]): void {
 export function displayLap(racer: RacerState, track: Track): number {
   return clamp(racer.lapsCompleted + 1, 1, track.laps);
 }
+
+/**
+ * The three ways a race can end for a racer.
+ *
+ * `finished` crossed the line. `projected` did not, but got far enough that
+ * their own pace extrapolates to a credible time, so they are classified on it.
+ * `dnf` means an actual failure to finish.
+ */
+export type Classification = 'finished' | 'projected' | 'dnf';
+
+/**
+ * Classifies a racer for presentation.
+ *
+ * The one place this rule is written down, because it was previously written
+ * *nowhere*: the simulation carefully projected a time for anyone still running
+ * when the race was called, and every presentation surface then rendered
+ * `completed ? time : 'DNF'` and threw it away. A player on the final lap was
+ * told they did not finish.
+ */
+export function classify(racer: RacerState): Classification {
+  if (racer.completed) return 'finished';
+  return racer.projected ? 'projected' : 'dnf';
+}

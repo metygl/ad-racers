@@ -74,6 +74,20 @@ under the left thumb, action pads under the right, and a permanent
 auto-throttle — holding an accelerator with the same thumb you steer with is
 the usual reason touch racing games are unplayable, so the game does not ask.
 
+**One press is one strike.** The pod arm is a request rather than a held state,
+so holding a strike control never produces a second swing or a stream of
+refusals; release it and press again to swing again. The same rule applies on
+every device, and nothing that was already held when a menu closed counts as a
+press - resuming with the button that confirmed Resume does not hop.
+
+During a race, browser Back opens the pause screen instead of discarding the
+run. A second Back from that screen follows the browser normally.
+
+If the race is called while part of the field is still running, a crew with
+enough progress is classified on its projected pace and marked `≈` in the
+results. `DNF` is reserved for a crew that did not make enough progress for a
+credible projection.
+
 ### Getting quicker
 
 - Hold the drift *through* the corner. Charge banks in three tiers, shown as
@@ -106,8 +120,16 @@ halves of that are asserted by test.
 
 **Rookie**, **Pro** and **Ace** differ by roughly 10-13% of race time. They
 change how close to the limit an opponent drives, how quickly it reacts, how
-often it makes a mistake, and how readily it uses the pod arm — never how much
-grip or power it has. Opponents run the same physics as you.
+often it makes a mistake, how readily it uses the pod arm, and how hard it
+covers the line you are coming down - never how much grip or power it has.
+Opponents run the same physics as you.
+
+Difficulty is the *competence* layer and is shared by the whole field. Which of
+several legal choices a driver prefers is the *crew* layer, and it is fixed per
+crew: who hugs the inside, who will take any cut going, who sits in your wake to
+the last metre, who swings the moment you draw alongside. Each crew's card names
+its tactics, so you know what to watch for, and the six average out - a crew
+changes who does what, not how fast the field is.
 
 Separately, three **speed classes** — Reclaim, Cascade and Long Quiet — scale
 the pace of the whole field, player included. Difficulty changes *who you
@@ -194,6 +216,9 @@ Browser tests cover menu-to-finish, pause/resume, resize, five viewports,
 keyboard-only navigation, focus trapping, reduced motion, high contrast, WebGL
 failure, context loss and unavailable storage.
 
+Browser timing helpers and their intended uses are documented at their
+authoritative implementation in `tests/e2e/support.ts`.
+
 The gamepad seam is tested with a synthetic Standard Gamepad injected at
 `navigator.getGamepads()` — Playwright cannot plug in a controller, but
 everything downstream of that call is our code, so trigger throttle, stick
@@ -277,6 +302,10 @@ time and a draw-call ceiling.
 - **Opponents drift only where it pays.** They use it on the technical course
   and rarely on the fast ones, which is correct but means the flashiest part of
   the driving model is mostly the player's.
+- **The garage stage is one machine, not a workshop.** The selected crew's
+  skiff is built by the production race model and lit on a turntable behind the
+  setup and results screens; there is no walk-around, no part inspection and no
+  livery editing.
 
 ## Roadmap
 

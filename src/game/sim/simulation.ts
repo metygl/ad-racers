@@ -146,6 +146,7 @@ export class Simulation {
       position: index + 1,
       completed: false,
       finished: false,
+      projected: false,
       finishTime: 0,
       finishPosition: 0,
       lapTimes: [],
@@ -162,14 +163,25 @@ export class Simulation {
             // Spread the field slightly around the difficulty's nominal skill
             // so the pack strings out instead of driving as one block.
             skill: clamp(difficulty.skill + (index % 3) * 0.018 - 0.018, 0.6, 1),
-            aggression: clamp01(difficulty.aggression + ((index % 4) - 1.5) * 0.06),
-            boldness: clamp01(difficulty.boldness + ((index % 5) - 2) * 0.07),
+            /*
+             * Competence from the difficulty, character from the crew.
+             *
+             * Aggression and boldness were varied by grid index, which spread
+             * the field but attached the spread to a *slot* rather than to
+             * anyone - the same crew raced differently depending on where the
+             * player's own choice happened to put it in the array, so no crew
+             * could ever be recognised by how it drove. They are now the
+             * difficulty's value modulated by the crew's own immutable style,
+             * which is stable across every race and every field.
+             */
+            aggression: clamp01(difficulty.aggression * profile.style.strike),
+            boldness: clamp01(difficulty.boldness * profile.style.shortcut),
             mistakeRate: difficulty.mistakeRate,
             surgeDiscipline: difficulty.surgeDiscipline,
             // A touch of per-entry variation so the field does not run in
             // lockstep at a single pace.
             pace: clamp(difficulty.pace + ((index % 3) - 1) * 0.012, 0.6, 1),
-            lineBias: ((index % 4) - 1.5) / 1.5,
+            lineBias: profile.style.line,
             reaction: difficulty.reaction,
             noisePhase: (hashSeed(profile.id, this.setup.seed) % 1000) / 159.15,
             targetLateral: 0,
@@ -186,6 +198,17 @@ export class Simulation {
             branchChoice: null,
             branchDecidedAt: -1,
             catchUpScale: 1,
+            style: {
+              shortcut: profile.style.shortcut,
+              towPatience: profile.style.towPatience,
+              strike: profile.style.strike,
+              drift: profile.style.drift,
+              room: profile.style.room,
+            },
+            // Rookie leaves the door open, Pro closes it late, Ace closes it.
+            defence: clamp01((difficulty.aggression + difficulty.boldness) * 0.5),
+            defendSide: 0,
+            defendTimer: 0,
           },
     };
   }
@@ -366,10 +389,14 @@ export class Simulation {
     const totalProgress = this.track.length * this.track.laps;
     for (const racer of unfinished) {
       const fraction = clamp01(racer.progress / Math.max(1, totalProgress));
+      const credible = fraction > 0.25 && this.raceTime > 0;
       racer.finished = true;
       racer.completed = false;
-      racer.finishTime =
-        fraction > 0.25 && this.raceTime > 0 ? this.raceTime / fraction : Number.POSITIVE_INFINITY;
+      // Recorded rather than left to be inferred from a finite time: the
+      // results screen has to be able to tell a projected classification from a
+      // real one without re-deriving this rule. See `projected` in `state.ts`.
+      racer.projected = credible;
+      racer.finishTime = credible ? this.raceTime / fraction : Number.POSITIVE_INFINITY;
       this.finishedCount += 1;
       racer.finishPosition = this.finishedCount;
     }

@@ -127,8 +127,9 @@ export const PHYSICS = {
    * A strictly ballistic test (the ground falling away faster than 1 g) needs a
    * ramp sharper than a Catmull-Rom centreline through nodes tens of metres
    * apart can produce, so a real flyover would never actually launch anyone.
-   * Triggering at half a g models the suspension unloading and gives the crest
-   * the air it visibly deserves, without letting every gentle rise become a jump.
+   * Triggering at roughly half a g models the suspension unloading and gives
+   * the crest the air it visibly deserves, without letting every gentle rise
+   * become a jump.
    */
   airborneThreshold: 0.42,
   /**
@@ -150,9 +151,11 @@ export const PHYSICS = {
    * race over the flyover produced 2,219 landings of 0.12 s each and a peak
    * clearance of 4 cm. Nobody ever got air, and every one of those landings
    * fired a `jumpLand` event. The impulse is what turns a modelled suspension
-   * unload into flight the player can see and score.
+   * unload into flight the player can see and score. It is scaled from the
+   * bank-consistent, same-lane profile, so the multiplier is high while the
+   * bounded shove remains modest.
    */
-  crestUnload: 9,
+  crestUnload: 45,
   /** Ceiling on that shove, so a very sharp crest is not a catapult. */
   crestUnloadMax: 8.5,
   /** Impact speed above which a wall hit spins the vehicle. */
@@ -168,9 +171,9 @@ export const PHYSICS = {
    */
   offTrackMargin: 13,
   /**
-   * Inward slide out in the run-off, per second per metre past the limit. A
-   * car 10 m out slides back at 6 m/s, which clears a big excursion in a couple
-   * of seconds without ever taking control away from the driver.
+   * Inward slide out in the run-off, per second per metre beyond the road edge.
+   * It activates only at the outer limit, but must account for the whole
+   * excursion or an outward-moving car can settle there permanently.
    */
   runOffReturn: 0.6,
   /** Cap on the inward slide, so a huge excursion is not yanked back. */
@@ -191,10 +194,10 @@ export const PHYSICS = {
    *
    * This is what makes a clean landing achievable rather than lucky: left
    * alone, a car that took off mid-slide lands still sideways and spears off.
-   * The auto-align is slow enough that a player who does nothing still lands
+   * The auto-align is gentle enough that a player who does nothing still lands
    * untidily; it removes the unfair case, not the skill.
    */
-  airborneAlign: 1.5,
+  airborneAlign: 3,
   /** Speed scrubbed off per unit of lateral slide, so a drift costs something. */
   driftScrub: 0.32,
   /**
@@ -287,7 +290,7 @@ export const LANDING = {
    * Metres of clearance above the ground the flight must reach to score.
    *
    * A hop reaches about 0.9 m by construction (`impulse² / 2g`), so anything
-   * above that cannot be produced by tapping hop on the flat — while a crest,
+   * above that cannot be produced by tapping hop on the flat - while a crest,
    * where the ground falls away underneath, clears several metres.
    */
   minClearance: 1.4,
@@ -583,6 +586,8 @@ export const RACE = {
   stuckSpeed: 2.2,
   /** ...for this long. */
   stuckTime: 1.6,
+  /** Time spent facing backwards before an opponent starts to realign. */
+  wrongWayTime: 0.25,
   /** Respawn is offered after being stuck this long, and is instant for AI. */
   respawnTime: 3.2,
   /**

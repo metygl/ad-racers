@@ -47,7 +47,22 @@ These cost real debugging time. Each is documented at its site in the code.
   first and turns it into a pitch.
 - **Scenery must clear the run-off, not just the road.** Only declared obstacles
   are collidable, so a tree two metres off the tarmac is one the player drives
-  *through*, camera and all.
+  *through*, camera and all. The boom raycast cannot help with a canopy the
+  camera is already inside, so scenery also dissolves per instance around the
+  camera. Keep wind and dissolve in the same `onBeforeCompile` hook.
+- **Banking rotates the road ribbon, not the surrounding landscape.** Clamp its
+  height contribution at the road edge in `Terrain.ts`, and remove it from
+  longitudinal road-profile measurements through `profileY` in `vehicle.ts`.
+- **Cloned textures and shadow-casting lights own GPU resources.** Register
+  texture clones with `ownTexture`, release materials through
+  `disposeMaterial`, and dispose lights when their world is torn down. See
+  `src/render/materials/ownership.ts`.
+- **`.ui` is the scroller on a wide viewport, so anything overlaying the canvas
+  must be `fixed`, not `absolute`.** An absolutely positioned overlay is laid
+  out against `.ui`'s scrolled content and rides the menu off the screen, while
+  the thing it annotates is drawn on the canvas and never moves. The narrow
+  layout scrolls `.screen` inside a clipped `.ui`, so the bug is invisible on a
+  phone. `.stage-caption` in `src/styles.css` is the worked example.
 - **A branch must meet the road in the right place *and* the right direction.**
   `chordAlong` blends into the main line at both mouths so the merge is
   tangential; where it has eased back on it inherits the road's half-width and
@@ -80,8 +95,9 @@ These cost real debugging time. Each is documented at its site in the code.
 - **Never wait on the wall clock for ordinary race progress in browser tests.**
   The loop caps catch-up steps, so on a slow renderer simulated time
   deliberately runs behind real time. Use `waitForRaceTime` / `waitForSteps`
-  from `tests/e2e/support.ts`; use a real-time deadline only when wall-clock
-  behavior is itself the contract under test.
+  from `tests/e2e/support.ts`; use `skipRaceTime` for stretches whose rendering
+  is irrelevant, and a real-time deadline only when wall-clock behavior is the
+  contract under test.
 - **Dust particles must not be additively blended.** Six cars kicking up grass
   becomes a white sheet across the screen.
 - **Run-off pushes the car back positionally, not with a force.** A force
@@ -90,6 +106,11 @@ These cost real debugging time. Each is documented at its site in the code.
 - **AI `skill` is capped well below 1 on purpose.** Targeting 0.86 of the grip
   limit is measurably *slower* and dirtier than 0.72. Difficulty comes from
   `pace`, `reaction` and `mistakeRate`.
+- **Difficulty is competence; `CrewStyle` in `racers.ts` is character.** Style is
+  per crew and immutable, so a crew races the same wherever the player's own
+  choice puts it in the grid; the six styles average to 1 so the field's pace is
+  unchanged. Keep defensive line changes on straights so tactics do not become
+  an accidental cornering-physics change.
 - **Pick obscure ports for local servers.** 5173 and 4173 were both already
   serving unrelated projects on this machine, and Playwright happily tested one
   of them.

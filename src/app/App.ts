@@ -19,7 +19,7 @@ import { getDifficulty } from '../game/ai/driver';
 import { InputManager } from '../game/input/InputManager';
 import { bindingLabel } from '../game/input/bindings';
 import type { ActionId } from '../game/input/bindings';
-import { normalizeRacerId, RACERS } from '../game/racers';
+import { getRacer, normalizeRacerId, RACERS } from '../game/racers';
 import { Simulation } from '../game/sim/simulation';
 import { emptyInput } from '../game/sim/state';
 import type { ControlInput, SimEvent } from '../game/sim/state';
@@ -138,6 +138,8 @@ export class App {
   private detachInput: (() => void) | null = null;
   private readonly gamepadNav: GamepadNavigator;
   private lastPlayerInput: ControlInput = emptyInput();
+  /** Names whatever is standing on the garage stage. See `buildStageCaption`. */
+  private stageCaption: HTMLElement | null = null;
 
   constructor(options: AppOptions) {
     this.root = options.root;
@@ -310,6 +312,10 @@ export class App {
   private applyRaceSurface(): void {
     const inRace = this.screen === 'race' && this.simulation !== null;
     const driving = inRace && !this.paused && !this.contextLost;
+    // Entering driving is also where the Back guard is armed, so every route
+    // into a running race - a fresh start, a resume, a restored context - is
+    // protected by exactly one history entry. See `handleBack`.
+    if (driving) this.armBackGuard();
     this.hud.root.hidden = !inRace;
     this.ui.hidden = driving;
     this.input.setEnabled(driving);
@@ -331,6 +337,49 @@ export class App {
     });
   }
 
+  /**
+   * The caption that names what is standing on the stage.
+   *
+   * A lit machine with no name is a screensaver. This lives outside the menu
+   * panel, in the space the panel has been moved aside to leave, so it belongs
+   * to the machine rather than to the form - and it is `aria-hidden` because
+   * every word of it is already in the selected crew's card and in the results
+   * table, where a screen reader will meet it in a useful order.
+   */
+  private buildStageCaption(profileId: string, mood: 'garage' | 'result'): HTMLElement {
+    const profile = getRacer(profileId);
+    const caption = el(
+      'div',
+      { class: 'stage-caption', 'aria-hidden': 'true' },
+      el('p', { class: 'stage-caption__kicker', text: mood === 'result' ? 'Crew' : 'In the bay' }),
+      el('p', { class: 'stage-caption__crew', text: profile.crew }),
+      el('p', { class: 'stage-caption__skiff', text: profile.skiff }),
+      el('p', { class: 'stage-caption__pilots', text: `${profile.pilot} & ${profile.wrench}` }),
+    );
+    caption.style.setProperty('--crew-trim', `#${profile.colors.trim.toString(16).padStart(6, '0')}`);
+    return caption;
+  }
+
+  /**
+   * Where the garage stage is framed, given the layout the viewport has.
+   *
+   * Two cases rather than a measurement, because the two cases are what the
+   * stylesheet actually has: wide enough and the panel moves to the left, so
+   * the machine goes in the space it left; narrow and the panel is anchored to
+   * the bottom, so the machine goes in the band above it. Measuring an element
+   * would be more general, and would also mean measuring during layout on every
+   * screen change to learn something the media query already knows.
+   */
+  private updateHeroAnchor(): void {
+    const wide = typeof matchMedia === 'function' && matchMedia('(min-width: 68rem)').matches;
+    // Wide: the gap the panel leaves on the right. Narrow: the band above it.
+    // The fill is smaller on a phone because the band is a third of a short
+    // viewport, and a machine framed to the full height would run under the
+    // panel rather than stand above it.
+    if (wide) this.renderer?.setHeroAnchor(0.78, 0.52, 0.42);
+    else this.renderer?.setHeroAnchor(0.5, 0.2, 0.26);
+  }
+
   private showScreen(name: ScreenName, content?: HTMLElement): void {
     this.input.cancelCapture();
     this.releaseTrap?.();
@@ -339,6 +388,11 @@ export class App {
     clear(this.ui);
     this.ui.dataset.screen = name;
     this.applyRaceSurface();
+
+    // The stage caption is a sibling of the panel, not part of it: it belongs
+    // to the machine on the canvas, which is in the space the panel vacated.
+    if (this.stageCaption && (name === 'setup' || name === 'results')) this.ui.append(this.stageCaption);
+    else this.stageCaption = null;
 
     if (content) {
       this.ui.append(content);
@@ -367,6 +421,8 @@ export class App {
   private showTitle(): void {
     this.raceMode = 'single';
     this.circuit = null;
+    // The title screen's background is the demonstration race, not the garage.
+    this.renderer?.setHero(null);
     this.stopRace();
     this.showScreen(
       'title',
@@ -426,6 +482,11 @@ export class App {
   }
 
   private showSetup(): void {
+    // The garage: the selected crew's machine on a lit stage behind the panel,
+    // in place of the attract race. See `HeroStage`.
+    this.renderer?.setHero(getRacer(this.save.settings.lastRacer));
+    this.updateHeroAnchor();
+    this.stageCaption = this.buildStageCaption(this.save.settings.lastRacer, 'garage');
     this.showScreen(
       'setup',
       buildSetupScreen({
@@ -444,6 +505,10 @@ export class App {
           this.save.settings.lastDifficulty = selection.difficultyId;
           this.save.settings.lastSpeedClass = selection.speedClassId;
           this.persist();
+          // Picking a crew puts that crew on the stage; `setHero` no-ops when
+          // the selection has not actually changed.
+          this.renderer?.setHero(getRacer(selection.racerId));
+          this.stageCaption?.replaceWith((this.stageCaption = this.buildStageCaption(selection.racerId, 'garage')));
         },
         onStart: () => {
           if (this.pendingMode === 'circuit') this.startCircuit();
@@ -513,6 +578,7 @@ export class App {
   private startRace(seed = Math.floor(performance.now()) >>> 0, trackId = this.save.settings.lastTrack): void {
     if (!this.renderer) return;
     this.stopAttract();
+    this.renderer.setHero(null);
     this.raceSeed = seed;
 
     let track;
@@ -562,8 +628,7 @@ export class App {
       this.audio.startAmbience(track.definition.id === 'emberfall-quarry' ? 55 : 62);
     });
 
-    // One history entry to absorb the first Back. See `handleBack`.
-    history.pushState({ race: true }, '');
+    // `showScreen` reaches `applyRaceSurface`, which arms the Back guard.
     this.showScreen('race');
   }
 
@@ -606,6 +671,7 @@ export class App {
   }
 
   private stopRace(): void {
+    this.retireBackGuard();
     this.simulation = null;
     this.paused = false;
     this.audio.stopEngines();
@@ -705,6 +771,7 @@ export class App {
   private finishRace(): void {
     const simulation = this.simulation;
     if (!simulation) return;
+    this.retireBackGuard();
     const player = simulation.player;
     this.audio.stopEngines();
     const speedClass = this.activeSpeedClass();
@@ -762,6 +829,22 @@ export class App {
 
     const inCircuit = this.raceMode === 'circuit' && this.circuit !== null;
     const moreRounds = inCircuit && this.circuit !== null && !isComplete(this.circuit);
+
+    /*
+     * The finish payoff: the machine that just raced, staged and lit.
+     *
+     * The review's verdict on this screen was that it is responsive and clear
+     * and still "lacks finish spectacle" - a small flat symbol above a
+     * classification table. The classification is worth keeping and is; what it
+     * did not have was the crew's own machine at a size that says the race
+     * mattered. It is the garage stage under result lighting, so the two
+     * screens are one composition seen twice and nothing is built twice.
+     */
+    if (player) {
+      this.renderer?.setHero(getRacer(player.profileId), 'result');
+      this.stageCaption = this.buildStageCaption(player.profileId, 'result');
+    }
+    this.updateHeroAnchor();
 
     this.showScreen(
       'results',
@@ -849,13 +932,38 @@ export class App {
     const width = Math.max(1, this.root.clientWidth || window.innerWidth);
     const height = Math.max(1, this.root.clientHeight || window.innerHeight);
     this.renderer?.setSize(width, height);
+    // A rotation can move the panel from beside the stage to above it.
+    this.updateHeroAnchor();
     // A rotation changes both the viewport and the controls' footprint, so the
     // composition correction has to be re-measured with the new layout.
     this.renderer?.chase.setOccludedBand(this.touch.occludedFraction());
   };
 
+  /**
+   * True while a history entry exists purely to absorb one Back gesture.
+   *
+   * At most one is ever outstanding. Pushing a second is what turned the guard
+   * into a trap.
+   */
+  private backGuardArmed = false;
+  private backGuardRetiring = false;
+
+  private armBackGuard(): void {
+    if (this.backGuardArmed || this.backGuardRetiring) return;
+    history.pushState({ race: true }, '');
+    this.backGuardArmed = true;
+  }
+
+  private retireBackGuard(): void {
+    if (!this.backGuardArmed) return;
+    this.backGuardArmed = false;
+    this.backGuardRetiring = true;
+    history.back();
+  }
+
   /*
-   * Browser Back must not silently destroy a race.
+   * Browser Back must not silently destroy a race - and must not become
+   * inescapable either.
    *
    * The app already protects a run from losing focus, from the tab being
    * hidden, and from the graphics context being lost — and then a single Back
@@ -863,15 +971,29 @@ export class App {
    * back. A review measured the page going straight to `about:blank` mid-race.
    * Back is the most common accidental action on a phone there is.
    *
-   * Starting a race pushes one history entry, so the first Back lands here
-   * instead of leaving. It pauses and re-arms, which makes the gesture mean
-   * "stop and let me decide" — and a second, deliberate Back from the pause
-   * dialog leaves as normal. Menus keep ordinary Back behaviour.
+   * So starting a race pushes one history entry and the first Back lands here
+   * instead of leaving: it pauses, which makes the gesture mean "stop and let
+   * me decide".
+   *
+   * The re-arm is what has to be conditional. Pushing a replacement entry on
+   * *every* popstate - including the ones that arrive while the race is already
+   * paused - meant Back could never leave the page at all, and every press grew
+   * the history stack by one, so the player could not get out by holding it
+   * either. A second, deliberate Back from the pause dialog is now let through
+   * as normal, and the guard is not re-armed until the player resumes driving.
+   * Menus keep ordinary Back behaviour.
    */
   private handleBack = (): void => {
+    if (this.backGuardRetiring) {
+      this.backGuardRetiring = false;
+      if (this.screen === 'race' && this.simulation && !this.paused) this.armBackGuard();
+      return;
+    }
+    // Whatever happens next, the browser has already consumed the entry.
+    this.backGuardArmed = false;
     if (this.screen !== 'race' || !this.simulation) return;
-    if (!this.paused) this.togglePause(true);
-    history.pushState({ race: true }, '');
+    if (this.paused) return;
+    this.togglePause(true);
   };
 
   private handleVisibility = (): void => {
@@ -937,7 +1059,11 @@ export class App {
     }
 
     if (!simulation || !renderer || this.screen !== 'race') {
-      this.runAttract(renderer, elapsed);
+      // The garage stage takes the frame when one is up; it replaces the
+      // attract race rather than being drawn on top of it, so a menu never
+      // costs more than one scene.
+      if (renderer?.hasHero) renderer.renderHero(this.save.settings.reducedMotion ? 0 : elapsed);
+      else this.runAttract(renderer, elapsed);
       this.perf.record(elapsed, 0);
       return;
     }
@@ -1110,6 +1236,8 @@ export class App {
     settings: () => GameSettings;
     screen: () => string;
     input: () => ControlInput;
+    exposure: () => number | null;
+    advance: (seconds: number) => void;
     skipToFinish: () => void;
   } {
     return {
@@ -1118,6 +1246,35 @@ export class App {
       settings: () => this.save.settings,
       screen: () => (this.paused ? 'pause' : this.screen),
       input: () => this.lastPlayerInput,
+      exposure: () => this.renderer?.exposure ?? null,
+      /*
+       * Burns a stretch of race the test is not about, without drawing it.
+       *
+       * Simulated time can only advance `MAX_STEPS_PER_FRAME` fixed steps per
+       * *rendered* frame - deliberately, so a stall is never paid back as a
+       * burst - which means the cost of waiting for race time is the cost of
+       * rendering, multiplied. Under CI's software WebGL a frame is a fifth of
+       * a second, so the loop yields about 67 ms of race per 200 ms of wall
+       * clock and a test that wants past the 3 s countdown and the 2 s strike
+       * grace pays close to a minute for five and a half seconds nobody
+       * asserts anything about. That is what put the gamepad shoulder-button
+       * test on the edge of its 60 s wait and got it quarantined.
+       *
+       * This is the same tool `skipToFinish` already is, scoped to a duration:
+       * the same deterministic steps the loop would have taken, with no frames
+       * in between. Tests that are *about* the loop's own pacing must keep
+       * using `waitForRaceTime` and `waitForSteps`.
+       */
+      advance: (seconds: number) => {
+        const simulation = this.simulation;
+        if (!simulation) return;
+        const input = emptyInput();
+        const steps = Math.max(0, Math.round(seconds / FIXED_STEP));
+        for (let i = 0; i < steps && simulation.phase !== 'finished'; i++) {
+          simulation.step(input);
+          simulation.drainEvents();
+        }
+      },
       skipToFinish: () => {
         // Fast-forwards the simulation without rendering. Used only by the
         // browser tests so a full menu-to-results run does not take minutes.

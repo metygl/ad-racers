@@ -88,13 +88,25 @@ export function buildTerrain(track: Track, resolution: number): TerrainResult {
 
       const free = noise(x, z);
       /*
-       * `projection.y` is already the height of the road surface at this
-       * lateral offset, banking included, so the terrain follows a banked road
-       * down its low side instead of shearing through it. Before this the
-       * ground stayed level with the centreline and swallowed the entire low
-       * half of every banked corner.
+       * `projection.y` is the height of the road surface at this lateral
+       * offset, banking included, so the terrain follows a banked road down its
+       * low side instead of shearing through it. Before this the ground stayed
+       * level with the centreline and swallowed the entire low half of every
+       * banked corner.
+       *
+       * But the bank is a rotation of the *ribbon*, and `projection.y` applies
+       * it to whatever lateral offset it is handed - including the 220 m of
+       * margin this mesh draws past the course. Nine degrees of bank is
+       * 0.156 m of lift per metre out, so the far corner of a banked course was
+       * being pinned thirty-odd metres into the air, taking the whole landscape
+       * and everything scattered on it with it. The bank contribution is
+       * therefore clamped at the road edge: inside the ribbon the ground is the
+       * road surface, and beyond it the shoulder carries the edge's height and
+       * eases into free noise like any other ground.
        */
-      const surfaceY = projection.y;
+      const lateral = projection.lateral;
+      const edgeLateral = Math.sign(lateral) * Math.min(Math.abs(lateral), projection.halfWidth);
+      const surfaceY = projection.y - Math.sin(projection.bank) * (lateral - edgeLateral);
       const wild = surfaceY + (free - 0.5) * 2 * relief;
       // Just off the road the ground sits a touch below the tarmac so the
       // shoulder reads as a kerb rather than a seam.

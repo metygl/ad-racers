@@ -10,10 +10,23 @@
 | Triangles | < 500 k | **320 k–329 k** | Performance overlay |
 | Particles | ≤ 800 (High) | Hard cap, pre-allocated | `ParticleSystem` budget |
 | JS heap | < 150 MB | **42–48 MB** | Performance overlay |
-| Download, total | ≤ 260 kB gzip | **191.5 kB** | `npm run check:budget` |
-| Download, our code | ≤ 80 kB gzip | **57.4 kB** | `npm run check:budget` |
+| Download, total | ≤ 260 kB gzip | **213.8 kB** | `npm run check:budget` |
+| Download, our code | ≤ 84 kB gzip | **77.7 kB** | `npm run check:budget` |
 | Simulation rate | exactly 120 Hz | **119–121 steps/s** | `tests/e2e/race.spec.ts` |
 | Network during a race | none | none | No `fetch` in `src/` |
+
+### The download budget moved once, on purpose
+
+Our own code was 73.7 kB gzipped before the garage landed and is 77.7 kB after,
+so the 80 kB ceiling was raised to 84 kB - the same 8% margin the old number
+carried, rather than a rounder one. What bought it: the selected crew's
+machine is now built by the production race model and lit on a turntable behind
+the setup and results screens, the AI carries a per-crew tactical layer, scenery
+dissolves per instance around the camera, and night courses draw route markers.
+
+The number is meant to be argued with rather than nudged. If it moves again it
+should be for something the player can point at, and the entry above should say
+what.
 
 ### The draw-call floor is part of the budget
 
